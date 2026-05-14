@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 sys.path.append(os.path.join(os.path.dirname(__file__), 'Modules'))
 
 # Import modules
-from Modules.gpt_client import GPTClient
+from Modules.llm_processor import OllamaClient
 from Modules.rag_module import RagModule
 from Modules.database import Database
 
@@ -102,18 +102,24 @@ class ChatBoxServer:
                 success_count = 0
                 total_modules = len(self.enabled_modules)
                 
+                # GPT Module'modules', []))
+                
+                # Initialize modules
+                success_count = 0
+                total_modules = len(self.enabled_modules)
+                
                 # GPT Module
                 if 'gpt' in self.enabled_modules:
-                    print("  🤖 Initializing GPT client...")
+                    print("  🤖 Initializing Ollama client...")
                     try:
-                        self.gpt_client = GPTClient()
-                        if self.gpt_client.setup_openai():
+                        self.gpt_client = OllamaClient(model_name="qwen2.5:7b")
+                        if self.gpt_client.setup_client():
                             success_count += 1
-                            print("    ✅ GPT client ready")
+                            print("    ✅ Ollama client ready")
                         else:
-                            print("    ❌ GPT client failed - check OPENAI_API_KEY")
+                            print("    ❌ Ollama client failed - is Ollama running?")
                     except Exception as e:
-                        print(f"    ❌ GPT initialization error: {e}")
+                        print(f"    ❌ Ollama initialization error: {e}")
                 
                 # Database Module (always initialize for RAG support)
                 print("  🗄️ Initializing database...")
@@ -266,16 +272,25 @@ class ChatBoxServer:
                 context_str = "\n".join([f"- {text}" for text in context_texts[:3]])  # Top 3 contexts
                 enhanced_message = f"Context from previous conversations:\n{context_str}\n\nCurrent message: {message}"
             
-            # Get GPT response
-            response_text = self.gpt_client.ask_chatgpt_optimized(
-                enhanced_message, 
-                self.latest_emotion, 
-                self.latest_confidence
-            )
-            
-            # Extract bot emotion from response
-            bot_emotion = self.gpt_client.extract_emotion_tag(response_text)
-            
+            # 🚀 TEMPORARY HARDCODE: Force a list of emotional action tags
+            my_allowed_tags = ["[GREETING]", "[WAVE]", "[POINT]", "[CONFUSED]", 
+        "[SHRUG]", "[ANGRY]", "[SAD]", "[SLEEP]", 
+        "[DEFAULT]", "[POSE]"
+]
+            print(f"Allowed tags for this client: {my_allowed_tags}")
+
+            if self.gpt_client and self.gpt_client.is_available():
+                response_text = self.gpt_client.ask_model_optimized(
+                    enhanced_message, 
+                    self.latest_emotion, 
+                    self.latest_confidence,
+                    allowed_tags=my_allowed_tags
+                )
+                bot_emotion = self.gpt_client.extract_emotion_tag(response_text)
+            else:
+                response_text = "[SAD] The language model is not available."
+                bot_emotion = "SAD"
+
             # Store conversation in database and RAG if available
             if self.database and self.rag_module and 'rag' in self.enabled_modules:
                 try:

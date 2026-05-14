@@ -74,6 +74,8 @@ class CommunicationManager:
                 self.client_info = {
                     'robot_name': robot_name,
                     'client_id': client_id,
+                    'robot_role': data.get('robot_role', 'a friendly companion'),
+                    'allowed_tags': data.get('allowed_tags', ['[DEFAULT]']),
                     'modules': modules,
                     'voice_config': data.get('voice_config', {}),
                     'arduino_output': data.get('arduino_output', {}),
@@ -254,6 +256,44 @@ class CommunicationManager:
                 })
             
             return jsonify(status_data)
+        
+        @self.app.route('/register_client', methods=['POST'])
+        def rest_register_client():
+            """Register an HTTP client and their allowed tags"""
+            try:
+                data = request.json
+                client_id = data.get('client_id')
+                robot_name = data.get('robot_name', 'HTTP_ChatBox')
+                modules = data.get('modules', ['gpt']) # Give HTTP clients GPT access by default
+                
+                if not client_id:
+                    return jsonify({"error": "Missing client_id"}), 400
+                
+                # Store client info AND the dynamic tags
+                self.client_info = {
+                    'robot_name': robot_name,
+                    'client_id': client_id,
+                    'modules': modules,
+                    'allowed_tags': data.get('allowed_tags', ['[DEFAULT]']) # 🚀 TAGS CAPTURED HERE
+                }
+                
+                # Initialize ChatBox server with this config
+                success, message = self.chatbox_server.initialize_with_config(self.client_info)
+                
+                if success:
+                    self.client_connected = True
+                    self.connection_time = time.time()
+                    print(f"✅ HTTP Client Registered: {client_id} | Tags: {self.client_info['allowed_tags']}")
+                    return jsonify({
+                        "success": True, 
+                        "message": message,
+                        "tags_registered": self.client_info['allowed_tags']
+                    }), 200
+                else:
+                    return jsonify({"error": message}), 500
+                    
+            except Exception as e:
+                return jsonify({"error": f"Registration failed: {str(e)}"}), 500
 
         @self.app.route('/chat', methods=['POST'])
         def rest_chat():

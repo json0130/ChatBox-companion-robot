@@ -169,11 +169,12 @@ class SimpleConcurrentClient(BasicClient):
         if "console_output" in self.output_modules:
             self.output_modules["console_output"].process_output(response_text)
 
-        # Pepeha pipeline intercept — trigger on introduction intent
+        # Pepeha pipeline intercept — trigger on introduction intent.
+        # Check the user's own words (transcription for speech, or the LLM response
+        # when the LLM paraphrases an introduction request).
         if self._pepeha_state == PepehaState.IDLE:
-            if INTRO_PATTERN.search(response_text) or INTRO_PATTERN.search(
-                data.get("user_message", "")
-            ):
+            user_text = data.get("transcription", "") or data.get("user_message", "")
+            if INTRO_PATTERN.search(user_text) or INTRO_PATTERN.search(response_text):
                 self._trigger_pepeha_pipeline()
                 return  # suppress the LLM's response
 

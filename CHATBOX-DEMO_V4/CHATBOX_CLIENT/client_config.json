@@ -30,7 +30,7 @@
         "audio_cmd": ["aplay", "-D", "plughw:3,0"]
     },
     "arduino_output": {
-        "host": "chatbox.local",
+        "host": "10.42.0.100",
         "port": 8888,
         "bind_address": "10.42.0.1",
         "reconnect_delay": 1.0,

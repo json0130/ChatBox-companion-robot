@@ -32,7 +32,12 @@
 
 #define TCP_PORT      8888
 
-WiFiServer server(TCP_PORT);
+// --- Add Static IP Settings for Jetson Hotspot ---
+IPAddress local_IP(10, 42, 0, 100);  // The permanent IP for your ESP32
+IPAddress gateway(10, 42, 0, 1);     // The Jetson Nano's Hotspot IP
+IPAddress subnet(255, 255, 255, 0);
+
+WiFiServer tcpServer(TCP_PORT);
 WiFiClient tcpClient;
 
 // ==================== Constants ==================== //
@@ -86,70 +91,39 @@ unsigned long sleepTimer = 0;
 // ==================== Setup ==================== //
 void setup() {
   Serial.begin(115200);
-  Serial.println("ESP32 ChatBox System Starting...");
-  Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
+  delay(10);
 
-  setCpuFrequencyMhz(80);
-  servoInit();
+  // 1. Manually configure the Static IP properties before connecting
+  if (!WiFi.config(local_IP, gateway, subnet)) {
+    Serial.println("[-] STA Failed to configure Static IP");
+  }
 
-  // ── WiFi ──────────────────────────────────────────────────
-  WiFi.mode(WIFI_STA);
-  WiFi.setAutoReconnect(true);
-
-#ifdef USE_WPA2_ENTERPRISE
-  // WPA2-Enterprise (eduroam) — uses WiFi.begin() enterprise overload in ESP32 core 3.x
-  // No extra headers needed; WPA2_AUTH_PEAP is built into WiFi.h
-  WiFi.begin(WIFI_SSID, WPA2_AUTH_PEAP, EAP_IDENTITY, EAP_IDENTITY, EAP_PASSWORD);
-  Serial.print("[WiFi] Connecting (WPA2-Enterprise)");
-#else
-  // Normal WPA2-Personal
+  // 2. Connect to the Jetson Nano's Host hotspot
+  Serial.printf("[+] Connecting to %s ", WIFI_SSID);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.print("[WiFi] Connecting");
-#endif
 
-  unsigned long wifiStart = millis();
   while (WiFi.status() != WL_CONNECTED) {
-    if (millis() - wifiStart > 30000) {
-      Serial.println("\n[WiFi] Timeout — check credentials or network");
-      break;
-    }
     delay(500);
     Serial.print(".");
   }
-  if (WiFi.status() == WL_CONNECTED)
-    Serial.println("\n[WiFi] Connected: " + WiFi.localIP().toString());
-  else
-    Serial.println("[WiFi] Not connected — continuing without WiFi");
+  Serial.println("\n[+] WiFi Connected!");
+  Serial.print("[+] ESP32 Static IP: ");
+  Serial.println(WiFi.localIP());
 
-  // ── mDNS — advertise as chatbox.local ────────────────────
-  if (MDNS.begin("chatbox"))
-    Serial.println("[mDNS] chatbox.local ready");
-  else
-    Serial.println("[mDNS] failed to start");
+  // NOTE: mDNS (chatbox.local) is intentionally removed here 
+  // because we are using a direct, ultra-stable raw IP path.
 
-  // ── TCP server ────────────────────────────────────────────
-  server.begin();
-  Serial.println("[TCP] Listening on port " + String(TCP_PORT));
+  tcpServer.begin();
+  Serial.printf("[+] TCP Server started on port %d\n", TCP_PORT);
 
-  Serial.println("\nValid expressions:");
-  for (int i = 0; i < NUM_VALID_EXPRESSIONS; i++) {
-    Serial.print(validExpressions[i]);
-    if (i < NUM_VALID_EXPRESSIONS - 1) Serial.print(", ");
-  }
-
-  Serial.println("\nValid sequences:");
-  for (int i = 0; i < NUM_SEQUENCES; i++) {
-    Serial.print(sequenceNames[i]);
-    if (i < NUM_SEQUENCES - 1) Serial.print(", ");
-  }
-  Serial.println();
+  servoInit();
 }
 
 // ==================== Main Loop ==================== //
 void loop() {
   // Accept a new TCP client whenever the previous one drops
   if (!tcpClient || !tcpClient.connected()) {
-    WiFiClient c = server.available();
+    WiFiClient c = tcpServer.available();
     if (c) {
       tcpClient = c;
       Serial.println("[TCP] Client connected from " + tcpClient.remoteIP().toString());

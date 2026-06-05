@@ -2,6 +2,8 @@
 import sys
 import re
 import logging
+import subprocess
+import time
 from enum import Enum
 from typing import Optional
 
@@ -64,11 +66,6 @@ ENGLISH_INTRO = (
 class SimpleConcurrentClient(BasicClient):
     """
     Robot client — verbal interaction + Arduino gestures + Māori pepeha pipeline.
-
-    • Parses [EMOTION] tags from chat_response and forwards to Arduino.
-    • Handles persona_update event from server → updates TTS voice config live.
-    • Intercepts introduction requests → asks Māori consent → delivers pepeha or
-      English intro, then returns to normal conversation.
     """
 
     def __init__(self, config_file: str = "client_config.json"):
@@ -82,6 +79,9 @@ class SimpleConcurrentClient(BasicClient):
 
     def _on_arduino_connected(self):
         logger.info("[Arduino] Connected")
+        tts = self.output_modules.get("edge_tts_output")
+        if tts:
+            tts.process_output("Arduino connected.")
 
     def _on_arduino_disconnected(self):
         logger.warning("[Arduino] Disconnected")
@@ -108,10 +108,23 @@ class SimpleConcurrentClient(BasicClient):
     # ── WebSocket event handlers ──────────────────────────────────────────────
 
     def _register_custom_event_handlers(self):
-        self.server_connection.register_handler("chat_response",   self.on_chat_response)
-        self.server_connection.register_handler("speech_response", self.on_speech_response)
-        self.server_connection.register_handler("persona_update",  self.on_persona_update)
+        self.server_connection.register_handler("chat_response",        self.on_chat_response)
+        self.server_connection.register_handler("speech_response",      self.on_speech_response)
+        self.server_connection.register_handler("persona_update",       self.on_persona_update)
+        self.server_connection.register_handler("client_init_response", self._on_server_ready)
         logger.info("[Client] Event handlers registered")
+
+    def _on_server_ready(self, data: dict):
+        """Fires when the server confirms client_init succeeded. Replaces the
+        internal BasicClient handler (which only logs). Plays startup greeting."""
+        if data.get("success"):
+            logger.info(f"[WS] Server ready: {data.get('message', 'OK')}")
+            tts = self.output_modules.get("edge_tts_output")
+            if tts:
+                tts.process_output("Hello! I'm online and ready to chat.")
+            self.on_emotion_detected("GREETING")
+        else:
+            logger.error(f"[WS] Server init failed: {data.get('message')}")
 
     @staticmethod
     def _split_sentences(text: str) -> list:
@@ -121,7 +134,6 @@ class SimpleConcurrentClient(BasicClient):
     # ── Pepeha pipeline ───────────────────────────────────────────────────────
 
     def _trigger_pepeha_pipeline(self):
-        """Ask the user for Māori consent and await their response."""
         self._pepeha_state = PepehaState.AWAITING_CONSENT
         logger.info("[Pepeha] Awaiting consent")
         tts = self.output_modules.get("edge_tts_output")
@@ -130,7 +142,6 @@ class SimpleConcurrentClient(BasicClient):
         self.on_emotion_detected("GREETING")
 
     def _handle_pepeha_consent(self, transcription: str):
-        """Parse yes/no from transcription and deliver pepeha or English intro."""
         tts = self.output_modules.get("edge_tts_output")
         if YES_PATTERN.search(transcription):
             self._pepeha_state = PepehaState.IDLE
@@ -147,13 +158,9 @@ class SimpleConcurrentClient(BasicClient):
                 for sentence in self._split_sentences(ENGLISH_INTRO):
                     tts.process_output(sentence)
         else:
-            # Unclear — ask again
             logger.info("[Pepeha] Unclear consent response — re-asking")
             if tts:
-                tts.process_output(
-                    "Sorry, I didn't catch that. "
-                    "Would you like me to introduce myself in Māori?"
-                )
+                tts.process_output("Sorry, I didn't catch that. Would you like me to introduce myself in Māori?")
 
     # ── Chat / speech handlers ────────────────────────────────────────────────
 
@@ -169,14 +176,11 @@ class SimpleConcurrentClient(BasicClient):
         if "console_output" in self.output_modules:
             self.output_modules["console_output"].process_output(response_text)
 
-        # Pepeha pipeline intercept — trigger on introduction intent.
-        # Check the user's own words (transcription for speech, or the LLM response
-        # when the LLM paraphrases an introduction request).
         if self._pepeha_state == PepehaState.IDLE:
             user_text = data.get("transcription", "") or data.get("user_message", "")
             if INTRO_PATTERN.search(user_text) or INTRO_PATTERN.search(response_text):
                 self._trigger_pepeha_pipeline()
-                return  # suppress the LLM's response
+                return
 
         tts = self.output_modules.get("edge_tts_output")
         if not tts:
@@ -188,11 +192,9 @@ class SimpleConcurrentClient(BasicClient):
         if not sentences:
             return
 
-        # First sentence carries the emotion callback — fires when audio starts
         start_cb = (lambda e: lambda: self.on_emotion_detected(e))(emotion) if emotion else None
         tts.process_output_synced(sentences[0], start_callback=start_cb)
 
-        # Remaining sentences queued individually — TTS plays them back-to-back
         for sentence in sentences[1:]:
             tts.process_output(sentence)
 
@@ -201,7 +203,6 @@ class SimpleConcurrentClient(BasicClient):
         if transcription:
             logger.info(f"[STT] '{transcription}'")
 
-        # Pepeha consent intercept — swallow the server's LLM response
         if self._pepeha_state == PepehaState.AWAITING_CONSENT:
             self._handle_pepeha_consent(transcription)
             return
@@ -210,10 +211,6 @@ class SimpleConcurrentClient(BasicClient):
             self.on_chat_response(data)
 
     def on_persona_update(self, data: dict):
-        """
-        Called when the server assigns a new persona to this robot.
-        Updates TTS voice config live — no restart needed.
-        """
         persona_name = data.get("persona_name", "Unknown")
         logger.info(f"[Persona] Switching to: '{persona_name}'")
 
@@ -235,13 +232,37 @@ class SimpleConcurrentClient(BasicClient):
             tts.process_output(f"Persona updated to {persona_name}.")
 
         if "console_output" in self.output_modules:
-            self.output_modules["console_output"].process_output(
-                f"[PERSONA] Switched to: {persona_name}"
-            )
+            self.output_modules["console_output"].process_output(f"[PERSONA] Switched to: {persona_name}")
 
-    # ── Module setup ──────────────────────────────────────────────────────────
+
+    # ── Auto-Speaker Search & Setup ───────────────────────────────────────────
+
+    def _configure_usb_speaker(self):
+        """Dynamically find the USB speaker's ALSA card ID and inject it into config."""
+        try:
+            output = subprocess.check_output(['aplay', '-l'], text=True)
+            for line in output.split('\n'):
+                # Look for the specific USB Audio tags seen in your hardware
+                if line.startswith("card") and ("UACDemoV10" in line or "USB Audio" in line):
+                    match = re.search(r"card (\d+):", line)
+                    if match:
+                        card_num = match.group(1)
+                        logger.info(f"[Setup] Auto-detected USB Speaker on card {card_num}")
+                        
+                        if "edge_tts_config" not in self.config:
+                            self.config["edge_tts_config"] = {}
+                            
+                        # Override whatever is in client_config.json with the live hardware ID
+                        self.config["edge_tts_config"]["audio_cmd"] = ["aplay", "-D", f"plughw:{card_num},0"]
+                        return
+                        
+            logger.warning("[Setup] USB Speaker not found. Falling back to default audio configuration.")
+        except Exception as e:
+            logger.error(f"[Setup] Error searching for USB speaker: {e}")
 
     def setup_all_modules(self):
+        # 1. Search for and map the USB speaker dynamically first
+        self._configure_usb_speaker()
 
         # ── INPUT: Voice ──────────────────────────────────────────────────────
         if "speech" in self.config.get("modules", []):
@@ -260,7 +281,7 @@ class SimpleConcurrentClient(BasicClient):
         self.register_output_module(console)
         console.start()
 
-        # ── OUTPUT: TTS ───────────────────────────────────────────────────────
+        # ── OUTPUT: TTS (Now using dynamic audio_cmd if found) ────────────────
         logger.info("[Setup] Edge TTS...")
         edge_cfg = self.config.get("edge_tts_config", {
             "voice": "en-US-AriaNeural", "rate": "+0%",
@@ -286,11 +307,11 @@ class SimpleConcurrentClient(BasicClient):
                 logger.warning("[Setup] Arduino failed to register")
                 self.arduino_module = None
 
-    # ── Startup info ──────────────────────────────────────────────────────────
+    # ── Startup Lifecycle & Info ──────────────────────────────────────────────
 
     def print_startup_info(self):
         print("\n" + "=" * 60)
-        print(f"  {self.config.get('robot_name', 'Robot')} — connecting to server")
+        print(f"  {self.config.get('robot_name', 'Robot')} — Online and Connected")
         print("=" * 60)
         print(f"  Robot    : {self.config.get('robot_name', 'Unknown')}")
         print(f"  ID       : {self.config.get('client_id', 'Unknown')}")
@@ -302,16 +323,64 @@ class SimpleConcurrentClient(BasicClient):
         print("  Output modules:")
         for n in self.output_modules:  print(f"    {n}")
         if self.arduino_module:
-            host = self.arduino_module.config.get("host", "chatbox.local")
+            host = self.arduino_module.config.get("host", "Unknown")
             port = self.arduino_module.config.get("port", 8888)
-            print(f"  Arduino  : {host}:{port}")
+            print(f"  ESP32/Arduino : {host}:{port}")
+        
+        # Optionally show dynamically found audio config
+        tts_cfg = self.config.get("edge_tts_config", {})
+        if "audio_cmd" in tts_cfg:
+            print(f"  Audio Output  : {' '.join(tts_cfg['audio_cmd'])}")
         print("=" * 60 + "\n")
+
+    def run(self):
+        """
+        Override default run() to start threads, wait for hardware/server 
+        connections to lock in, and THEN print out the final setup state.
+        """
+        try:
+            # 1. Start all modules and socket.io background threads
+            if not self.start():
+                return
+            
+            # 2. Block and wait for central server to connect (Timeout 15s)
+            logger.info("[Startup] Waiting for Central Server connection...")
+            if self.server_connection.wait_for_server(timeout=15):
+                logger.info("[Startup] Server connection verified.")
+            else:
+                logger.warning("[Startup] Server connection timed out. (Will retry in background)")
+
+            # 3. Block and wait for ESP32 connection
+            if self.arduino_module:
+                logger.info("[Startup] Waiting for ESP32 Robot connection...")
+                for _ in range(15):  # Wait up to 15 seconds
+                    if self.arduino_module.is_connected():
+                        break
+                    time.sleep(1)
+                else:
+                    logger.warning("[Startup] ESP32 connection timed out. (Will retry in background)")
+
+            # 4. Now that we verified connections, print the splash screen
+            self.print_startup_info()
+
+            # 5. Keep alive main thread
+            logger.info("[Client] Running — press Ctrl+C to stop")
+            while self.running:
+                time.sleep(1)
+
+        except KeyboardInterrupt:
+            logger.info("[Client] Ctrl+C received")
+        except Exception as e:
+            logger.error(f"[Client] Runtime error: {e}", exc_info=True)
+        finally:
+            self.stop()
 
 
 def main():
     try:
         client = SimpleConcurrentClient("client_config.json")
-        client.print_startup_info()
+        # Notice print_startup_info() was removed from here; 
+        # it is now safely nested inside client.run() after connections establish.
         client.run()
         return 0
     except FileNotFoundError:

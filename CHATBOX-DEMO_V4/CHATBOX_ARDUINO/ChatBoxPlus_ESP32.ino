@@ -114,6 +114,7 @@ void setup() {
   Serial.printf("[+] TCP Server started on port %d\n", TCP_PORT);
 
   servoInit();
+  sleepTimer = millis();  // start sleep countdown from now, not from boot
 }
 
 // ==================== Main Loop ==================== //
@@ -140,6 +141,7 @@ void loop() {
     WiFiClient c = tcpServer.available();
     if (c) {
       tcpClient = c;
+      sleepTimer = millis();  // reset sleep countdown when Jetson connects
       Serial.println("[TCP] Client connected from " + tcpClient.remoteIP().toString());
     }
   }
@@ -147,7 +149,8 @@ void loop() {
   switch (currentState) {
 
     case SLEEP:
-      if (tcpClient && tcpClient.available()) {
+      // Wake on data OR on a fresh TCP connection
+      if (tcpClient && (tcpClient.available() || tcpClient.connected())) {
         currentState = LISTEN;
         Serial.println("ChatBox: Waking up -> LISTEN");
       }

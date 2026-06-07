@@ -32,10 +32,11 @@
 
 #define TCP_PORT      8888
 
-// --- Add Static IP Settings for Jetson Hotspot ---
-IPAddress local_IP(10, 42, 0, 100);  // The permanent IP for your ESP32
-IPAddress gateway(10, 42, 0, 1);     // The Jetson Nano's Hotspot IP
+// ── Static IP for Jetson hotspot ─────────────────────────────────────────────
+IPAddress local_IP(10, 42, 0, 100);
+IPAddress gateway(10, 42, 0, 1);
 IPAddress subnet(255, 255, 255, 0);
+IPAddress dns(10, 42, 0, 1);         // gateway doubles as DNS (required on core 3.x)
 
 WiFiServer tcpServer(TCP_PORT);
 WiFiClient tcpClient;
@@ -93,25 +94,28 @@ void setup() {
   Serial.begin(115200);
   delay(10);
 
-  // 1. Manually configure the Static IP properties before connecting
-  if (!WiFi.config(local_IP, gateway, subnet)) {
-    Serial.println("[-] STA Failed to configure Static IP");
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+
+  // Static IP — 4th DNS arg is required on ESP32 core 3.x or config silently fails
+  if (!WiFi.config(local_IP, gateway, subnet, dns)) {
+    Serial.println("[-] Static IP config failed — will use DHCP");
   }
 
-  // 2. Connect to the Jetson Nano's Host hotspot
-  Serial.printf("[+] Connecting to %s ", WIFI_SSID);
+  Serial.printf("[+] Connecting to %s", WIFI_SSID);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
+  unsigned long wifiStart = millis();
   while (WiFi.status() != WL_CONNECTED) {
+    if (millis() - wifiStart > 30000) {
+      Serial.println("\n[-] WiFi timeout — restarting in 5s");
+      delay(5000);
+      ESP.restart();
+    }
     delay(500);
     Serial.print(".");
   }
-  Serial.println("\n[+] WiFi Connected!");
-  Serial.print("[+] ESP32 Static IP: ");
-  Serial.println(WiFi.localIP());
-
-  // NOTE: mDNS (chatbox.local) is intentionally removed here 
-  // because we are using a direct, ultra-stable raw IP path.
+  Serial.println("\n[+] WiFi Connected: " + WiFi.localIP().toString());
 
   tcpServer.begin();
   Serial.printf("[+] TCP Server started on port %d\n", TCP_PORT);
@@ -121,6 +125,23 @@ void setup() {
 
 // ==================== Main Loop ==================== //
 void loop() {
+  // ── WiFi watchdog — reconnect if hotspot drops ──────────────────────────
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[WiFi] Lost — reconnecting...");
+    WiFi.reconnect();
+    unsigned long t = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - t < 15000) {
+      delay(500);
+      Serial.print(".");
+    }
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("\n[WiFi] Still down — restarting");
+      ESP.restart();
+    }
+    Serial.println("\n[WiFi] Reconnected: " + WiFi.localIP().toString());
+    tcpServer.begin();  // re-arm TCP server after reconnect
+  }
+
   // Accept a new TCP client whenever the previous one drops
   if (!tcpClient || !tcpClient.connected()) {
     WiFiClient c = tcpServer.available();

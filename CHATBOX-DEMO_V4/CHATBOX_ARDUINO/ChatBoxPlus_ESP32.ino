@@ -32,11 +32,9 @@
 
 #define TCP_PORT      8888
 
-// ── Static IP for Jetson hotspot ─────────────────────────────────────────────
-IPAddress local_IP(10, 42, 0, 100);
-IPAddress gateway(10, 42, 0, 1);
-IPAddress subnet(255, 255, 255, 0);
-IPAddress dns(10, 42, 0, 1);         // gateway doubles as DNS (required on core 3.x)
+// Static IP removed — DHCP reservation on Jetson (dnsmasq) guarantees
+// MAC bc:dd:c2:cc:a6:34 always gets 10.42.0.100. DHCP is more reliable
+// because it keeps ARP active; static IP on ESP32 causes ARP to go silent.
 
 WiFiServer tcpServer(TCP_PORT);
 WiFiClient tcpClient;
@@ -96,11 +94,6 @@ void setup() {
 
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
-
-  // Static IP — 4th DNS arg is required on ESP32 core 3.x or config silently fails
-  if (!WiFi.config(local_IP, gateway, subnet, dns)) {
-    Serial.println("[-] Static IP config failed — will use DHCP");
-  }
 
   Serial.printf("[+] Connecting to %s", WIFI_SSID);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);

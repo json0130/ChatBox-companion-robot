@@ -57,9 +57,11 @@ PEPEHA_LINES = [
     "Tēnā koutou, tēnā koutou, tēnā koutou katoa.",
 ]
 
-ENGLISH_INTRO = (
-    "Hi! I'm ChatBox, a friendly robot companion built at the University of Auckland. "
-    "I'm here to chat, help, and keep you company. It's really great to meet you!"
+ENGLISH_INTRO_CONTEXT = (
+    "ChatBox info: You are ChatBox, a friendly companion robot built by "
+    "students at the University of Auckland. You love chatting, helping, "
+    "and keeping people company. "
+    "Now give a warm, natural greeting and briefly share what you can do — in 2 sentences."
 )
 
 
@@ -152,11 +154,9 @@ class SimpleConcurrentClient(BasicClient):
                     tts.process_output(line)
         elif NO_PATTERN.search(transcription):
             self._pepeha_state = PepehaState.IDLE
-            logger.info("[Pepeha] English intro")
+            logger.info("[Pepeha] English intro via LLM")
             self.on_emotion_detected("GREETING")
-            if tts:
-                for sentence in self._split_sentences(ENGLISH_INTRO):
-                    tts.process_output(sentence)
+            self.send_to_server('chat', ENGLISH_INTRO_CONTEXT)
         else:
             logger.info("[Pepeha] Unclear consent response — re-asking")
             if tts:
@@ -165,6 +165,8 @@ class SimpleConcurrentClient(BasicClient):
     # ── Chat / speech handlers ────────────────────────────────────────────────
 
     def on_chat_response(self, data: dict):
+        if self._pepeha_state != PepehaState.IDLE:
+            return
         response_text = data.get("response", "")
         if not response_text:
             return
@@ -178,7 +180,7 @@ class SimpleConcurrentClient(BasicClient):
 
         if self._pepeha_state == PepehaState.IDLE:
             user_text = data.get("transcription", "") or data.get("user_message", "")
-            if INTRO_PATTERN.search(user_text) or INTRO_PATTERN.search(response_text):
+            if INTRO_PATTERN.search(user_text):
                 self._trigger_pepeha_pipeline()
                 return
 

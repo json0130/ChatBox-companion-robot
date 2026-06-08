@@ -149,8 +149,7 @@ void loop() {
   switch (currentState) {
 
     case SLEEP:
-      // Wake on data OR on a fresh TCP connection
-      if (tcpClient && (tcpClient.available() || tcpClient.connected())) {
+      if (tcpClient && tcpClient.available()) {
         currentState = LISTEN;
         Serial.println("ChatBox: Waking up -> LISTEN");
       }
@@ -160,7 +159,8 @@ void loop() {
       if (tcpClient && tcpClient.available()) {
         currentState = LISTEN;
         Serial.println("ChatBox: IDLE -> LISTEN");
-      } else if (millis() - sleepTimer > 30000) {
+      } else if (!tcpClient.connected() && millis() - sleepTimer > 30000) {
+        // Only sleep when Jetson is not connected
         currentState = SLEEP;
         Serial.println("ChatBox: Going to sleep...");
         while (executeExpression("sleep"));

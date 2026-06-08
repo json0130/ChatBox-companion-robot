@@ -27,7 +27,7 @@
         "piper_model": "/home/chatbox/piper-voices/en_US-ryan-low.onnx",
         "piper_length_scale": 1.0,
         "piper_noise_scale": 0.667,
-        "audio_cmd": ["aplay", "-D", "plughw:3,0"]
+        "audio_cmd": ["aplay", "-D", "plughw:2,0"]
     },
     "arduino_output": {
         "host": "10.42.0.100",

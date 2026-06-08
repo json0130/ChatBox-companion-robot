@@ -22,6 +22,7 @@ docker run -it \
   --privileged \
   -v /dev/bus/usb:/dev/bus/usb \
   -v "$(pwd)":/app \
+  -v "$(pwd)"/.asoundrc:/root/.asoundrc \
   -v /home/chatbox/piper-voices:/home/chatbox/piper-voices:ro \
   -v /run/user/1000/pulse/native:/tmp/pulse-socket \
   -v ~/.config/pulse:/root/.config/pulse \

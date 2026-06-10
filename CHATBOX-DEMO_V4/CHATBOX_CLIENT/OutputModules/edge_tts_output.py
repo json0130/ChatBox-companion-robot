@@ -86,12 +86,19 @@ class EdgeTTSOutputModule(OutputModule):
             text = data.get('text', '') if isinstance(data, dict) else str(data)
             text = self._prepare_text(text)
             if text and len(text.strip()) > 2:
-                self.tts_queue.put((text, None, None))
+                self.tts_queue.put((text, None, None, 'text'))
                 return True
             return False
         except Exception as e:
             logger.error(f"[TTS] Processing error: {e}")
             return False
+
+    def process_ssml(self, ssml: str, start_callback=None) -> bool:
+        """Queue raw SSML for playback via edge-tts (supports phoneme tags, NZ Neural voices)."""
+        if not self.enabled:
+            return False
+        self.tts_queue.put((ssml, None, start_callback, 'ssml'))
+        return True
 
     def process_output_synced(self, data: Any, start_callback=None) -> bool:
         """
@@ -107,7 +114,7 @@ class EdgeTTSOutputModule(OutputModule):
             text = data.get('text', '') if isinstance(data, dict) else str(data)
             text = self._prepare_text(text)
             if text and len(text.strip()) > 2:
-                self.tts_queue.put((text, None, start_callback))
+                self.tts_queue.put((text, None, start_callback, 'text'))
                 return True
             if start_callback:
                 start_callback()
@@ -127,7 +134,7 @@ class EdgeTTSOutputModule(OutputModule):
             return False
         text = self._prepare_text(text)
         if text and len(text.strip()) > 2:
-            self.tts_queue.put((text, callback, None))
+            self.tts_queue.put((text, callback, None, 'text'))
             return True
         if callback:
             callback()
@@ -176,13 +183,16 @@ class EdgeTTSOutputModule(OutputModule):
                 continue
 
             if isinstance(item, tuple):
-                padded = item + (None,) * 3
-                text, callback, start_cb = padded[0], padded[1], padded[2]
+                padded = item + (None,) * 4
+                text, callback, start_cb, item_type = padded[0], padded[1], padded[2], padded[3]
             else:
-                text, callback, start_cb = str(item), None, None
+                text, callback, start_cb, item_type = str(item), None, None, 'text'
 
             try:
-                self._speak_text(text, start_cb)
+                if item_type == 'ssml':
+                    self._speak_ssml_via_gtts(text, start_cb)
+                else:
+                    self._speak_text(text, start_cb)
             except Exception as e:
                 logger.error(f"[TTS] Playback error: {e}")
             finally:
@@ -372,6 +382,21 @@ class EdgeTTSOutputModule(OutputModule):
         if os.path.exists(out_file):
             os.unlink(out_file)
         return True
+
+    def _strip_ssml(self, ssml: str) -> str:
+        """Extract readable text from SSML by stripping all XML tags."""
+        text = re.sub(r'<[^>]+>', ' ', ssml)
+        return re.sub(r'\s+', ' ', text).strip()
+
+    def _speak_ssml_via_gtts(self, ssml: str, start_callback=None) -> bool:
+        """Strip SSML tags and speak the extracted text via gTTS (no phoneme rendering)."""
+        text = self._strip_ssml(ssml)
+        if not text:
+            return False
+        with self._voice_lock:
+            language = self._language
+        logger.info(f"[TTS] Speaking (ssml→gTTS): {text[:60]}{'...' if len(text) > 60 else ''}")
+        return self._speak_gtts(text, language, start_callback)
 
     def _speak_gtts(self, text: str, language: str, start_callback=None) -> bool:
         """Online fallback using gTTS + ffmpeg. Returns False if no internet or gtts unavailable."""

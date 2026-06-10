@@ -503,6 +503,7 @@ class ChatBoxServer:
 
 def main():
     """Main function to start ChatBox server"""
+    print("branch")
     print("🤖 ChatBox Server Controller")
     print("   Simplified single-client version")
     print()

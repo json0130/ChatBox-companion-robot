@@ -99,10 +99,10 @@ struct moveSet wave = {
 };
 
 struct moveSet point = {
-  { U, U, U, U, U }, { U }, { U },
-  { U, U, D, U, U }, { U, U, D, U, U }, { M, M, M, M, M },
-  { D, M, M, M, M }, { D, D, D, D, D },
-  { M, M, M, M, M }, { M, M, M, M, M }
+  { U, U, U, U, U }, { U }, { M },  // R brow raised, L neutral (focused look)
+  { U, U, U, U, U }, { U, U, U, U, U }, { M, R, R, R, M }, // neck turns slightly right
+  { U, U, U, U, D }, { D, D, D, D, D },   // R shoulder lifts then drops back; L stays down
+  { U, U, U, U, M }, { M, M, M, M, M }    // R hand extends forward (up) then returns
 };
 
 // struct moveSet confused = {
@@ -180,10 +180,11 @@ struct moveSet defaultMode = {  // Fixed: was "defaultt"
 };
 
 struct moveSet pose = {
-  { U, U, U, U, U }, { M }, { M },
-  { U, U, D, D, U }, { U, U, U, U, U }, { M, L, L, L, L },
-  { U, U, U, U, U }, { D, D, D, D, D },
-  { M, U, U, U, M }, { M, M, M, M, M }
+  { U, U, U, U, U }, { M }, { M },            // ears up, brows neutral
+  { U, U, D, D, U }, { U, U, U, U, U },       // R eye blinks mid-sequence, L open
+  { M, L, L, L, L },                           // neck turns to look at raised arm
+  { D, M, U, U, D }, { D, D, D, D, D },       // RShoulder sweeps D→M→U→U→D; L stays down
+  { D, M, U, U, D }, { M, M, M, M, M }        // RHand rises with shoulder D→M→U→U→D
 };
 
 // A more subtle idle_natural gesture with only ears and eyes moving.

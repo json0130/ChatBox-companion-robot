@@ -29,7 +29,8 @@ RUN pip3 install \
     websocket-client \
     websockets \
     gtts \
-    numpy
+    numpy \
+    pyserial
 
 # Build PyAudio from source to avoid _portaudio error
 RUN pip3 install --no-binary :all: pyaudio

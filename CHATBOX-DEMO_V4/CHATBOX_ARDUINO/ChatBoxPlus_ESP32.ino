@@ -86,6 +86,18 @@ enum RobotState { IDLE, LISTEN, EXECUTE, SLEEP };
 RobotState currentState = IDLE;
 String serialInput = "";
 unsigned long sleepTimer = 0;
+bool commandFromSerial = false;  // true when command arrived over USB serial, false for TCP
+
+// ==================== Response Helper ==================== //
+// Routes OK/ERR/DONE responses back to whichever transport sent the command.
+// Debug prints always go to Serial regardless.
+void sendResponse(String msg) {
+  if (commandFromSerial) {
+    Serial.println(msg);
+  } else if (tcpClient && tcpClient.connected()) {
+    tcpClient.println(msg);
+  }
+}
 
 // ==================== Setup ==================== //
 void setup() {
@@ -150,17 +162,28 @@ void loop() {
 
     case SLEEP:
       if (tcpClient && tcpClient.available()) {
+        commandFromSerial = false;
         currentState = LISTEN;
-        Serial.println("ChatBox: Waking up -> LISTEN");
+        Serial.println("ChatBox: Waking up (TCP) -> LISTEN");
+      } else if (Serial.available()) {
+        commandFromSerial = true;
+        currentState = LISTEN;
+        Serial.println("ChatBox: Waking up (Serial) -> LISTEN");
       }
       break;
 
     case IDLE:
       if (tcpClient && tcpClient.available()) {
+        commandFromSerial = false;
         currentState = LISTEN;
-        Serial.println("ChatBox: IDLE -> LISTEN");
+        Serial.println("ChatBox: IDLE -> LISTEN (TCP)");
+      } else if (Serial.available()) {
+        commandFromSerial = true;
+        sleepTimer = millis();  // serial activity counts as "connected" for sleep timer
+        currentState = LISTEN;
+        Serial.println("ChatBox: IDLE -> LISTEN (Serial)");
       } else if (!tcpClient.connected() && millis() - sleepTimer > 30000) {
-        // Only sleep when Jetson is not connected
+        // Only sleep when Jetson is not connected via either transport
         currentState = SLEEP;
         Serial.println("ChatBox: Going to sleep...");
         while (executeExpression("sleep"));
@@ -169,16 +192,20 @@ void loop() {
       break;
 
     case LISTEN:
-      serialInput = tcpClient.readStringUntil('\n');
+      if (commandFromSerial) {
+        serialInput = Serial.readStringUntil('\n');
+      } else {
+        serialInput = tcpClient.readStringUntil('\n');
+      }
       serialInput.trim();
-      Serial.println("DEBUG: Received [" + serialInput + "] Length:" + String(serialInput.length()));
+      Serial.println("DEBUG: Received [" + serialInput + "] via " + (commandFromSerial ? "Serial" : "TCP"));
 
       if (checkValidity(serialInput) || checkSequenceValidity(serialInput)) {
-        tcpClient.println("OK:" + serialInput);
+        sendResponse("OK:" + serialInput);
         currentState = EXECUTE;
         Serial.println("ChatBox: Valid command -> EXECUTE");
       } else {
-        tcpClient.println("ERR:" + serialInput);
+        sendResponse("ERR:" + serialInput);
         Serial.println("ChatBox: Invalid command!");
         currentState = IDLE;
         sleepTimer = millis();
@@ -196,7 +223,7 @@ void loop() {
         executeExpression(serialInput);
       }
 
-      tcpClient.println("DONE:" + serialInput);
+      sendResponse("DONE:" + serialInput);
       Serial.printf("Free heap after: %d bytes\n", ESP.getFreeHeap());
       sleepTimer = millis();
       currentState = IDLE;

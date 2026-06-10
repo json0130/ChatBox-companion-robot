@@ -9,9 +9,10 @@
     ],
     "robot_role": "You are a friendly and helpful robot assistant. You speak warmly, answer questions clearly, and always try to make the person feel comfortable. Keep responses concise and natural.",
     "allowed_tags": [
-        "[DEFAULT]",
-        "[WAVE]",
-        "[HAPPY]",
+        "[POSE]",
+        "[hands_clap]",
+        "[ears_wiggle]",
+        "[POINT]",
         "[SAD]",
         "[CONFUSED]",
         "[GREETING]"
@@ -34,7 +35,12 @@
         "port": 8888,
         "bind_address": "10.42.0.1",
         "reconnect_delay": 1.0,
-        "max_reconnect_delay": 30.0
+        "max_reconnect_delay": 30.0,
+        "serial": {
+            "port": "/dev/ttyUSB0",
+            "baudrate": 115200,
+            "timeout": 1.0
+        }
     },
     "capabilities": {
         "navigation": false,

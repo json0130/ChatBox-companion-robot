@@ -1,3 +1,4 @@
+import glob
 import socket
 import struct
 import subprocess
@@ -9,6 +10,13 @@ from client import OutputModule
 
 logger = logging.getLogger(__name__)
 
+try:
+    import serial as _serial_mod
+    _SERIAL_AVAILABLE = True
+except ImportError:
+    _serial_mod = None
+    _SERIAL_AVAILABLE = False
+
 
 class ArduinoOutputModule(OutputModule):
     def __init__(self, name: str = "arduino_output", config: Dict[str, Any] = None):
@@ -18,42 +26,59 @@ class ArduinoOutputModule(OutputModule):
         self.port = self.config.get('port', 8888)
         self._reconnect_delay = self.config.get('reconnect_delay', 1.0)
         self._max_delay = self.config.get('max_reconnect_delay', 30.0)
+        self._serial_cfg: Dict[str, Any] = self.config.get('serial', {})
 
         self._sock: Optional[socket.socket] = None
+        self._serial: Optional[Any] = None  # serial.Serial instance
+        self._mode: str = "tcp"             # "tcp" or "serial", set in start()
         self.connected = False
         self._running = False
         self.last_esp32_message = ""
-        self._resolved_ip: Optional[str] = None  # cached from avahi-resolve
-        self._bind_address: Optional[str] = self.config.get('bind_address')  # local IP of ESP32-side interface
+        self._resolved_ip: Optional[str] = None
+        self._bind_address: Optional[str] = self.config.get('bind_address')
 
-        # Callbacks assigned by robot.py
         self.on_connected = None
         self.on_disconnected = None
         self.on_connection_error = None
 
     def initialize(self) -> bool:
-        # Always register; TCP connection established asynchronously in start()
         return True
 
+    # ------------------------------------------------------------------
+    # Serial detection
+    # ------------------------------------------------------------------
+
+    def _detect_serial_port(self) -> Optional[str]:
+        if not _SERIAL_AVAILABLE:
+            return None
+        candidates = []
+        hint = self._serial_cfg.get("port", "")
+        if hint:
+            candidates.append(hint)
+        candidates += sorted(glob.glob("/dev/ttyUSB*")) + sorted(glob.glob("/dev/ttyACM*"))
+        for port in candidates:
+            try:
+                s = _serial_mod.Serial(port, timeout=0.5)
+                s.close()
+                return port
+            except Exception:
+                continue
+        return None
+
+    # ------------------------------------------------------------------
+    # TCP helpers (unchanged logic, plus TCP_NODELAY)
+    # ------------------------------------------------------------------
+
     def _resolve_host(self) -> str:
-        """
-        Return a connectable address for self.host.
-        For .local mDNS names: try raw mDNS multicast first (fastest in Docker),
-        then avahi-resolve, then fall back to system getaddrinfo.
-        For regular hostnames: use getaddrinfo directly.
-        Caches the resolved IP so resolution only runs once per connection cycle.
-        """
         if self._resolved_ip:
             return self._resolved_ip
 
         if self.host.endswith('.local'):
-            # Raw mDNS multicast — fastest path inside Docker (no avahi-daemon needed)
             ip = self._mdns_resolve(self.host)
             if ip:
                 self._resolved_ip = ip
                 return ip
 
-            # Avahi fallback (needs avahi-daemon + D-Bus)
             try:
                 result = subprocess.run(
                     ['avahi-resolve-host-name', self.host],
@@ -71,27 +96,19 @@ class ArduinoOutputModule(OutputModule):
             except Exception as e:
                 logger.debug(f"[Arduino] avahi-resolve failed: {e}")
         else:
-            # Regular hostname — system resolver is appropriate
             try:
                 socket.getaddrinfo(self.host, self.port)
                 return self.host
             except socket.gaierror:
                 pass
 
-        return self.host  # last resort
+        return self.host
 
     def _mdns_resolve(self, hostname: str, timeout: float = 3.0) -> Optional[str]:
-        """
-        Send a raw mDNS A-record query to 224.0.0.251:5353 and return the first
-        IPv4 address that responds.  Works inside Docker --network host without
-        avahi-daemon (libnss-mdns >= 0.13 requires avahi; this does not).
-        """
-        # Build DNS query packet
         labels = hostname.rstrip('.').encode('ascii').split(b'.')
         qname = b''.join(bytes([len(l)]) + l for l in labels) + b'\x00'
-        # Header: ID=0, standard query, 1 question, 0 answers/ns/ar
         packet = struct.pack('!HHHHHH', 0, 0, 1, 0, 0, 0)
-        packet += qname + struct.pack('!HH', 1, 1)  # QTYPE=A, QCLASS=IN
+        packet += qname + struct.pack('!HH', 1, 1)
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -115,13 +132,12 @@ class ArduinoOutputModule(OutputModule):
                 if len(data) < 12:
                     continue
                 flags = struct.unpack('!H', data[2:4])[0]
-                if not (flags & 0x8000):   # not a response
+                if not (flags & 0x8000):
                     continue
                 qdcount = struct.unpack('!H', data[4:6])[0]
                 ancount = struct.unpack('!H', data[6:8])[0]
                 if ancount == 0:
                     continue
-                # Skip question section
                 off = 12
                 for _ in range(qdcount):
                     while off < len(data):
@@ -129,8 +145,7 @@ class ArduinoOutputModule(OutputModule):
                         if n == 0:      off += 1; break
                         if n >= 0xC0:   off += 2; break
                         off += 1 + n
-                    off += 4  # QTYPE + QCLASS
-                # Parse answer records looking for an A record
+                    off += 4
                 for _ in range(ancount):
                     while off < len(data):
                         n = data[off]
@@ -141,7 +156,7 @@ class ArduinoOutputModule(OutputModule):
                         break
                     rtype, _, _, rdlen = struct.unpack('!HHIH', data[off:off + 10])
                     off += 10
-                    if rtype == 1 and rdlen == 4:  # A record
+                    if rtype == 1 and rdlen == 4:
                         ip = '.'.join(str(b) for b in data[off:off + 4])
                         logger.info(f"[Arduino] mDNS: {hostname} → {ip}")
                         return ip
@@ -152,10 +167,11 @@ class ArduinoOutputModule(OutputModule):
             sock.close()
         return None
 
-    def _connect(self) -> bool:
+    def _tcp_connect(self) -> bool:
         host = self._resolve_host()
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             if self._bind_address:
                 try:
                     s.bind((self._bind_address, 0))
@@ -166,12 +182,12 @@ class ArduinoOutputModule(OutputModule):
             s.settimeout(1.0)
             self._sock = s
             self.connected = True
-            logger.info(f"[Arduino] Connected to {host}:{self.port}")
+            logger.info(f"[Arduino] TCP mode — connected to {host}:{self.port}")
             if self.on_connected:
                 self.on_connected()
             return True
         except socket.gaierror:
-            self._resolved_ip = None  # clear cache — may have changed
+            self._resolved_ip = None
             logger.error(f"[Arduino] Cannot resolve '{self.host}'")
             if self.on_connection_error:
                 self.on_connection_error(f"Cannot resolve {self.host}")
@@ -182,21 +198,61 @@ class ArduinoOutputModule(OutputModule):
                 self.on_connection_error(str(e))
             return False
 
+    def _serial_connect(self) -> bool:
+        baudrate = self._serial_cfg.get("baudrate", 115200)
+        timeout = self._serial_cfg.get("timeout", 1.0)
+        try:
+            self._serial = _serial_mod.Serial(
+                self._serial_port, baudrate=baudrate,
+                timeout=timeout, write_timeout=1.0
+            )
+            self.connected = True
+            logger.info(f"[Arduino] Serial mode — connected to {self._serial_port} @ {baudrate}")
+            if self.on_connected:
+                self.on_connected()
+            return True
+        except Exception as e:
+            logger.error(f"[Arduino] Serial connection failed: {e}")
+            if self.on_connection_error:
+                self.on_connection_error(str(e))
+            return False
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
     def start(self) -> bool:
         self._running = True
-        threading.Thread(target=self._maintain_connection, daemon=True).start()
+        self._serial_port = self._detect_serial_port()
+        if self._serial_port:
+            self._mode = "serial"
+            logger.info(f"[Arduino] Wired USB detected — using serial mode ({self._serial_port})")
+            threading.Thread(target=self._maintain_serial, daemon=True).start()
+        else:
+            self._mode = "tcp"
+            logger.info(f"[Arduino] No serial device found — using TCP/WiFi mode ({self.host}:{self.port})")
+            threading.Thread(target=self._maintain_connection, daemon=True).start()
         return True
 
     def stop(self):
         self._running = False
-        if self._sock:
-            try:
-                self._sock.close()
-            except Exception:
-                pass
-            self._sock = None
+        if self._mode == "serial":
+            if self._serial:
+                try:
+                    self._serial.close()
+                except Exception:
+                    pass
+                self._serial = None
+            logger.info("[Arduino] Serial connection closed.")
+        else:
+            if self._sock:
+                try:
+                    self._sock.close()
+                except Exception:
+                    pass
+                self._sock = None
+            logger.info("[Arduino] TCP connection closed.")
         self.connected = False
-        logger.info("[Arduino] TCP connection closed.")
         if self.on_disconnected:
             self.on_disconnected()
 
@@ -206,12 +262,21 @@ class ArduinoOutputModule(OutputModule):
     def is_connected(self) -> bool:
         return self.connected
 
+    # ------------------------------------------------------------------
+    # Send
+    # ------------------------------------------------------------------
+
     def send_command(self, command: str) -> bool:
-        if not self.connected or not self._sock:
+        if not self.connected:
             logger.warning(f"[Arduino] Cannot send '{command}' — not connected")
             return False
         try:
-            self._sock.sendall(f"{command.strip()}\n".encode('utf-8'))
+            payload = f"{command.strip()}\n".encode('utf-8')
+            if self._mode == "serial":
+                self._serial.write(payload)
+                self._serial.flush()
+            else:
+                self._sock.sendall(payload)
             logger.info(f"[Arduino] Sent: {command.strip()}")
             return True
         except Exception as e:
@@ -219,7 +284,12 @@ class ArduinoOutputModule(OutputModule):
             self.connected = False
             return False
 
+    # ------------------------------------------------------------------
+    # Connection maintenance loops
+    # ------------------------------------------------------------------
+
     def _maintain_connection(self):
+        """TCP reconnect loop with exponential backoff."""
         delay = self._reconnect_delay
         first_attempt = True
         while self._running:
@@ -229,7 +299,7 @@ class ArduinoOutputModule(OutputModule):
                 else:
                     logger.info(f"[Arduino] Reconnecting in {delay:.0f}s...")
                     time.sleep(delay)
-                if self._connect():
+                if self._tcp_connect():
                     delay = self._reconnect_delay
                 else:
                     delay = min(delay * 2, self._max_delay)
@@ -250,11 +320,47 @@ class ArduinoOutputModule(OutputModule):
                 if self._running:
                     logger.error(f"[Arduino] Lost connection: {e}")
                     self.connected = False
-                    self._resolved_ip = None  # re-resolve on next attempt
+                    self._resolved_ip = None
                     try:
                         self._sock.close()
                     except Exception:
                         pass
                     self._sock = None
+                    if self.on_disconnected:
+                        self.on_disconnected()
+
+    def _maintain_serial(self):
+        """Serial reconnect loop with exponential backoff."""
+        delay = self._reconnect_delay
+        first_attempt = True
+        while self._running:
+            if not self.connected:
+                if first_attempt:
+                    first_attempt = False
+                else:
+                    logger.info(f"[Arduino] Serial reconnecting in {delay:.0f}s...")
+                    time.sleep(delay)
+                if self._serial_connect():
+                    delay = self._reconnect_delay
+                else:
+                    delay = min(delay * 2, self._max_delay)
+                continue
+
+            try:
+                line = self._serial.readline()
+                if line:
+                    text = line.decode('utf-8', errors='ignore').strip()
+                    if text:
+                        self.last_esp32_message = text
+                        logger.debug(f"[Arduino] ESP32: {text}")
+            except Exception as e:
+                if self._running:
+                    logger.error(f"[Arduino] Serial lost: {e}")
+                    self.connected = False
+                    try:
+                        self._serial.close()
+                    except Exception:
+                        pass
+                    self._serial = None
                     if self.on_disconnected:
                         self.on_disconnected()

@@ -20,11 +20,13 @@ logger = logging.getLogger(__name__)
 # Maps emotion tags emitted by the LLM ([GREETING], [SAD], etc.)
 # to the command names the Arduino firmware understands.
 EMOTION_MAP = {
-    "GREETING": "greeting", "WAVE":   "wave",      "POINT":    "point",
-    "CONFUSED": "confused", "SHRUG":  "shrug",     "ANGRY":    "angry",
-    "SAD":      "sad",      "SLEEP":  "sleep",     "DEFAULT":  "default",
-    "POSE":     "pose",     "HAPPY":  "greeting",  "FEAR":     "sad",
-    "SURPRISE": "confused", "NEUTRAL": "default",
+    "GREETING":    "greeting",   "WAVE":    "wave",    "POINT":    "point",
+    "CONFUSED":    "confused",   "SHRUG":   "shrug",   "ANGRY":    "angry",
+    "SAD":         "sad",        "SLEEP":   "sleep",   "DEFAULT":  "default",
+    "POSE":        "pose",       "HAPPY":   "greeting","FEAR":     "sad",
+    "SURPRISE":    "confused",   "NEUTRAL": "default",
+    "HANDS_CLAP":  "hands_clap",
+    "EARS_WIGGLE": "ears_wiggle",
 }
 
 # ── Pepeha pipeline ───────────────────────────────────────────────────────────
@@ -34,7 +36,7 @@ class PepehaState(Enum):
     AWAITING_CONSENT = "awaiting_consent"
 
 INTRO_PATTERN = re.compile(
-    r'\b(introduc|who are you|tell me about yourself|your name|k[oō]rero)\b',
+    r'\b(introduce\s+yourself|who are you|tell me about yourself|what is your name|k[oō]rero)',
     re.IGNORECASE
 )
 YES_PATTERN = re.compile(
@@ -49,20 +51,13 @@ NO_PATTERN = re.compile(
 CONSENT_QUESTION = "Would it be okay if I introduced myself in te reo Māori?"
 
 PEPEHA_LINES = [
+    "Tena kotoh, kahtoa.",
     "Ko Rangitoto te maunga.",
-    "Ko Waitematā te moana.",
-    "Ko Tāmaki Makaurau tōku kāinga.",
-    "Ko te Whare Wānanga o Tāmaki Makaurau tōku whare wānanga.",
-    "Ko ChatBox tōku ingoa.",
-    "Tēnā koutou, tēnā koutou, tēnā koutou katoa.",
+    "Ko Waitemata te moana.",
+    "Ko Tamaki Makoh-ro, toku ka-inga.",
+    "Ko Chat Box, toku ingoah.",
+    "Tena kotoh, tena kotoh, tena kotoh kahtoa.",
 ]
-
-ENGLISH_INTRO_CONTEXT = (
-    "ChatBox info: You are ChatBox, a friendly companion robot built by "
-    "students at the University of Auckland. You love chatting, helping, "
-    "and keeping people company. "
-    "Now give a warm, natural greeting and briefly share what you can do — in 2 sentences."
-)
 
 
 class SimpleConcurrentClient(BasicClient):
@@ -135,6 +130,14 @@ class SimpleConcurrentClient(BasicClient):
 
     # ── Pepeha pipeline ───────────────────────────────────────────────────────
 
+    def _build_english_intro_context(self) -> str:
+        name = self.config.get('robot_name', 'ChatBox')
+        role = self.config.get('robot_role', 'a friendly companion robot')
+        return (
+            f"Introduce yourself. Your name is {name}. {role} "
+            f"Give a warm, natural self-introduction in 1-2 sentences."
+        )
+
     def _trigger_pepeha_pipeline(self):
         self._pepeha_state = PepehaState.AWAITING_CONSENT
         logger.info("[Pepeha] Awaiting consent")
@@ -156,7 +159,7 @@ class SimpleConcurrentClient(BasicClient):
             self._pepeha_state = PepehaState.IDLE
             logger.info("[Pepeha] English intro via LLM")
             self.on_emotion_detected("GREETING")
-            self.send_to_server('chat', ENGLISH_INTRO_CONTEXT)
+            self.send_to_server('chat', self._build_english_intro_context())
         else:
             logger.info("[Pepeha] Unclear consent response — re-asking")
             if tts:
@@ -177,12 +180,6 @@ class SimpleConcurrentClient(BasicClient):
 
         if "console_output" in self.output_modules:
             self.output_modules["console_output"].process_output(response_text)
-
-        if self._pepeha_state == PepehaState.IDLE:
-            user_text = data.get("transcription", "") or data.get("user_message", "")
-            if INTRO_PATTERN.search(user_text):
-                self._trigger_pepeha_pipeline()
-                return
 
         tts = self.output_modules.get("edge_tts_output")
         if not tts:
@@ -207,6 +204,10 @@ class SimpleConcurrentClient(BasicClient):
 
         if self._pepeha_state == PepehaState.AWAITING_CONSENT:
             self._handle_pepeha_consent(transcription)
+            return
+
+        if transcription and INTRO_PATTERN.search(transcription):
+            self._trigger_pepeha_pipeline()
             return
 
         if data.get("response"):

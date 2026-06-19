@@ -8,15 +8,16 @@ Wires the real end-to-end loop with NO hardware and NO webcam:
 A shared InMemoryGraphStore persists across the whole run.
 
 Faked inputs (the only stubs):
-  person_id     — typed by the user or scripted
+  person_id      — typed by the user or scripted
   camera_emotion — typed by the user or scripted (happy/sad/neutral/angry/…)
-  robot_id      — flag --robot chatbox|ellebot  (default: chatbox)
+  robot_id       — flag --robot chatbox|ellebot  (default: chatbox)
 
 Usage:
     python3 -m modules.graph_relationship.demo_harness              # interactive
     python3 -m modules.graph_relationship.demo_harness --scripted   # automated proof
-    python3 -m modules.graph_relationship.demo_harness --robot ellebot
-    python3 -m modules.graph_relationship.demo_harness --scripted --obsidian
+    python3 -m modules.graph_relationship.demo_harness --scripted --llm
+    python3 -m modules.graph_relationship.demo_harness --llm --model qwen2.5:7b
+    python3 -m modules.graph_relationship.demo_harness --robot ellebot --obsidian
 """
 
 from __future__ import annotations
@@ -29,9 +30,6 @@ from datetime import datetime, timezone
 from typing import Optional
 
 # ── Module imports ────────────────────────────────────────────────────────────
-# Relative imports work when run as: python3 -m modules.graph_relationship.demo_harness
-# from the CHATBOX_SERVER directory.
-
 from .schema import (
     Embodiment,
     PersonNode,
@@ -46,11 +44,17 @@ from .kg_bridge import KGBridge, derive_tier
 try:
     from ..pad_persona.pipeline_adapter import PADPipelineAdapter
 except ImportError:
-    # Fallback for direct invocation or unusual PYTHONPATH setups.
     _here = os.path.dirname(os.path.dirname(__file__))
     if _here not in sys.path:
         sys.path.insert(0, _here)
     from pad_persona.pipeline_adapter import PADPipelineAdapter  # type: ignore
+
+try:
+    from openai import OpenAI as _OpenAI
+    _OPENAI_AVAILABLE = True
+except ImportError:
+    _OpenAI = None  # type: ignore
+    _OPENAI_AVAILABLE = False
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -61,24 +65,86 @@ VALID_EMOTIONS = frozenset({
 })
 VALID_ROBOTS = frozenset({"chatbox", "ellebot"})
 
-# ANSI colour codes for tier labels in terminal output.
+_ROBOT_DISPLAY = {"chatbox": "ChatBox", "ellebot": "ElleBot"}
+
+_DEFAULT_SCENARIO = "Hi! Can we be friends today?"
+
 _TIER_COLOUR = {
-    "unknown": "\033[90m",   # grey
-    "visitor": "\033[33m",   # yellow
-    "known":   "\033[36m",   # cyan
-    "close":   "\033[32m",   # green
+    "unknown": "\033[90m",
+    "visitor": "\033[33m",
+    "known":   "\033[36m",
+    "close":   "\033[32m",
 }
-_RST = "\033[0m"
+_BOLD  = "\033[1m"
+_DIM   = "\033[2m"
+_RST   = "\033[0m"
+_GREEN = "\033[32m"
+_CYAN  = "\033[36m"
 
 
-# ── Store helpers  (read-only queries, no writes) ─────────────────────────────
+# ── LLM client ────────────────────────────────────────────────────────────────
+
+class LLMClient:
+    """
+    Stateless wrapper around Ollama's OpenAI-compatible API.
+
+    Each call is independent (no history buffer) — intentional for the harness
+    so that back-to-back person comparisons reflect ONLY the PAD system_prompt
+    differences, not accumulated conversation context.
+    """
+
+    def __init__(
+        self,
+        model: str = "qwen2.5:7b",
+        host: str = "127.0.0.1",
+        port: int = 11434,
+    ) -> None:
+        if not _OPENAI_AVAILABLE:
+            raise RuntimeError("openai package required — pip install openai")
+        self.model     = model
+        self.available = False
+        self._client   = _OpenAI(
+            base_url=f"http://{host}:{port}/v1",
+            api_key="ollama",
+        )
+
+    def connect(self) -> bool:
+        try:
+            self._client.models.list()
+            self.available = True
+            print(f"  [LLM] Connected — model: {self.model}")
+            return True
+        except Exception as exc:
+            print(f"  [LLM] Cannot reach Ollama at {self._client.base_url}: {exc}")
+            print("        Start Ollama with:  ollama serve")
+            return False
+
+    def respond(self, system_prompt: str, user_message: str) -> str:
+        """Send one stateless turn and return the raw model string."""
+        if not self.available:
+            return "(LLM unavailable)"
+        try:
+            resp = self._client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system",  "content": system_prompt},
+                    {"role": "user",    "content": user_message},
+                ],
+                temperature=0.7,
+                stream=False,
+            )
+            return resp.choices[0].message.content.strip()
+        except Exception as exc:
+            return f"(LLM error: {exc})"
+
+
+# ── Store helpers ─────────────────────────────────────────────────────────────
 
 def _relationship_snapshot(
     store: InMemoryGraphStore,
     person_id: str,
     robot_id: str,
 ) -> dict:
-    """Return rapport / trust / interaction_count for a person-robot pair."""
     rp = store.get_edge(robot_id, person_id, "rapport")
     tr = store.get_edge(robot_id, person_id, "trust")
     ic = store.get_edge(robot_id, person_id, "interaction_count")
@@ -112,13 +178,11 @@ def seed_relationship(
     """
     TEST AID — NOT production logic.
 
-    Directly writes RapportEdge and TrustEdge into the store so the harness
-    can push a person to a higher tier without running enough interaction turns.
-    In the real system tier is earned through interaction; this exists only so
-    the demo can show the 'close' state without requiring 70+ turns of warm-up.
+    Directly writes RapportEdge and TrustEdge so the harness can push a person
+    into 'known' / 'close' tier without running enough interaction turns.
 
-    Why:  (rapport + trust) / 2 > 0.70  →  derive_tier() returns "close"
-           (rapport + trust) / 2 > 0.45  →  "known"
+    Tier thresholds: score = (rapport + trust) / 2
+      score > 0.70 → "close"  |  score > 0.45 → "known"
     """
     rapport = max(0.0, min(1.0, rapport))
     trust   = max(0.0, min(1.0, trust))
@@ -135,9 +199,9 @@ def seed_relationship(
         TrustEdge  (source_id=robot_id, target_id=person_id,
                     provenance=prov, weight=trust),
     ])
-    score = (rapport + trust) / 2.0
+    score      = (rapport + trust) / 2.0
     tier_after = "close" if score > 0.70 else ("known" if score > 0.45 else "visitor")
-    tc = _TIER_COLOUR.get(tier_after, "")
+    tc         = _TIER_COLOUR.get(tier_after, "")
     print(f"  [TEST AID] seeded {person_id}: rapport={rapport:.2f}  trust={trust:.2f}"
           f"  score={score:.2f}  → tier now {tc}{tier_after}{_RST}")
 
@@ -166,93 +230,69 @@ def export_graph_json(store: InMemoryGraphStore, out_path: str) -> None:
 
 
 def export_graph_html(store: InMemoryGraphStore, out_path: str) -> None:
-    """Render store as an interactive pyvis HTML file (self-contained, double-click to open)."""
     try:
         from pyvis.network import Network  # type: ignore
     except ImportError:
         print("  pyvis not installed — run:  pip install pyvis")
         json_fallback = out_path.replace(".html", ".json")
-        print(f"  Falling back to JSON export:")
+        print("  Falling back to JSON export:")
         export_graph_json(store, json_fallback)
         return
 
     net = Network(
-        height="780px",
-        width="100%",
-        directed=True,
-        notebook=False,
-        bgcolor="#1a1a2e",
-        font_color="#e0e0e0",
+        height="780px", width="100%", directed=True,
+        notebook=False, bgcolor="#1a1a2e", font_color="#e0e0e0",
     )
     net.set_options("""{
-        "nodes": {
-            "font": {"size": 14, "face": "monospace"},
-            "borderWidth": 2
-        },
+        "nodes": {"font": {"size": 14, "face": "monospace"}, "borderWidth": 2},
         "edges": {
             "font": {"size": 10, "color": "#bbbbbb", "align": "middle"},
             "arrows": {"to": {"enabled": true, "scaleFactor": 0.7}},
             "smooth": {"type": "curvedCW", "roundness": 0.2}
         },
         "physics": {
-            "enabled": true,
-            "solver": "forceAtlas2Based",
+            "enabled": true, "solver": "forceAtlas2Based",
             "forceAtlas2Based": {"gravitationalConstant": -60, "springLength": 120}
         }
     }""")
 
-    _NODE_COLOUR = {
-        "robot":  "#4A90D9",
-        "person": "#5CB85C",
-        "topic":  "#F0AD4E",
-        "event":  "#D9534F",
-    }
-    _NODE_SHAPE = {
-        "robot":  "star",
-        "person": "ellipse",
-        "topic":  "box",
-        "event":  "diamond",
-    }
+    _NODE_COLOUR = {"robot": "#4A90D9", "person": "#5CB85C",
+                    "topic": "#F0AD4E", "event": "#D9534F"}
+    _NODE_SHAPE  = {"robot": "star", "person": "ellipse",
+                    "topic": "box",  "event":  "diamond"}
 
     for node in store._nodes.values():
         label = getattr(node, "display_name", None) or node.id
-        tooltip_parts = [f"type: {node.node_type}", f"id: {node.id}"]
+        tip   = [f"type: {node.node_type}", f"id: {node.id}"]
         if hasattr(node, "embodiment"):
-            tooltip_parts.append(f"embodiment: {node.embodiment}")
+            tip.append(f"embodiment: {node.embodiment}")
         net.add_node(
-            node.id,
-            label=label,
+            node.id, label=label,
             color=_NODE_COLOUR.get(node.node_type, "#AAAAAA"),
             shape=_NODE_SHAPE.get(node.node_type, "ellipse"),
-            title="<br>".join(tooltip_parts),
+            title="<br>".join(tip),
             size=30 if node.node_type == "robot" else 20,
         )
 
     for edge in store._edges.values():
-        lbl = _edge_label(edge)
         tip = (f"type: {edge.edge_type}<br>"
                f"source: {edge.source_id}<br>"
                f"target: {edge.target_id}")
-        net.add_edge(
-            edge.source_id,
-            edge.target_id,
-            label=lbl,
-            title=tip,
-        )
+        net.add_edge(edge.source_id, edge.target_id,
+                     label=_edge_label(edge), title=tip)
 
     net.write_html(out_path)
     print(f"  → {os.path.abspath(out_path)}")
 
 
 def export_obsidian_vault(store: InMemoryGraphStore, vault_dir: str) -> None:
-    """Export one Markdown file per node with [[wikilinks]] on edges."""
     os.makedirs(vault_dir, exist_ok=True)
 
     def _slug(node_id: str, node_type: str) -> str:
         return f"{node_type}_{node_id.replace('-', '_')}"
 
     for node in store._nodes.values():
-        ns = _slug(node.id, node.node_type)
+        ns       = _slug(node.id, node.node_type)
         outgoing = [e for e in store._edges.values() if e.source_id == node.id]
         incoming = [e for e in store._edges.values()
                     if e.target_id == node.id and e.source_id != node.id]
@@ -262,7 +302,6 @@ def export_obsidian_vault(store: InMemoryGraphStore, vault_dir: str) -> None:
         if hasattr(node, "embodiment"):
             lines.append(f"**embodiment**: `{node.embodiment}`")
         lines.append("")
-
         if outgoing:
             lines.append("## Outgoing edges")
             for e in outgoing:
@@ -270,7 +309,6 @@ def export_obsidian_vault(store: InMemoryGraphStore, vault_dir: str) -> None:
                 if tgt:
                     lines.append(f"- `{_edge_label(e)}` → [[{_slug(tgt.id, tgt.node_type)}]]")
             lines.append("")
-
         if incoming:
             lines.append("## Incoming edges")
             for e in incoming:
@@ -279,12 +317,10 @@ def export_obsidian_vault(store: InMemoryGraphStore, vault_dir: str) -> None:
                     lines.append(f"- [[{_slug(src.id, src.node_type)}]] → `{_edge_label(e)}`")
             lines.append("")
 
-        filepath = os.path.join(vault_dir, f"{ns}.md")
-        with open(filepath, "w", encoding="utf-8") as fh:
+        with open(os.path.join(vault_dir, f"{ns}.md"), "w", encoding="utf-8") as fh:
             fh.write("\n".join(lines))
 
-    n_files = len(store._nodes)
-    print(f"  → {os.path.abspath(vault_dir)}  ({n_files} markdown files)")
+    print(f"  → {os.path.abspath(vault_dir)}  ({len(store._nodes)} markdown files)")
 
 
 # ── Harness class ─────────────────────────────────────────────────────────────
@@ -294,15 +330,21 @@ class Harness:
     Owns the shared InMemoryGraphStore and runs one turn at a time.
 
     The store is created once at construction and lives for the whole run —
-    per-person state MUST persist across turns; this is the entire point of the demo.
+    per-person state MUST persist across turns; that is the entire point.
     """
 
-    def __init__(self, robot_id: str = "chatbox", obsidian: bool = False) -> None:
-        self.store   = InMemoryGraphStore()
-        self.bridge  = KGBridge(self.store)
+    def __init__(
+        self,
+        robot_id: str = "chatbox",
+        obsidian: bool = False,
+        llm: Optional[LLMClient] = None,
+    ) -> None:
+        self.store    = InMemoryGraphStore()
+        self.bridge   = KGBridge(self.store)
         self.robot_id = robot_id
         self.obsidian = obsidian
-        self.turn_n  = 0
+        self.llm      = llm
+        self.turn_n   = 0
         self._pad_adapters: dict[str, PADPipelineAdapter] = {}
 
     def _adapter(self, robot_id: str) -> PADPipelineAdapter:
@@ -317,19 +359,21 @@ class Harness:
         person_id: str,
         robot_id: str,
         emotion: str,
+        user_message: Optional[str] = None,
     ) -> dict:
         """
-        Run one full KG → PAD → KG loop iteration and print a readable trace.
+        Run one full KG → PAD → KG loop and print a readable trace.
 
-        Returns the pad_result dict (keys: system_prompt, gesture_params,
-        pad_state, descriptors).
+        user_message: if provided AND self.llm is connected, calls the LLM with
+        the PAD-generated system_prompt and prints the verbal response.  This
+        makes the per-person PAD differences audible, not just numeric.
         """
         self.turn_n += 1
 
-        # 1. Read KG state → derive tier, blend valence, fetch slow-edge memory
+        # 1. KG → bridge input (tier, blended v/a, slow-edge memory)
         bi = self.bridge.pre_turn(person_id, robot_id, emotion)
 
-        # 2. PAD update — tier drives D-axis; V/A come from camera_emotion via bridge
+        # 2. PAD update — tier drives D-axis; V/A from camera_emotion via bridge
         pad_result = self._adapter(robot_id).process_turn(
             valence=bi.valence,
             arousal=bi.arousal,
@@ -337,14 +381,14 @@ class Harness:
             memory_context=bi.structured_memory,
         )
 
-        # 3. Write PAD output back to KG (mood, attention, interaction_count)
+        # 3. Write back mood, attention, interaction_count
         self.bridge.post_turn(person_id, robot_id, pad_result)
 
-        # 4. Read updated edges AFTER post_turn so interaction_count reflects this turn
+        # 4. Read updated relationship edges AFTER post_turn
         rel = _relationship_snapshot(self.store, person_id, robot_id)
 
-        # 5. Print trace
-        p, a, d = pad_result["pad_state"]
+        # 5. Print PAD trace
+        p, a, d  = pad_result["pad_state"]
         desc     = pad_result["descriptors"]
         mem_str  = bi.structured_memory or ""
         tc       = _TIER_COLOUR.get(bi.tier, "")
@@ -354,8 +398,8 @@ class Harness:
             f"person={person_id:<10s} robot={robot_id:<8s} emotion={emotion}"
         )
         print(
-            f"         → tier={tc}{bi.tier:<8s}{_RST} "
-            f" v={bi.valence:+.2f}  a={bi.arousal:+.2f}"
+            f"         → tier={tc}{bi.tier:<8s}{_RST}"
+            f"  v={bi.valence:+.2f}  a={bi.arousal:+.2f}"
         )
         print(
             f"         → PAD  P={p:+.3f}  A={a:+.3f}  D={d:+.3f}"
@@ -368,15 +412,19 @@ class Harness:
             f"  interaction_count={rel['interaction_count']}"
         )
 
+        # 6. Verbal response — only when a message was provided and LLM is live
+        if user_message is not None and self.llm is not None and self.llm.available:
+            display = _ROBOT_DISPLAY.get(robot_id, robot_id.title())
+            verbal  = self.llm.respond(pad_result["system_prompt"], user_message)
+            print(f"         {_DIM}[child]   {user_message!r}{_RST}")
+            print(f"         {_BOLD}[{display}]{_RST}  {_GREEN}{verbal}{_RST}")
+
         return pad_result
 
     # ── Summary view ──────────────────────────────────────────────────────────
 
     def show_people(self) -> None:
-        persons = [n for n in store._nodes.values() if n.node_type == "person"
-                   ] if False else [
-            n for n in self.store._nodes.values() if n.node_type == "person"
-        ]
+        persons = [n for n in self.store._nodes.values() if n.node_type == "person"]
         if not persons:
             print("  (no people in store yet)")
             return
@@ -397,50 +445,74 @@ class Harness:
     # ── Export ────────────────────────────────────────────────────────────────
 
     def export(self, out_dir: str = ".") -> None:
-        html_path = os.path.join(out_dir, "graph_snapshot.html")
         print("Exporting graph …")
-        export_graph_html(self.store, html_path)
+        export_graph_html(self.store, os.path.join(out_dir, "graph_snapshot.html"))
         if self.obsidian:
-            vault_path = os.path.join(out_dir, "vault")
-            export_obsidian_vault(self.store, vault_path)
+            export_obsidian_vault(self.store, os.path.join(out_dir, "vault"))
+
+
+# ── System-prompt excerpt helper ──────────────────────────────────────────────
+
+def _sysprompt_key_lines(system_prompt: str) -> tuple[str, str]:
+    """Extract the mood line and relationship-note line from a PAD system prompt."""
+    mood_line = ""
+    rel_line  = ""
+    for line in system_prompt.splitlines():
+        stripped = line.strip()
+        if "Right now respond in a" in stripped:
+            mood_line = stripped
+        elif any(k in stripped for k in (
+            "You know this person", "This person is a new face",
+            "You are meeting this person", "like family",
+        )):
+            rel_line = stripped
+    return mood_line, rel_line
 
 
 # ── Scripted proof sequence ───────────────────────────────────────────────────
 
 _DIVIDER = "─" * 72
 
-def run_scripted(robot_id: str = "chatbox", obsidian: bool = False) -> None:
+
+def run_scripted(
+    robot_id: str = "chatbox",
+    obsidian: bool = False,
+    llm: Optional[LLMClient] = None,
+    scenario: str = _DEFAULT_SCENARIO,
+) -> None:
     """
     Fixed proof sequence — no typing required.
 
-    Demonstrates three properties:
-      1. Same person over many turns: interaction_count climbs, tier escalates,
-         D-axis shifts.
-      2. Two people, same emotion, different tiers → divergent PAD / descriptors.
-      3. Brand-new person mid-run cold-starts at tier=unknown without crashing.
+    With --llm, also sends the same `scenario` sentence to the LLM for
+    alice (close), bob (visitor), and casey (unknown) back-to-back so you
+    can SEE the verbal divergence, not just the PAD numbers.
     """
-    h = Harness(robot_id=robot_id, obsidian=obsidian)
+    h = Harness(robot_id=robot_id, obsidian=obsidian, llm=llm)
+
+    llm_on = llm is not None and llm.available
+    display = _ROBOT_DISPLAY.get(robot_id, robot_id.title())
 
     print("=" * 72)
     print("  SCRIPTED DEMO — KG × PAD per-person adaptation")
-    print(f"  robot: {robot_id}")
+    print(f"  robot: {robot_id}" + (f"   |   LLM: {llm.model}" if llm_on else "   |   LLM: off"))
+    if llm_on:
+        print(f"  scenario: {scenario!r}")
     print("=" * 72)
 
     # ── PROOF 1: same person across many turns ────────────────────────────────
     print()
     print(_DIVIDER)
     print("PROOF 1 — alice × 6 turns (happy): tier escalation, D-axis shift")
-    print("  expect: unknown (turn 1) → visitor (turns 2–6, count 1→5 at pre_turn)")
-    print("  After 6 turns: count=6 in store; next pre_turn will see 'known'.")
+    print("  Warm-up turns — LLM skipped to keep output concise.")
     print(_DIVIDER)
     print()
     for _ in range(6):
-        h.run_turn("alice", robot_id, "happy")
+        h.run_turn("alice", robot_id, "happy")   # no LLM on warm-up turns
         print()
 
-    # ── bob: 2 turns — builds visitor tier ───────────────────────────────────
+    # ── bob: 2 turns ─────────────────────────────────────────────────────────
     print(_DIVIDER)
-    print("PROOF 2 setup — bob × 2 turns (neutral): builds to visitor tier")
+    print("PROOF 2 setup — bob × 2 turns (neutral): builds visitor tier")
     print(_DIVIDER)
     print()
     for _ in range(2):
@@ -450,33 +522,56 @@ def run_scripted(robot_id: str = "chatbox", obsidian: bool = False) -> None:
     # ── Boost alice to 'close' ────────────────────────────────────────────────
     print(_DIVIDER)
     print("BOOST alice — rapport=0.75  trust=0.75  (score=0.75 > 0.70 → 'close')")
-    print("Combined with count=6 > 5, alice is now comfortably 'close'.")
     print(_DIVIDER)
     print()
     seed_relationship(h.store, "alice", robot_id, rapport=0.75, trust=0.75)
     print()
 
-    # ── PROOF 2: side-by-side divergence ─────────────────────────────────────
+    # ── PROOF 2: PAD divergence ───────────────────────────────────────────────
     print(_DIVIDER)
-    print("PROOF 2 — alice (close) vs bob (visitor) — same emotion: happy")
-    print("  Watch D-axis and 'dominance' descriptor diverge.")
+    print("PROOF 2 — alice (close) vs bob (visitor) vs casey (unknown)")
+    print("  Same emotion: happy" + (f"   |   Same scenario: {scenario!r}" if llm_on else ""))
+    print("  Watch D-axis diverge. With --llm: watch verbal responses diverge.")
     print(_DIVIDER)
     print()
+
     print("[alice — close tier]")
-    h.run_turn("alice", robot_id, "happy")
+    alice_result = h.run_turn("alice", robot_id, "happy",
+                               user_message=scenario if llm_on else None)
     print()
+
     print("[bob — visitor tier]")
-    h.run_turn("bob", robot_id, "happy")
+    bob_result   = h.run_turn("bob",   robot_id, "happy",
+                               user_message=scenario if llm_on else None)
     print()
 
     # ── PROOF 3: cold-start ───────────────────────────────────────────────────
     print(_DIVIDER)
     print("PROOF 3 — casey cold-start (never seen before)")
-    print("  expect: tier=unknown, mem='', no crash")
     print(_DIVIDER)
     print()
-    h.run_turn("casey", robot_id, "happy")
+    casey_result = h.run_turn("casey", robot_id, "happy",
+                               user_message=scenario if llm_on else None)
     print()
+
+    # ── Verbal diff summary (only when LLM ran) ───────────────────────────────
+    if llm_on:
+        print(_DIVIDER)
+        print(f"VERBAL DIFF SUMMARY — same scenario: {scenario!r}")
+        print(f"Shows HOW the PAD system_prompt encodes tier → different {display} voice")
+        print(_DIVIDER)
+        for label, result in [
+            ("alice (close)",   alice_result),
+            ("bob   (visitor)", bob_result),
+            ("casey (unknown)", casey_result),
+        ]:
+            mood_line, rel_line = _sysprompt_key_lines(result["system_prompt"])
+            desc = result["descriptors"]
+            print(f"\n  {_BOLD}{label}{_RST}")
+            print(f"    PAD mood  : {desc['pleasure']}/{desc['arousal']}/{desc['dominance']}")
+            print(f"    sys mood  : {_DIM}{mood_line}{_RST}")
+            print(f"    sys tier  : {_DIM}{rel_line}{_RST}")
+        print()
 
     # ── Summary ───────────────────────────────────────────────────────────────
     print(_DIVIDER)
@@ -485,7 +580,6 @@ def run_scripted(robot_id: str = "chatbox", obsidian: bool = False) -> None:
     h.show_people()
     print()
 
-    # ── Graph export ──────────────────────────────────────────────────────────
     print(_DIVIDER)
     h.export(".")
     print()
@@ -500,24 +594,41 @@ def run_scripted(robot_id: str = "chatbox", obsidian: bool = False) -> None:
 _HELP = """\
 Commands
 ────────
-  <person> <emotion>          run one turn   e.g.  alice happy
-  boost <person> [r] [t]      TEST AID: seed rapport/trust  e.g.  boost alice 0.75 0.75
-  robot <chatbox|ellebot>     switch active robot
-  who                         list all known people and their tiers
-  graph                       export graph snapshot right now
-  help                        show this message
-  q / quit                    exit (exports graph before quitting)
+  <person> <emotion>              run one turn (PAD only)       e.g.  alice happy
+  <person> <emotion> <message…>   run + LLM verbal response     e.g.  alice happy Hi can we play?
+  boost <person> [r] [t]          TEST AID: seed rapport/trust  e.g.  boost alice 0.75 0.75
+  robot <chatbox|ellebot>         switch active robot
+  who                             list all known people and their tiers
+  graph                           export graph snapshot right now
+  help                            show this message
+  q / quit                        exit (exports graph)
 
 Emotions:  happy  sad  neutral  angry  calm  fear  disgust  surprise
+
+LLM note:
+  Pass --llm when launching to enable verbal responses.
+  Include a message after the emotion to trigger the LLM for that turn,
+  e.g.   alice happy What should we do today?
+  Or use --scenario TEXT to set a default message used for every turn.
 """
 
 
-def run_interactive(robot_id: str = "chatbox", obsidian: bool = False) -> None:
-    h = Harness(robot_id=robot_id, obsidian=obsidian)
+def run_interactive(
+    robot_id: str = "chatbox",
+    obsidian: bool = False,
+    llm: Optional[LLMClient] = None,
+    scenario: Optional[str] = None,
+) -> None:
+    h       = Harness(robot_id=robot_id, obsidian=obsidian, llm=llm)
+    llm_on  = llm is not None and llm.available
 
     print("=" * 72)
     print("  KG × PAD Integration Harness  —  interactive mode")
-    print(f"  robot: {robot_id}   |   type 'help' for commands")
+    print(f"  robot: {robot_id}"
+          + (f"   |   LLM: {llm.model}" if llm_on else "   |   LLM: off (use --llm)"))
+    if llm_on and scenario:
+        print(f"  default scenario: {scenario!r}  (overridable per turn)")
+    print("  type 'help' for commands")
     print("=" * 72)
     print()
 
@@ -577,19 +688,31 @@ def run_interactive(robot_id: str = "chatbox", obsidian: bool = False) -> None:
             print()
             continue
 
-        # Two-token: <person> <emotion>
-        if len(parts) == 2:
-            person_id, emotion = parts[0], parts[1].lower()
+        # ── <person> <emotion> [message…] ─────────────────────────────────────
+        if len(parts) >= 2:
+            person_id = parts[0]
+            emotion   = parts[1].lower()
+
             if emotion not in VALID_EMOTIONS:
                 print(f"  Unknown emotion '{emotion}'.")
                 print(f"  Valid: {', '.join(sorted(VALID_EMOTIONS))}")
                 print()
                 continue
-            h.run_turn(person_id, h.robot_id, emotion)
+
+            # Message: inline tokens ≥3, else --scenario default, else None
+            if len(parts) >= 3:
+                user_message = " ".join(parts[2:])
+            elif scenario:
+                user_message = scenario
+            else:
+                user_message = None
+
+            h.run_turn(person_id, h.robot_id, emotion,
+                       user_message=user_message if llm_on else None)
             print()
             continue
 
-        # One token: just a person name → prompt for emotion
+        # ── single token: just a person name → prompt for rest ────────────────
         if len(parts) == 1 and cmd not in VALID_ROBOTS:
             person_id = parts[0]
             try:
@@ -602,7 +725,20 @@ def run_interactive(robot_id: str = "chatbox", obsidian: bool = False) -> None:
                 print(f"  Valid: {', '.join(sorted(VALID_EMOTIONS))}")
                 print()
                 continue
-            h.run_turn(person_id, h.robot_id, emotion)
+
+            user_message = None
+            if llm_on:
+                if scenario:
+                    user_message = scenario
+                else:
+                    try:
+                        typed = input("  child says: ").strip()
+                        user_message = typed if typed else None
+                    except (EOFError, KeyboardInterrupt):
+                        print()
+                        break
+
+            h.run_turn(person_id, h.robot_id, emotion, user_message=user_message)
             print()
             continue
 
@@ -621,29 +757,41 @@ def main(argv: Optional[list[str]] = None) -> None:
         description="KG × PAD integration harness — proves per-person KG adaptation",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    ap.add_argument(
-        "--scripted",
-        action="store_true",
-        help="Run the fixed proof sequence (alice×6, bob×2, boost, casey) then exit",
-    )
-    ap.add_argument(
-        "--robot",
-        choices=sorted(VALID_ROBOTS),
-        default="chatbox",
-        metavar="ROBOT",
-        help="Robot persona to use: chatbox (default) or ellebot",
-    )
-    ap.add_argument(
-        "--obsidian",
-        action="store_true",
-        help="Also write an Obsidian-compatible markdown vault to ./vault/",
-    )
+    ap.add_argument("--scripted", action="store_true",
+                    help="Run the fixed proof sequence then exit")
+    ap.add_argument("--robot", choices=sorted(VALID_ROBOTS), default="chatbox",
+                    metavar="ROBOT",
+                    help="Robot persona: chatbox (default) or ellebot")
+    ap.add_argument("--obsidian", action="store_true",
+                    help="Also write an Obsidian markdown vault to ./vault/")
+    ap.add_argument("--llm", action="store_true",
+                    help="Enable verbal LLM responses via Ollama")
+    ap.add_argument("--model", default="qwen2.5:7b", metavar="MODEL",
+                    help="Ollama model name (default: qwen2.5:7b)")
+    ap.add_argument("--scenario", default=None, metavar="TEXT",
+                    help=(f"Fixed child message for every LLM turn "
+                          f"(default: {_DEFAULT_SCENARIO!r})"))
     args = ap.parse_args(argv)
 
+    # ── LLM setup ─────────────────────────────────────────────────────────────
+    llm: Optional[LLMClient] = None
+    if args.llm:
+        if not _OPENAI_AVAILABLE:
+            print("ERROR: openai package not installed — pip install openai")
+            sys.exit(1)
+        llm = LLMClient(model=args.model)
+        if not llm.connect():
+            print("  Continuing without LLM (pass --no-llm to suppress this).")
+            llm = None   # graceful degradation
+
+    scenario = args.scenario or (_DEFAULT_SCENARIO if args.llm else None)
+
     if args.scripted:
-        run_scripted(robot_id=args.robot, obsidian=args.obsidian)
+        run_scripted(robot_id=args.robot, obsidian=args.obsidian,
+                     llm=llm, scenario=scenario or _DEFAULT_SCENARIO)
     else:
-        run_interactive(robot_id=args.robot, obsidian=args.obsidian)
+        run_interactive(robot_id=args.robot, obsidian=args.obsidian,
+                        llm=llm, scenario=scenario)
 
 
 if __name__ == "__main__":

@@ -84,13 +84,13 @@ class EmotionTracker:
 class EmotionProcessor:
     """Main emotion processing class"""
     
-    def __init__(self, model_path=None, config=None):
+    def __init__(self, model_path=None, config=None, device=None):
         # Configuration
         if model_path is None:
             model_path = os.path.join("models", "efficientnet_HQRAF_improved_withCon.pth")
         self.model_path = model_path
         self.config = config or {}
-        
+
         # Processing configuration
         self.emotion_processing_interval = self.config.get('emotion_processing_interval', 0.1)
         self.frame_skip_ratio = self.config.get('frame_skip_ratio', 1)
@@ -98,9 +98,13 @@ class EmotionProcessor:
         self.emotion_change_threshold = self.config.get('emotion_change_threshold', 15.0)
         self.emotion_update_threshold = self.config.get('emotion_update_threshold', 0.05)
         self.emotion_window_size = self.config.get('emotion_window_size', 5)
-        
-        # Model components
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        # Model components — explicit device wins; auto-detect falls back to cpu when cuda
+        # is technically "available" but incompatible (e.g. RTX 5060 with torch < 2.10).
+        if device is not None:
+            self.device = torch.device(device)
+        else:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.input_size = 224
         self.emotion_labels = ['angry', 'disgust', 'fear', 'happy', 'neutral', 'sad', 'surprise']
         self.cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
@@ -152,7 +156,6 @@ class EmotionProcessor:
     def initialize_transform(self):
         """Initialize transform separately with error handling"""
         try:
-            print("Initializing image transform...")
             self.transform = transforms.Compose([
                 transforms.Resize((self.input_size, self.input_size)),
                 transforms.ToTensor(),
@@ -160,47 +163,34 @@ class EmotionProcessor:
                                    std=[0.229, 0.224, 0.225])
             ])
             self.transform_loaded = True
-            print("Transform initialized successfully")
             return True
         except Exception as e:
-            print(f"Error initializing transform: {e}")
+            print(f"[EmotionProcessor] transform error: {e}")
             self.transform_loaded = False
             return False
-    
+
     def load_emotion_model(self):
         """Load the emotion detection model with better error handling"""
         try:
             if not os.path.exists(self.model_path):
-                print(f"Model file not found at: {self.model_path}")
-                print("Please ensure the model file is in the correct location")
+                print(f"[EmotionProcessor] model not found: {self.model_path}")
                 return False
 
-            print(f"Loading EfficientNet B0 model from {self.model_path}...")
-
-            # Load EfficientNet B0 model
             self.model = self.get_model().to(self.device)
-            
-            # Load the checkpoint
             checkpoint = torch.load(self.model_path, map_location=self.device)
-            
-            # Handle different checkpoint formats
+
             if isinstance(checkpoint, dict):
                 if 'model_state_dict' in checkpoint:
                     self.model.load_state_dict(checkpoint['model_state_dict'])
-                    print("Loaded model from 'model_state_dict' key")
                 elif 'state_dict' in checkpoint:
                     self.model.load_state_dict(checkpoint['state_dict'])
-                    print("Loaded model from 'state_dict' key")
                 else:
                     self.model.load_state_dict(checkpoint)
-                    print("Loaded model state dict directly")
             else:
                 self.model.load_state_dict(checkpoint)
-                print("Loaded model state dict directly")
-            
+
             self.model.eval()
             self.model_loaded = True
-            print(f"EfficientNet B0 model loaded successfully on {self.device}")
 
             if not self.initialize_transform():
                 return False
@@ -208,53 +198,43 @@ class EmotionProcessor:
             return True
 
         except Exception as e:
-            print(f"Error loading model: {e}")
+            print(f"[EmotionProcessor] model load error: {e}")
             self.model_loaded = False
             return False
-    
+
     def load_face_detection(self):
         """Load face detection model with better error handling"""
         try:
-            print(f"Loading face cascade from: {self.cascade_path}")
-
             if not os.path.exists(self.cascade_path):
-                print(f"Face cascade file not found at: {self.cascade_path}")
+                print(f"[EmotionProcessor] cascade not found: {self.cascade_path}")
                 return False
 
             self.face_cascade = cv2.CascadeClassifier(self.cascade_path)
             if self.face_cascade.empty():
-                print(f"Error: Could not load face cascade from {self.cascade_path}")
+                print(f"[EmotionProcessor] cascade empty: {self.cascade_path}")
                 self.face_cascade_loaded = False
                 return False
 
             self.face_cascade_loaded = True
-            print("Face detection model loaded successfully")
             return True
 
         except Exception as e:
-            print(f"Error loading face cascade: {e}")
+            print(f"[EmotionProcessor] cascade error: {e}")
             self.face_cascade_loaded = False
             return False
     
     def initialize(self):
         """Initialize all emotion processing components"""
         success_count = 0
-        
-        print("Loading emotion detection model...")
-        if self.load_emotion_model():
+        model_ok = self.load_emotion_model()
+        if model_ok:
             success_count += 1
-            print("    Model and transform loaded successfully")
-        else:
-            print("    Model loading failed")
-
-        print("Loading face detection...")
-        if self.load_face_detection():
+        cascade_ok = self.load_face_detection()
+        if cascade_ok:
             success_count += 1
-            print("    Face detection loaded successfully")
-        else:
-            print("    Face detection loading failed")
-            
-        return success_count, 2  # Return (success_count, total_count)
+        status = "OK" if success_count == 2 else f"partial ({success_count}/2)"
+        print(f"[EmotionProcessor] {status} (device={self.device})")
+        return success_count, 2
     
     def decode_frame_optimized(self, frame_b64):
         """Decode base64 frame with size limits"""
@@ -349,7 +329,7 @@ class EmotionProcessor:
                         self.last_emotion_update = time.time()
 
                         distribution = self.emotion_tracker.get_emotion_distribution()
-                        print(f"Emotion: {stable_emotion} ({stable_confidence:.1f}%) | Raw: {emotion} ({confidence:.1f}%)")
+                        # Suppressed: print(f"Emotion: {stable_emotion} ({stable_confidence:.1f}%) | Raw: {emotion} ({confidence:.1f}%)")
 
                 # ✅ NEW: Add face overlay and store processed frame
                 processed_frame = self.add_face_overlay(processed_frame)

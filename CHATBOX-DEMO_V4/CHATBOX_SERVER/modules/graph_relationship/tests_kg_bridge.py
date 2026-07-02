@@ -27,9 +27,11 @@ from .schema import (
     MoodEdge,
 )
 from .store import InMemoryGraphStore
+from .events import count_person_sessions, count_person_turns
 from .kg_bridge import (
     BridgeInput,
     KGBridge,
+    _tier_from_edges,
     derive_tier,
     emotion_label_to_va,
     format_slow_edges,
@@ -56,7 +58,7 @@ def _make_store_with_robot_and_person(robot_id: str = "chatbox"):
 
 
 # ---------------------------------------------------------------------------
-# derive_tier — threshold boundaries
+# _tier_from_edges — threshold boundary tests (pure logic, no store needed)
 # ---------------------------------------------------------------------------
 
 def test_derive_tier_close():
@@ -64,7 +66,7 @@ def test_derive_tier_close():
         RapportEdge(source_id="r", target_id="p", provenance=_prov(), weight=0.8),
         TrustEdge(source_id="r", target_id="p", provenance=_prov(), weight=0.75),
     ]
-    assert derive_tier(edges) == "close"
+    assert _tier_from_edges(edges) == "close"
 
 
 def test_derive_tier_close_boundary():
@@ -73,7 +75,7 @@ def test_derive_tier_close_boundary():
         RapportEdge(source_id="r", target_id="p", provenance=_prov(), weight=0.71),
         TrustEdge(source_id="r", target_id="p", provenance=_prov(), weight=0.71),
     ]
-    assert derive_tier(edges) == "close"
+    assert _tier_from_edges(edges) == "close"
 
 
 def test_derive_tier_known_via_score():
@@ -82,7 +84,7 @@ def test_derive_tier_known_via_score():
         RapportEdge(source_id="r", target_id="p", provenance=_prov(), weight=0.5),
         TrustEdge(source_id="r", target_id="p", provenance=_prov(), weight=0.42),
     ]
-    assert derive_tier(edges) == "known"
+    assert _tier_from_edges(edges) == "known"
 
 
 def test_derive_tier_known_via_count():
@@ -90,7 +92,7 @@ def test_derive_tier_known_via_count():
     edges = [
         InteractionCountEdge(source_id="r", target_id="p", provenance=_prov(), count=6),
     ]
-    assert derive_tier(edges) == "known"
+    assert _tier_from_edges(edges) == "known"
 
 
 def test_derive_tier_visitor():
@@ -98,33 +100,59 @@ def test_derive_tier_visitor():
     edges = [
         InteractionCountEdge(source_id="r", target_id="p", provenance=_prov(), count=3),
     ]
-    assert derive_tier(edges) == "visitor"
+    assert _tier_from_edges(edges) == "visitor"
 
 
 def test_derive_tier_unknown():
-    assert derive_tier([]) == "unknown"
+    assert _tier_from_edges([]) == "unknown"
     # score exactly 0.45 does NOT reach "known" (requires strictly >)
     edges = [
         RapportEdge(source_id="r", target_id="p", provenance=_prov(), weight=0.45),
         TrustEdge(source_id="r", target_id="p", provenance=_prov(), weight=0.45),
     ]
-    assert derive_tier(edges) == "unknown"
+    assert _tier_from_edges(edges) == "unknown"
+
+
+def test_derive_tier_store_based():
+    """derive_tier(person_id, robot_id, store) reads the correct edge directions."""
+    store, robot, person = _make_store_with_robot_and_person()
+    # Empty store → unknown
+    assert derive_tier(person.id, robot.id, store) == "unknown"
+    # Add rapport + trust (person → robot direction)
+    store.upsert_edge(RapportEdge(
+        source_id=person.id, target_id=robot.id, provenance=_prov(), weight=0.8))
+    store.upsert_edge(TrustEdge(
+        source_id=person.id, target_id=robot.id, provenance=_prov(), weight=0.75))
+    assert derive_tier(person.id, robot.id, store) == "close"
+    # Add count (robot → person direction)
+    store.upsert_edge(InteractionCountEdge(
+        source_id=robot.id, target_id=person.id, provenance=_prov(), count=3))
+    assert derive_tier(person.id, robot.id, store) == "close"  # score still wins
 
 
 # ---------------------------------------------------------------------------
-# post_turn — exactly three upserts, correct types, correct provenance
+# post_turn — mood + attention self-edges, interaction rerouted to an Event
 # ---------------------------------------------------------------------------
 
-def test_post_turn_exactly_three_upserts():
+def test_post_turn_writes_mood_attention_and_session_event():
     store, robot, person = _make_store_with_robot_and_person()
     bridge = KGBridge(store)
 
     bridge.post_turn(person.id, "chatbox", {"pad_state": (0.5, 0.3, 0.2)})
 
+    # interaction is rerouted to a session Event; person context now holds
+    # exactly the two self-attribute edges.
     ctx = store.get_person_context(person.id)
     all_edges = ctx.person_attribute_edges + ctx.relationship_edges
-    assert len(all_edges) == 3
-    assert {e.edge_type for e in all_edges} == {"mood", "attention", "interaction_count"}
+    assert {e.edge_type for e in all_edges} == {"mood", "attention"}
+
+    # Exactly one session Event was created (linking person + robot), holding
+    # this one turn.
+    events = [n for n in store._nodes.values() if n.node_type == "event"]
+    assert len(events) == 1
+    assert count_person_sessions(store, person.id) == 1
+    assert count_person_turns(store, person.id) == 1
+    assert events[0].turn_count == 1
 
 
 def test_post_turn_provenance_source_is_robot_id():
@@ -141,7 +169,7 @@ def test_post_turn_provenance_source_is_robot_id():
         )
 
 
-def test_interaction_count_increments():
+def test_interaction_count_reroutes_through_session_event():
     store, robot, person = _make_store_with_robot_and_person()
     bridge = KGBridge(store)
 
@@ -149,9 +177,26 @@ def test_interaction_count_increments():
     bridge.post_turn(person.id, "chatbox", {"pad_state": (0.4, 0.2, 0.0)})
     bridge.post_turn(person.id, "chatbox", {"pad_state": (0.5, 0.3, 0.0)})
 
+    # Same bridge = one meetup: 3 turns accumulate on ONE session Event, and
+    # there is NO direct interaction_count edge.
+    assert count_person_sessions(store, person.id) == 1
+    assert count_person_turns(store, person.id) == 3
     ctx = store.get_person_context(person.id)
-    count_edge = next(e for e in ctx.relationship_edges if e.edge_type == "interaction_count")
-    assert count_edge.count == 3  # accumulated, not overwritten
+    assert all(e.edge_type != "interaction_count" for e in ctx.relationship_edges)
+
+    # Tier reflects the turn-derived count: 3 turns, no rapport/trust => visitor.
+    assert derive_tier(person.id, robot.id, store) == "visitor"
+
+
+def test_new_bridge_starts_new_session():
+    """A fresh bridge (a new meetup) appends to a NEW session Event."""
+    store, robot, person = _make_store_with_robot_and_person()
+
+    KGBridge(store).post_turn(person.id, "chatbox", {"pad_state": (0.3, 0.1, 0.0)})
+    KGBridge(store).post_turn(person.id, "chatbox", {"pad_state": (0.4, 0.2, 0.0)})
+
+    assert count_person_sessions(store, person.id) == 2   # two meetups
+    assert count_person_turns(store, person.id) == 2       # one turn each
 
 
 # ---------------------------------------------------------------------------
@@ -249,8 +294,9 @@ def test_B_post_turn_never_writes_dominance():
     for edge in all_edges:
         assert edge.edge_type != "dominance", "D must never be written to the graph"
 
-    # Verify it's exactly the three expected types and nothing extra
-    assert {e.edge_type for e in all_edges} == {"mood", "attention", "interaction_count"}
+    # Verify it's exactly the two self-attribute types and nothing extra
+    # (interaction is rerouted to an Event node, not a person-context edge).
+    assert {e.edge_type for e in all_edges} == {"mood", "attention"}
 
 
 # ---------------------------------------------------------------------------
@@ -284,8 +330,8 @@ def test_C_pre_turn_unknown_person_id_does_not_crash():
     assert abs(inp.arousal - a) < 1e-9
 
 
-def test_C_post_turn_creates_person_node_and_three_edges():
-    """post_turn on a brand-new person_id must create the person node and write edges."""
+def test_C_post_turn_creates_person_node_and_event():
+    """post_turn on a brand-new person_id must create the person node + an event."""
     store = InMemoryGraphStore()
     bridge = KGBridge(store)
 
@@ -297,11 +343,12 @@ def test_C_post_turn_creates_person_node_and_three_edges():
     # Person node must now exist
     assert store.get_node(new_person_id) is not None
 
-    # Exactly three edges must have been written
+    # mood + attention self-edges, and the interaction rerouted to one session
     ctx = store.get_person_context(new_person_id)
     all_edges = ctx.person_attribute_edges + ctx.relationship_edges
-    assert len(all_edges) == 3
-    assert {e.edge_type for e in all_edges} == {"mood", "attention", "interaction_count"}
+    assert {e.edge_type for e in all_edges} == {"mood", "attention"}
+    assert count_person_sessions(store, new_person_id) == 1
+    assert count_person_turns(store, new_person_id) == 1
 
 
 def test_C_post_turn_none_person_id_is_silent_noop():

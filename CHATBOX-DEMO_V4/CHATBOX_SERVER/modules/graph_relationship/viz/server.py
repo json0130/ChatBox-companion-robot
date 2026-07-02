@@ -50,6 +50,8 @@ _TIMESCALE_BY_EDGE_TYPE = {
     "trust": "RELATIONSHIP",
     "disclosure_depth": "RELATIONSHIP",
     "interaction_count": "RELATIONSHIP",
+    # Event participation links person+robot through a turn (rerouted interaction).
+    "participated_in": "RELATIONSHIP",
     # Authored identity edges (seed.py) — SLOW, cross-session.
     "has_persona": "SLOW",
     "has_role": "SLOW",
@@ -92,7 +94,11 @@ def _edge_weight(edge: dict) -> float:
 
 
 def transform(raw: dict) -> dict:
-    """Turn the raw kg_state.json dict into {nodes:[...], edges:[...]} for the UI."""
+    """Turn the raw kg_state.json dict into {nodes:[...], edges:[...]} for the UI.
+
+    Event (session) nodes carry their `turns` transcript and `turn_count`, and
+    their label shows the turn count so the click panel can render the session.
+    """
     node_ids = set()
     nodes = []
     for n in raw.get("nodes", []):
@@ -100,11 +106,18 @@ def transform(raw: dict) -> dict:
         if not nid:
             continue
         node_ids.add(nid)
-        nodes.append({
+        node_type = n.get("node_type")
+        obj = {
             "id": nid,
-            "type": _NODE_TYPE_DISPLAY.get(n.get("node_type"), "Topic"),
+            "type": _NODE_TYPE_DISPLAY.get(node_type, "Topic"),
             "label": _node_label(n),
-        })
+        }
+        if node_type == "event":
+            turns = n.get("turns", []) or []
+            obj["turns"] = turns
+            obj["turn_count"] = n.get("turn_count", len(turns))
+            obj["label"] = f"{obj['label']} ({obj['turn_count']} turns)"
+        nodes.append(obj)
 
     edges = []
     for e in raw.get("edges", []):
@@ -124,50 +137,60 @@ def transform(raw: dict) -> dict:
     return {"nodes": nodes, "edges": edges}
 
 
-def conversation_path(kg_path: str) -> str:
-    """Derive the transcript sidecar path from the KG path (mirrors the writer).
+def build_history(raw: dict) -> dict:
+    """Per-person transcript aggregated from session Event nodes: reconstructed
+    purely from the graph JSON (no separate transcript file), so kg_state.json
+    stays the single source of truth.
 
-    kg_state.json -> kg_state_conversations.json  (same directory).
+    Returns { person_id: [ {turn, ts, emotion, child, reply, session}, ... ] }.
     """
-    base, ext = os.path.splitext(kg_path)
-    return f"{base}_conversations{ext or '.json'}"
+    nodes = {n["id"]: n for n in raw.get("nodes", []) if n.get("id")}
+    history: dict = {}
+    for e in raw.get("edges", []):
+        if e.get("edge_type") != "participated_in":
+            continue
+        participant = nodes.get(e.get("source_id"))
+        event = nodes.get(e.get("target_id"))
+        if not participant or not event or event.get("node_type") != "event":
+            continue
+        if participant.get("node_type") != "person":
+            continue  # attribute each session to the person, not the robot
+        pid = participant["id"]
+        session = event.get("label", "session")
+        started = event.get("timestamp", "")
+        for t in event.get("turns", []) or []:
+            history.setdefault(pid, []).append({**t, "session": session, "_started": started})
+    # Chronological: by session start, then turn index.
+    for pid, turns in history.items():
+        turns.sort(key=lambda t: (t.get("_started", ""), t.get("turn", 0)))
+        for t in turns:
+            t.pop("_started", None)
+    return history
 
 
 class GraphState:
-    """Reads kg_state.json (+ transcript sidecar) on demand, caching last good."""
+    """Reads kg_state.json on demand, caching the last good parse. History is
+    derived from the same file (session Event nodes)."""
 
-    def __init__(self, kg_path: str, conv_path: str):
+    def __init__(self, kg_path: str):
         self.kg_path = kg_path
-        self.conv_path = conv_path
-        self._last_good = {"nodes": [], "edges": []}
-        self._last_good_history: dict = {}
+        self._last_good_raw: dict = {"nodes": [], "edges": []}
 
-    def read(self) -> dict:
+    def _raw(self) -> dict:
         try:
             with open(self.kg_path, "r", encoding="utf-8") as fh:
                 raw = json.load(fh)
-            graph = transform(raw)
-            self._last_good = graph
-            return graph
+            self._last_good_raw = raw
+            return raw
         except (FileNotFoundError, json.JSONDecodeError, ValueError, OSError):
-            # Missing or mid-write (partial JSON): serve the last good graph.
-            return self._last_good
+            # Missing or mid-write (partial JSON): use the last good parse.
+            return self._last_good_raw
+
+    def read(self) -> dict:
+        return transform(self._raw())
 
     def read_history(self) -> dict:
-        """Per-person transcript { person_id: [ {turn, ts, child, reply, ...} ] }.
-
-        Optional: absent sidecar just yields an empty history (panel shows
-        nothing), so a copied graph_relationship/ that only writes kg_state.json
-        still works.
-        """
-        try:
-            with open(self.conv_path, "r", encoding="utf-8") as fh:
-                hist = json.load(fh)
-            if isinstance(hist, dict):
-                self._last_good_history = hist
-            return self._last_good_history
-        except (FileNotFoundError, json.JSONDecodeError, ValueError, OSError):
-            return self._last_good_history
+        return build_history(self._raw())
 
 
 def make_handler(state: GraphState):
@@ -209,22 +232,16 @@ def main():
     ap.add_argument("--kg-path", default="kg_state.json",
                     help="Path to kg_state.json written by InMemoryGraphStore.save "
                          "(default: kg_state.json in the current directory)")
-    ap.add_argument("--conv-path", default=None,
-                    help="Path to the conversation transcript sidecar "
-                         "(default: derived from --kg-path, e.g. "
-                         "kg_state_conversations.json)")
     ap.add_argument("--port", type=int, default=8765, help="HTTP port (default 8765)")
     ap.add_argument("--host", default="127.0.0.1", help="Bind host (default 127.0.0.1)")
     args = ap.parse_args()
 
     kg_path = os.path.abspath(args.kg_path)
-    conv_path = os.path.abspath(args.conv_path) if args.conv_path else conversation_path(kg_path)
-    state = GraphState(kg_path, conv_path)
+    state = GraphState(kg_path)
     server = ThreadingHTTPServer((args.host, args.port), make_handler(state))
 
     print(f"[viz] serving KG visualizer at  http://{args.host}:{args.port}/")
     print(f"[viz] polling KG file:          {state.kg_path}")
-    print(f"[viz] polling transcript file:  {state.conv_path}")
     if not os.path.exists(state.kg_path):
         print("[viz] (file not present yet — will show empty graph until it appears)")
     try:

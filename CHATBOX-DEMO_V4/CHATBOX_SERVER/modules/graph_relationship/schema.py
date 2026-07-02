@@ -92,10 +92,22 @@ class TopicNode(BaseModel):
 
 
 class EventNode(BaseModel):
-    """A discrete interaction event."""
+    """A conversation SESSION (a meetup) between a person and a robot.
+
+    Events mediate the Person↔Robot connection: instead of a direct interaction
+    edge, one Event per meetup is created and BOTH participants link to it. Each
+    turn of that meetup is appended to `turns`, so the Event node itself holds
+    the session's conversation history. A later meetup creates a new Event.
+
+    `turns` entries look like:
+        {"turn": int, "emotion": str|None, "child": str|None,
+         "reply": str|None, "ts": iso8601}
+    """
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     label: str
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    turn_count: int = 0
+    turns: List[Dict[str, Any]] = Field(default_factory=list)
     node_type: Literal["event"] = "event"
 
 
@@ -263,7 +275,23 @@ IdentityEdge = Union[
     HasPersonaEdge, HasRoleEdge, HasStyleEdge, HasCapabilityEdge
 ]
 
-AnyEdge = Union[RelationshipEdge, PersonAttributeEdge, IdentityEdge]
+
+# ---------------------------------------------------------------------------
+# Event edges  (participant → Event)
+# ---------------------------------------------------------------------------
+# An Event node represents one conversation turn. Both the Person and the
+# Robot link to it via a ParticipatedEdge, so the two clusters connect THROUGH
+# events rather than by a direct Person↔Robot edge. The number of a person's
+# events is the rerouted "interaction count".
+
+class ParticipatedEdge(EdgeBase):
+    """participant (Person | Robot) → EventNode: took part in a turn."""
+    edge_type: Literal["participated_in"] = "participated_in"
+
+
+AnyEdge = Union[
+    RelationshipEdge, PersonAttributeEdge, IdentityEdge, ParticipatedEdge
+]
 
 
 # ---------------------------------------------------------------------------

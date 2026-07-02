@@ -40,6 +40,7 @@ from .schema import (
 )
 from .store import InMemoryGraphStore
 from .kg_bridge import KGBridge, derive_tier, _tier_from_edges
+from .events import count_person_turns
 
 try:
     from ..pad_persona.pipeline_adapter import PADPipelineAdapter
@@ -147,11 +148,11 @@ def _relationship_snapshot(
 ) -> dict:
     rp = store.get_edge(robot_id, person_id, "rapport")
     tr = store.get_edge(robot_id, person_id, "trust")
-    ic = store.get_edge(robot_id, person_id, "interaction_count")
+    # interaction_count is rerouted through Event nodes — count them.
     return {
         "rapport":           rp.weight if rp else 0.0,
         "trust":             tr.weight if tr else 0.0,
-        "interaction_count": ic.count  if ic else 0,
+        "interaction_count": count_person_turns(store, person_id),
     }
 
 
@@ -217,15 +218,6 @@ def _edge_label(edge) -> str:
     if hasattr(edge, "value"):
         return f"{et}={edge.value:.2f}"
     return et
-
-
-def _conversation_path(kg_path: str) -> str:
-    """Derive the conversation sidecar path from the KG path.
-
-    kg_state.json -> kg_state_conversations.json  (same directory).
-    """
-    base, ext = os.path.splitext(kg_path)
-    return f"{base}_conversations{ext or '.json'}"
 
 
 def export_graph_json(store: InMemoryGraphStore, out_path: str) -> None:
@@ -357,11 +349,10 @@ class Harness:
         # When set, the graph is persisted to this file after every turn so the
         # standalone viz server (graph_relationship.viz) can poll it live.
         self.kg_path  = kg_path
-        # Conversation transcript sidecar, keyed by person_id. Derived from
-        # kg_path (e.g. kg_state.json -> kg_state_conversations.json). The viz
-        # server serves this at /history.json for the click-to-view panel.
-        self.conv_path = _conversation_path(kg_path) if kg_path else None
-        self._conversations: dict[str, list[dict]] = {}
+        # Load an existing graph (e.g. seeded subgraphs) so per-turn saves append
+        # to it instead of overwriting it with a fresh, empty store.
+        if kg_path and os.path.exists(kg_path):
+            self.store.load(kg_path)
         self.turn_n   = 0
         self._pad_adapters: dict[str, PADPipelineAdapter] = {}
 
@@ -399,13 +390,22 @@ class Harness:
             memory_context=bi.structured_memory,
         )
 
-        # 3. Write back mood, attention, interaction_count
-        self.bridge.post_turn(person_id, robot_id, pad_result)
+        # 3. Verbal response FIRST (needs pad_result) so it can be stored on the
+        #    session Event node by post_turn. Printed below in trace order.
+        verbal: Optional[str] = None
+        if user_message is not None and self.llm is not None and self.llm.available:
+            verbal = self.llm.respond(pad_result["system_prompt"], user_message)
 
-        # 4. Read updated relationship edges AFTER post_turn
+        # 4. Write back mood + attention, and append this turn to the current
+        #    session Event node (person↔robot connect through the event).
+        self.bridge.post_turn(person_id, robot_id, pad_result,
+                              emotion=emotion, child_message=user_message,
+                              reply=verbal)
+
+        # 5. Read relationship snapshot AFTER post_turn
         rel = _relationship_snapshot(self.store, person_id, robot_id)
 
-        # 5. Print PAD trace
+        # 6. Print PAD trace
         p, a, d  = pad_result["pad_state"]
         desc     = pad_result["descriptors"]
         mem_str  = bi.structured_memory or ""
@@ -430,51 +430,16 @@ class Harness:
             f"  interaction_count={rel['interaction_count']}"
         )
 
-        # 6. Verbal response — only when a message was provided and LLM is live
-        verbal: Optional[str] = None
-        if user_message is not None and self.llm is not None and self.llm.available:
+        if verbal is not None:
             display = _ROBOT_DISPLAY.get(robot_id, robot_id.title())
-            verbal  = self.llm.respond(pad_result["system_prompt"], user_message)
             print(f"         {_DIM}[child]   {user_message!r}{_RST}")
             print(f"         {_BOLD}[{display}]{_RST}  {_GREEN}{verbal}{_RST}")
 
-        # 7. Persist the graph so the live viz server can pick it up within ~1s,
-        #    plus the conversation transcript sidecar for the click-to-view panel.
+        # 7. Persist the graph so the live viz server can pick it up within ~1s.
         if self.kg_path:
             self.store.save(self.kg_path)
-            self._record_conversation(person_id, robot_id, emotion,
-                                      user_message, verbal)
 
         return pad_result
-
-    def _record_conversation(
-        self,
-        person_id: str,
-        robot_id: str,
-        emotion: str,
-        child_message: Optional[str],
-        robot_reply: Optional[str],
-    ) -> None:
-        """Append this turn to the per-person transcript and rewrite the sidecar.
-
-        Skips turns with no dialogue (an emotion-only tick with no message and
-        no reply) so the panel stays a real conversation log.
-        """
-        if not self.conv_path or (not child_message and not robot_reply):
-            return
-        self._conversations.setdefault(person_id, []).append({
-            "turn": self.turn_n,
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "robot": robot_id,
-            "emotion": emotion,
-            "child": child_message,
-            "reply": robot_reply,
-        })
-        try:
-            with open(self.conv_path, "w", encoding="utf-8") as fh:
-                json.dump(self._conversations, fh, indent=2)
-        except OSError as exc:
-            print(f"  [conv] could not write {self.conv_path}: {exc}")
 
     # ── Summary view ──────────────────────────────────────────────────────────
 

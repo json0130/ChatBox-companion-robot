@@ -210,9 +210,10 @@ function update(graph) {
     if (nodeById.has(n.id)) {
       const cur = nodeById.get(n.id);
       cur.type = n.type; cur.label = n.label;   // refresh mutable fields
+      cur.turns = n.turns;                       // event session transcript (if any)
     } else {
       nodeById.set(n.id, {
-        id: n.id, type: n.type, label: n.label,
+        id: n.id, type: n.type, label: n.label, turns: n.turns,
         x: width/2 + (Math.random()-0.5)*80,
         y: height/2 + (Math.random()-0.5)*80,
       });
@@ -350,7 +351,8 @@ function renderConvo() {
   if (selectedId === null) return;
   const node = nodeById.get(selectedId);
   const label = node ? node.label : selectedId;
-  const turns = history[selectedId] || [];
+  // Event (session) nodes carry their own turns; persons aggregate from /history.
+  const turns = (node && node.turns) ? node.turns : (history[selectedId] || []);
   titleEl.innerHTML = `${esc(label)}<small>${turns.length} turn${turns.length===1?"":"s"}</small>`;
 
   if (turns.length === 0) {

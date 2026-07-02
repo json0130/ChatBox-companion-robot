@@ -719,7 +719,7 @@ class WebcamKGLoop:
             rapport=bi.rapport, trust=bi.trust,
             interaction_count=bi.interaction_count,
         )
-        self.bridge.post_turn(person_id, self.robot_id, pad)
+        self.bridge.post_turn(person_id, self.robot_id, pad, emotion=emotion)
         p = pad["pad_state"][0]
         if p > 0.05:
             _update_rapport_trust(self.store, person_id, self.robot_id,

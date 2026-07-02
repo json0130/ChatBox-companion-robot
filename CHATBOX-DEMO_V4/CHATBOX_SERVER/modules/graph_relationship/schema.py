@@ -99,8 +99,47 @@ class EventNode(BaseModel):
     node_type: Literal["event"] = "event"
 
 
+# ---------------------------------------------------------------------------
+# Authored-attribute nodes  (identity subnodes for Robot / Person anchors)
+# ---------------------------------------------------------------------------
+# These carry a single authored `descriptor` string and hang off an anchor
+# (Robot or Person) via a Has* edge.  They describe stable identity — persona,
+# role, conversational style, capabilities — seeded from spec files, not
+# learned per turn.
+
+class PersonaNode(BaseModel):
+    """Authored persona/character descriptor, e.g. 'introverted, shy'."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    descriptor: str
+    node_type: Literal["persona"] = "persona"
+
+
+class RoleNode(BaseModel):
+    """Authored role descriptor, e.g. 'companion'."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    descriptor: str
+    node_type: Literal["role"] = "role"
+
+
+class StyleNode(BaseModel):
+    """Authored conversational-style descriptor, e.g. 'warm, brief'."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    descriptor: str
+    node_type: Literal["style"] = "style"
+
+
+class CapabilityNode(BaseModel):
+    """Authored capability descriptor, e.g. 'tells stories'."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    descriptor: str
+    node_type: Literal["capability"] = "capability"
+
+
 # Union alias used by GraphSchema
-AnyNode = Union[RobotNode, PersonNode, TopicNode, EventNode]
+AnyNode = Union[
+    RobotNode, PersonNode, TopicNode, EventNode,
+    PersonaNode, RoleNode, StyleNode, CapabilityNode,
+]
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +228,42 @@ PersonAttributeEdge = Union[
     MoodEdge, AttentionEdge, CurrentTopicEdge, TraitEdge, PreferenceEdge
 ]
 
-AnyEdge = Union[RelationshipEdge, PersonAttributeEdge]
+
+# ---------------------------------------------------------------------------
+# Identity edges  (Robot | Person anchor → authored-attribute node)
+# ---------------------------------------------------------------------------
+# Authored, cross-session identity. SLOW timescale; they follow the standard
+# replace-on-newer merge rule (NOT accumulate) — re-seeding a spec overwrites.
+
+class HasPersonaEdge(EdgeBase):
+    """anchor → PersonaNode."""
+    edge_type: Literal["has_persona"] = "has_persona"
+    timescale: Timescale = Timescale.SLOW
+
+
+class HasRoleEdge(EdgeBase):
+    """anchor → RoleNode."""
+    edge_type: Literal["has_role"] = "has_role"
+    timescale: Timescale = Timescale.SLOW
+
+
+class HasStyleEdge(EdgeBase):
+    """anchor → StyleNode."""
+    edge_type: Literal["has_style"] = "has_style"
+    timescale: Timescale = Timescale.SLOW
+
+
+class HasCapabilityEdge(EdgeBase):
+    """anchor → CapabilityNode."""
+    edge_type: Literal["has_capability"] = "has_capability"
+    timescale: Timescale = Timescale.SLOW
+
+
+IdentityEdge = Union[
+    HasPersonaEdge, HasRoleEdge, HasStyleEdge, HasCapabilityEdge
+]
+
+AnyEdge = Union[RelationshipEdge, PersonAttributeEdge, IdentityEdge]
 
 
 # ---------------------------------------------------------------------------

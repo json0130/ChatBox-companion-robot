@@ -50,6 +50,11 @@ _TIMESCALE_BY_EDGE_TYPE = {
     "trust": "RELATIONSHIP",
     "disclosure_depth": "RELATIONSHIP",
     "interaction_count": "RELATIONSHIP",
+    # Authored identity edges (seed.py) — SLOW, cross-session.
+    "has_persona": "SLOW",
+    "has_role": "SLOW",
+    "has_style": "SLOW",
+    "has_capability": "SLOW",
 }
 
 # node_type -> display type (frontend maps this to a shape)
@@ -58,12 +63,17 @@ _NODE_TYPE_DISPLAY = {
     "robot": "Robot",
     "topic": "Topic",
     "event": "Event",
+    # Authored-attribute subnodes (seed.py).
+    "persona": "Persona",
+    "role": "Role",
+    "style": "Style",
+    "capability": "Capability",
 }
 
 
 def _node_label(node: dict) -> str:
-    """Human-readable label: name (Robot), display_name (Person), label (Topic/Event)."""
-    for key in ("display_name", "name", "label"):
+    """Human-readable label: name (Robot), display_name (Person), label/descriptor."""
+    for key in ("display_name", "name", "label", "descriptor"):
         val = node.get(key)
         if val:
             return str(val)

@@ -103,11 +103,15 @@
     <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Robot (square)</div>
     <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Topic (diamond)</div>
     <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Event (triangle)</div>
+    <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Persona (hexagon)</div>
+    <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Role (pentagon)</div>
+    <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Style (star)</div>
+    <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Capability (plus)</div>
   </div>
   <div class="legend-section">
     <div class="legend-title">Edge timescale → colour</div>
     <div class="legend-row"><span class="swatch-line" style="border-color:var(--fast)"></span>FAST — mood / attention / topic</div>
-    <div class="legend-row"><span class="swatch-line" style="border-color:var(--slow)"></span>SLOW — trait / preference</div>
+    <div class="legend-row"><span class="swatch-line" style="border-color:var(--slow)"></span>SLOW — trait / pref / persona·role·style·capability</div>
     <div class="legend-row"><span class="swatch-line" style="border-color:var(--relationship)"></span>RELATIONSHIP — rapport / trust / …</div>
   </div>
   <div class="legend-section muted" style="font-size:11px">line thickness = weight · hover for value</div>
@@ -126,17 +130,44 @@
 const COLOR = { FAST: "#ff8c42", SLOW: "#4fc3f7", RELATIONSHIP: "#a678de" };
 const R = 9;  // base node radius
 
-// ---- draw legend shapes (same generator as the graph) --------------------
+// ---- shape geometry helpers ----------------------------------------------
+function polyD(sides, r, rot = -Math.PI/2) {
+  const pts = [];
+  for (let i = 0; i < sides; i++) {
+    const a = rot + i * 2*Math.PI/sides;
+    pts.push(`${(r*Math.cos(a)).toFixed(2)},${(r*Math.sin(a)).toFixed(2)}`);
+  }
+  return "M" + pts.join(" L") + " Z";
+}
+function starD(points, ro, ri, rot = -Math.PI/2) {
+  const pts = [];
+  for (let i = 0; i < points*2; i++) {
+    const r = (i % 2) ? ri : ro;
+    const a = rot + i * Math.PI/points;
+    pts.push(`${(r*Math.cos(a)).toFixed(2)},${(r*Math.sin(a)).toFixed(2)}`);
+  }
+  return "M" + pts.join(" L") + " Z";
+}
+function plusD(r, t) {
+  return `M${-t},${-r} L${t},${-r} L${t},${-t} L${r},${-t} L${r},${t} L${t},${t} `
+       + `L${t},${r} L${-t},${r} L${-t},${t} L${-r},${t} L${-r},${-t} L${-t},${-t} Z`;
+}
+
+// ---- node type -> shape (same generator used by graph AND legend) ---------
 function shapePath(type) {
   switch (type) {
-    case "Robot":  return {tag:"rect",  attrs:{x:-R, y:-R, width:2*R, height:2*R, rx:2}};
-    case "Topic":  return {tag:"path",  attrs:{d:`M0,${-R*1.3} L${R*1.3},0 L0,${R*1.3} L${-R*1.3},0 Z`}};
-    case "Event":  return {tag:"path",  attrs:{d:`M0,${-R*1.3} L${R*1.2},${R} L${-R*1.2},${R} Z`}};
-    default:       return {tag:"circle",attrs:{r:R}};  // Person
+    case "Robot":      return {tag:"rect",  attrs:{x:-R, y:-R, width:2*R, height:2*R, rx:2}};
+    case "Topic":      return {tag:"path",  attrs:{d:`M0,${-R*1.3} L${R*1.3},0 L0,${R*1.3} L${-R*1.3},0 Z`}};
+    case "Event":      return {tag:"path",  attrs:{d:`M0,${-R*1.3} L${R*1.2},${R} L${-R*1.2},${R} Z`}};
+    case "Persona":    return {tag:"path",  attrs:{d: polyD(6, R*1.2)}};           // hexagon
+    case "Role":       return {tag:"path",  attrs:{d: polyD(5, R*1.25)}};          // pentagon
+    case "Style":      return {tag:"path",  attrs:{d: starD(5, R*1.45, R*0.6)}};   // star
+    case "Capability": return {tag:"path",  attrs:{d: plusD(R*1.25, R*0.42)}};     // plus
+    default:           return {tag:"circle",attrs:{r:R}};  // Person
   }
 }
 document.querySelectorAll("#legend .shape").forEach((svg, i) => {
-  const type = ["Person","Robot","Topic","Event"][i];
+  const type = ["Person","Robot","Topic","Event","Persona","Role","Style","Capability"][i];
   const s = shapePath(type);
   const el = document.createElementNS("http://www.w3.org/2000/svg", s.tag);
   for (const [k,v] of Object.entries(s.attrs)) el.setAttribute(k, v);

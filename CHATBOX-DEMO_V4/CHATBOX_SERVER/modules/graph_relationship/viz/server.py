@@ -137,40 +137,8 @@ def transform(raw: dict) -> dict:
     return {"nodes": nodes, "edges": edges}
 
 
-def build_history(raw: dict) -> dict:
-    """Per-person transcript aggregated from session Event nodes: reconstructed
-    purely from the graph JSON (no separate transcript file), so kg_state.json
-    stays the single source of truth.
-
-    Returns { person_id: [ {turn, ts, emotion, child, reply, session}, ... ] }.
-    """
-    nodes = {n["id"]: n for n in raw.get("nodes", []) if n.get("id")}
-    history: dict = {}
-    for e in raw.get("edges", []):
-        if e.get("edge_type") != "participated_in":
-            continue
-        participant = nodes.get(e.get("source_id"))
-        event = nodes.get(e.get("target_id"))
-        if not participant or not event or event.get("node_type") != "event":
-            continue
-        if participant.get("node_type") != "person":
-            continue  # attribute each session to the person, not the robot
-        pid = participant["id"]
-        session = event.get("label", "session")
-        started = event.get("timestamp", "")
-        for t in event.get("turns", []) or []:
-            history.setdefault(pid, []).append({**t, "session": session, "_started": started})
-    # Chronological: by session start, then turn index.
-    for pid, turns in history.items():
-        turns.sort(key=lambda t: (t.get("_started", ""), t.get("turn", 0)))
-        for t in turns:
-            t.pop("_started", None)
-    return history
-
-
 class GraphState:
-    """Reads kg_state.json on demand, caching the last good parse. History is
-    derived from the same file (session Event nodes)."""
+    """Reads kg_state.json on demand, caching the last good parse."""
 
     def __init__(self, kg_path: str):
         self.kg_path = kg_path
@@ -188,9 +156,6 @@ class GraphState:
 
     def read(self) -> dict:
         return transform(self._raw())
-
-    def read_history(self) -> dict:
-        return build_history(self._raw())
 
 
 def make_handler(state: GraphState):
@@ -217,9 +182,6 @@ def make_handler(state: GraphState):
                     self._send(404, b"index.html not found", "text/plain")
             elif path == "/graph.json":
                 body = json.dumps(state.read()).encode("utf-8")
-                self._send(200, body, "application/json")
-            elif path == "/history.json":
-                body = json.dumps(state.read_history()).encode("utf-8")
                 self._send(200, body, "application/json")
             else:
                 self._send(404, b"not found", "text/plain")

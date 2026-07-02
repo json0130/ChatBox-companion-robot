@@ -115,7 +115,7 @@
     <div class="legend-row"><span class="swatch-line" style="border-color:var(--relationship)"></span>RELATIONSHIP — rapport / trust / …</div>
   </div>
   <div class="legend-section muted" style="font-size:11px">line thickness = weight · hover for value</div>
-  <div class="legend-section muted" style="font-size:11px">click a node → conversation history</div>
+  <div class="legend-section muted" style="font-size:11px">click a session (triangle) → conversation history</div>
 </div>
 
 <div id="convo" class="panel">
@@ -326,13 +326,15 @@ function clearHighlight() {
 }
 
 // ---- conversation panel ---------------------------------------------------
-let history = {};          // { person_id: [ {turn, ts, emotion, child, reply} ] }
-let selectedId = null;     // node whose transcript is shown
+let selectedId = null;     // session (Event) node whose transcript is shown
 const convoEl   = document.getElementById("convo");
 const titleEl   = document.getElementById("convo-title");
 const bodyEl    = document.getElementById("convo-body");
 
 function openConvo(d) {
+  // Conversation lives on session (Event) nodes only — clicking a person,
+  // robot or attribute node does not open the panel.
+  if (!d.turns) { closeConvo(); return; }
   selectedId = d.id;
   gNodes.selectAll("g.node").classed("selected", n => n.id === d.id);
   renderConvo();
@@ -350,9 +352,9 @@ function esc(s) { return String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<
 function renderConvo() {
   if (selectedId === null) return;
   const node = nodeById.get(selectedId);
-  const label = node ? node.label : selectedId;
-  // Event (session) nodes carry their own turns; persons aggregate from /history.
-  const turns = (node && node.turns) ? node.turns : (history[selectedId] || []);
+  if (!node || !node.turns) { closeConvo(); return; }
+  const label = node.label;
+  const turns = node.turns;
   titleEl.innerHTML = `${esc(label)}<small>${turns.length} turn${turns.length===1?"":"s"}</small>`;
 
   if (turns.length === 0) {
@@ -370,7 +372,7 @@ function renderConvo() {
 
 // ---- polling loop ---------------------------------------------------------
 const pulse = document.getElementById("pulse");
-let lastSig = "", lastHistSig = "";
+let lastSig = "";
 async function poll() {
   try {
     const r = await fetch("/graph.json", { cache: "no-store" });
@@ -381,19 +383,9 @@ async function poll() {
       update(g);
       document.getElementById("ts").textContent = new Date().toLocaleTimeString();
       pulse.classList.add("on"); setTimeout(() => pulse.classList.remove("on"), 250);
+      if (selectedId !== null) renderConvo();   // refresh open session live
     }
   } catch (_) { /* server not ready / transient — try again next tick */ }
-
-  try {
-    const h = await fetch("/history.json", { cache: "no-store" });
-    const hist = await h.json();
-    const hsig = JSON.stringify(hist);
-    if (hsig !== lastHistSig) {      // refresh the open panel live as turns arrive
-      lastHistSig = hsig;
-      history = hist;
-      if (selectedId !== null) renderConvo();
-    }
-  } catch (_) { /* transient */ }
 }
 poll();
 setInterval(poll, 1000);

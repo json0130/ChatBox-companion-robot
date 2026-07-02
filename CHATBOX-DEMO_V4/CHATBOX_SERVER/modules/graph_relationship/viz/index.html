@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>graph_relationship — live KG</title>
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<style>
+  :root {
+    --bg:        #12131a;
+    --panel:     #1c1e29;
+    --panel-brd: #2c2f3f;
+    --text:      #e6e8f0;
+    --muted:     #8b90a8;
+    /* timescale palette */
+    --fast:         #ff8c42;  /* orange  */
+    --slow:         #4fc3f7;  /* blue    */
+    --relationship: #a678de;  /* purple  */
+    --node:      #dfe3ef;
+    --node-brd:  #7f8496;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+               font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  #graph { width: 100vw; height: 100vh; display: block; cursor: grab; }
+  #graph:active { cursor: grabbing; }
+
+  .panel {
+    position: fixed; background: rgba(28,30,41,0.92); border: 1px solid var(--panel-brd);
+    border-radius: 10px; padding: 12px 14px; font-size: 13px; backdrop-filter: blur(4px);
+    box-shadow: 0 4px 18px rgba(0,0,0,0.35);
+  }
+  #hud   { top: 14px; left: 14px; min-width: 190px; }
+  #legend{ bottom: 14px; left: 14px; }
+
+  #hud h1 { margin: 0 0 8px; font-size: 14px; letter-spacing: .3px; }
+  .stat { display: flex; justify-content: space-between; gap: 18px; line-height: 1.7; }
+  .stat b { font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); }
+  #pulse { display:inline-block; width:8px; height:8px; border-radius:50%;
+           background:#3ddc84; margin-left:6px; vertical-align:middle; opacity:.25;
+           transition: opacity .15s; }
+  #pulse.on { opacity: 1; }
+
+  .legend-section { margin-top: 10px; }
+  .legend-section:first-child { margin-top: 0; }
+  .legend-title { color: var(--muted); font-size: 11px; text-transform: uppercase;
+                  letter-spacing: .5px; margin-bottom: 6px; }
+  .legend-row { display: flex; align-items: center; gap: 8px; line-height: 1.9; }
+  .swatch-line { width: 22px; height: 0; border-top: 3px solid; border-radius: 2px; }
+  svg.shape { overflow: visible; }
+
+  /* node + link visuals */
+  .link { stroke-opacity: 0.55; }
+  .link.dim { stroke-opacity: 0.06; }
+  .node-shape { fill: var(--node); stroke: var(--node-brd); stroke-width: 1.5px; }
+  .node.dim .node-shape { opacity: 0.15; }
+  .node.selected .node-shape { stroke: #ffd24a; stroke-width: 3px; }
+  .node-label { fill: var(--text); font-size: 11px; pointer-events: none;
+                paint-order: stroke; stroke: var(--bg); stroke-width: 3px; stroke-linejoin: round; }
+  .node.dim .node-label { opacity: 0.15; }
+  .edge-weight { fill: var(--muted); font-size: 10px; pointer-events: none;
+                 paint-order: stroke; stroke: var(--bg); stroke-width: 3px; }
+  .node g, .node .node-shape { cursor: pointer; }
+
+  /* conversation panel */
+  #convo { top: 14px; right: 14px; width: 340px; max-height: calc(100vh - 28px);
+           display: none; flex-direction: column; padding: 0; overflow: hidden; }
+  #convo-head { display: flex; align-items: center; justify-content: space-between;
+                padding: 12px 14px; border-bottom: 1px solid var(--panel-brd); }
+  #convo-title { font-size: 14px; font-weight: 600; }
+  #convo-title small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+  #convo-close { cursor: pointer; color: var(--muted); font-size: 18px; line-height: 1;
+                 padding: 0 4px; }
+  #convo-close:hover { color: var(--text); }
+  #convo-body { padding: 10px 12px 14px; overflow-y: auto; }
+  .turn { margin-bottom: 12px; }
+  .turn .meta { color: var(--muted); font-size: 10px; text-transform: uppercase;
+                letter-spacing: .4px; margin-bottom: 4px; }
+  .bubble { border-radius: 10px; padding: 7px 10px; font-size: 12.5px; line-height: 1.4;
+            margin-bottom: 5px; white-space: pre-wrap; word-break: break-word; }
+  .bubble.child { background: #2a2d3d; }
+  .bubble.reply { background: #2f2540; border: 1px solid var(--relationship); }
+  .bubble .who { display: block; font-size: 10px; color: var(--muted); margin-bottom: 2px; }
+  .convo-empty { color: var(--muted); font-size: 12.5px; padding: 4px 0; }
+</style>
+</head>
+<body>
+<canvas style="display:none"></canvas>
+<svg id="graph"></svg>
+
+<div id="hud" class="panel">
+  <h1>graph_relationship<span id="pulse"></span></h1>
+  <div class="stat"><span class="muted">nodes</span><b id="n-count">0</b></div>
+  <div class="stat"><span class="muted">edges</span><b id="e-count">0</b></div>
+  <div class="stat"><span class="muted">updated</span><b id="ts" class="muted">—</b></div>
+</div>
+
+<div id="legend" class="panel">
+  <div class="legend-section">
+    <div class="legend-title">Node type → shape</div>
+    <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Person (circle)</div>
+    <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Robot (square)</div>
+    <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Topic (diamond)</div>
+    <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Event (triangle)</div>
+  </div>
+  <div class="legend-section">
+    <div class="legend-title">Edge timescale → colour</div>
+    <div class="legend-row"><span class="swatch-line" style="border-color:var(--fast)"></span>FAST — mood / attention / topic</div>
+    <div class="legend-row"><span class="swatch-line" style="border-color:var(--slow)"></span>SLOW — trait / preference</div>
+    <div class="legend-row"><span class="swatch-line" style="border-color:var(--relationship)"></span>RELATIONSHIP — rapport / trust / …</div>
+  </div>
+  <div class="legend-section muted" style="font-size:11px">line thickness = weight · hover for value</div>
+  <div class="legend-section muted" style="font-size:11px">click a node → conversation history</div>
+</div>
+
+<div id="convo" class="panel">
+  <div id="convo-head">
+    <span id="convo-title"></span>
+    <span id="convo-close" title="close">&times;</span>
+  </div>
+  <div id="convo-body"></div>
+</div>
+
+<script>
+const COLOR = { FAST: "#ff8c42", SLOW: "#4fc3f7", RELATIONSHIP: "#a678de" };
+const R = 9;  // base node radius
+
+// ---- draw legend shapes (same generator as the graph) --------------------
+function shapePath(type) {
+  switch (type) {
+    case "Robot":  return {tag:"rect",  attrs:{x:-R, y:-R, width:2*R, height:2*R, rx:2}};
+    case "Topic":  return {tag:"path",  attrs:{d:`M0,${-R*1.3} L${R*1.3},0 L0,${R*1.3} L${-R*1.3},0 Z`}};
+    case "Event":  return {tag:"path",  attrs:{d:`M0,${-R*1.3} L${R*1.2},${R} L${-R*1.2},${R} Z`}};
+    default:       return {tag:"circle",attrs:{r:R}};  // Person
+  }
+}
+document.querySelectorAll("#legend .shape").forEach((svg, i) => {
+  const type = ["Person","Robot","Topic","Event"][i];
+  const s = shapePath(type);
+  const el = document.createElementNS("http://www.w3.org/2000/svg", s.tag);
+  for (const [k,v] of Object.entries(s.attrs)) el.setAttribute(k, v);
+  el.setAttribute("transform", "translate(9,9) scale(0.7)");
+  el.setAttribute("fill", "#dfe3ef"); el.setAttribute("stroke", "#7f8496"); el.setAttribute("stroke-width", 1.5);
+  svg.appendChild(el);
+});
+
+// ---- svg + zoom ----------------------------------------------------------
+const svg = d3.select("#graph");
+let width = window.innerWidth, height = window.innerHeight;
+svg.attr("width", width).attr("height", height);
+
+const root = svg.append("g");
+const gLinks  = root.append("g");
+const gLabels = root.append("g");  // edge-weight labels
+const gNodes  = root.append("g");
+
+svg.call(d3.zoom().scaleExtent([0.15, 4]).on("zoom", (e) => root.attr("transform", e.transform)));
+
+// ---- persistent data + simulation ---------------------------------------
+const nodeById = new Map();   // id -> node datum (keeps x/y across ticks)
+let links = [];
+
+const sim = d3.forceSimulation([])
+  .force("link", d3.forceLink([]).id(d => d.id).distance(90).strength(0.4))
+  .force("charge", d3.forceManyBody().strength(-320))
+  .force("center", d3.forceCenter(width/2, height/2))
+  .force("collide", d3.forceCollide(28))
+  .alphaDecay(0.05)
+  .on("tick", ticked);
+
+const weightScale = d3.scaleSqrt().domain([0, 1]).range([1, 7]).clamp(true);
+
+// ---- diff + apply new graph ----------------------------------------------
+function update(graph) {
+  // nodes: keep existing (position preserved), add new near centre, drop removed
+  const incoming = new Set(graph.nodes.map(n => n.id));
+  for (const n of graph.nodes) {
+    if (nodeById.has(n.id)) {
+      const cur = nodeById.get(n.id);
+      cur.type = n.type; cur.label = n.label;   // refresh mutable fields
+    } else {
+      nodeById.set(n.id, {
+        id: n.id, type: n.type, label: n.label,
+        x: width/2 + (Math.random()-0.5)*80,
+        y: height/2 + (Math.random()-0.5)*80,
+      });
+    }
+  }
+  for (const id of [...nodeById.keys()]) if (!incoming.has(id)) nodeById.delete(id);
+
+  const nodes = [...nodeById.values()];
+  // rebuild links against live node objects (dangling already filtered server-side)
+  links = graph.edges
+    .filter(e => nodeById.has(e.source) && nodeById.has(e.target))
+    .map(e => ({
+      source: nodeById.get(e.source), target: nodeById.get(e.target),
+      type: e.type, timescale: e.timescale, weight: e.weight,
+    }));
+
+  const maxW = d3.max(links, d => Math.abs(d.weight)) || 1;
+  weightScale.domain([0, maxW]);
+
+  sim.nodes(nodes);
+  sim.force("link").links(links);
+  sim.alpha(0.35).restart();
+
+  render(nodes);
+}
+
+function render(nodes) {
+  // links
+  const link = gLinks.selectAll("line").data(links, d => d.source.id + "→" + d.target.id + d.type);
+  link.exit().transition().duration(400).attr("stroke-opacity", 0).remove();
+  const linkEnter = link.enter().append("line")
+    .attr("class", "link").attr("stroke-opacity", 0);
+  linkEnter.append("title");
+  linkEnter.merge(link)
+    .attr("stroke", d => COLOR[d.timescale] || "#888")
+    .attr("stroke-width", d => weightScale(Math.abs(d.weight)))
+    .transition().duration(400).attr("stroke-opacity", 0.55);
+  gLinks.selectAll("line").select("title").text(d => `${d.type} = ${d.weight}`);
+
+  // edge weight labels
+  const wl = gLabels.selectAll("text").data(links, d => d.source.id + "→" + d.target.id + d.type);
+  wl.exit().remove();
+  wl.enter().append("text").attr("class", "edge-weight").attr("text-anchor", "middle")
+    .merge(wl).text(d => d.weight);
+
+  // nodes
+  const node = gNodes.selectAll("g.node").data(nodes, d => d.id);
+  node.exit().transition().duration(400).style("opacity", 0).remove();
+
+  const enter = node.enter().append("g").attr("class", "node").style("opacity", 0)
+    .call(d3.drag().clickDistance(5)   // small movement still counts as a click
+      .on("start", (e,d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx=d.x; d.fy=d.y; })
+      .on("drag",  (e,d) => { d.fx=e.x; d.fy=e.y; })
+      .on("end",   (e,d) => { if (!e.active) sim.alphaTarget(0); d.fx=null; d.fy=null; }))
+    .on("mouseenter", (e,d) => highlight(d.id))
+    .on("mouseleave", clearHighlight)
+    .on("click", (e,d) => { e.stopPropagation(); openConvo(d); });
+
+  enter.each(function(d) {
+    const s = shapePath(d.type);
+    const el = document.createElementNS("http://www.w3.org/2000/svg", s.tag);
+    for (const [k,v] of Object.entries(s.attrs)) el.setAttribute(k, v);
+    el.setAttribute("class", "node-shape");
+    this.appendChild(el);
+  });
+  enter.append("text").attr("class", "node-label").attr("x", R + 5).attr("y", 4);
+
+  enter.transition().duration(400).style("opacity", 1);
+
+  // refresh shape (type may change) + label on all nodes
+  const all = enter.merge(node);
+  all.select(".node-label").text(d => d.label);
+  all.each(function(d) {
+    const g = d3.select(this), existing = g.select(".node-shape");
+    const s = shapePath(d.type);
+    if (existing.node() && existing.node().tagName.toLowerCase() !== s.tag) {
+      existing.remove();
+      const el = document.createElementNS("http://www.w3.org/2000/svg", s.tag);
+      for (const [k,v] of Object.entries(s.attrs)) el.setAttribute(k, v);
+      el.setAttribute("class", "node-shape");
+      this.insertBefore(el, this.firstChild);
+    }
+  });
+
+  document.getElementById("n-count").textContent = nodes.length;
+  document.getElementById("e-count").textContent = links.length;
+}
+
+function ticked() {
+  gLinks.selectAll("line")
+    .attr("x1", d => d.source.x).attr("y1", d => d.source.y)
+    .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+  gLabels.selectAll("text")
+    .attr("x", d => (d.source.x + d.target.x)/2)
+    .attr("y", d => (d.source.y + d.target.y)/2 - 3);
+  gNodes.selectAll("g.node").attr("transform", d => `translate(${d.x},${d.y})`);
+}
+
+// ---- hover highlight ------------------------------------------------------
+function highlight(id) {
+  const connected = new Set([id]);
+  links.forEach(l => { if (l.source.id===id) connected.add(l.target.id);
+                       if (l.target.id===id) connected.add(l.source.id); });
+  gNodes.selectAll("g.node").classed("dim", d => !connected.has(d.id));
+  gLinks.selectAll("line").classed("dim", d => !(d.source.id===id || d.target.id===id));
+}
+function clearHighlight() {
+  gNodes.selectAll("g.node").classed("dim", false);
+  gLinks.selectAll("line").classed("dim", false);
+}
+
+// ---- conversation panel ---------------------------------------------------
+let history = {};          // { person_id: [ {turn, ts, emotion, child, reply} ] }
+let selectedId = null;     // node whose transcript is shown
+const convoEl   = document.getElementById("convo");
+const titleEl   = document.getElementById("convo-title");
+const bodyEl    = document.getElementById("convo-body");
+
+function openConvo(d) {
+  selectedId = d.id;
+  gNodes.selectAll("g.node").classed("selected", n => n.id === d.id);
+  renderConvo();
+}
+function closeConvo() {
+  selectedId = null;
+  convoEl.style.display = "none";
+  gNodes.selectAll("g.node").classed("selected", false);
+}
+document.getElementById("convo-close").addEventListener("click", closeConvo);
+svg.on("click", closeConvo);   // click empty canvas to dismiss
+
+function esc(s) { return String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+
+function renderConvo() {
+  if (selectedId === null) return;
+  const node = nodeById.get(selectedId);
+  const label = node ? node.label : selectedId;
+  const turns = history[selectedId] || [];
+  titleEl.innerHTML = `${esc(label)}<small>${turns.length} turn${turns.length===1?"":"s"}</small>`;
+
+  if (turns.length === 0) {
+    bodyEl.innerHTML = `<div class="convo-empty">No conversation recorded for this node.</div>`;
+  } else {
+    bodyEl.innerHTML = turns.map(t => {
+      const when = t.ts ? new Date(t.ts).toLocaleTimeString() : "";
+      const child = t.child ? `<div class="bubble child"><span class="who">child</span>${esc(t.child)}</div>` : "";
+      const reply = t.reply ? `<div class="bubble reply"><span class="who">${esc(t.robot || "robot")}</span>${esc(t.reply)}</div>` : "";
+      return `<div class="turn"><div class="meta">turn ${t.turn ?? "?"} · ${esc(t.emotion||"")} · ${when}</div>${child}${reply}</div>`;
+    }).join("");
+  }
+  convoEl.style.display = "flex";
+}
+
+// ---- polling loop ---------------------------------------------------------
+const pulse = document.getElementById("pulse");
+let lastSig = "", lastHistSig = "";
+async function poll() {
+  try {
+    const r = await fetch("/graph.json", { cache: "no-store" });
+    const g = await r.json();
+    const sig = JSON.stringify(g);
+    if (sig !== lastSig) {          // only re-diff when something actually changed
+      lastSig = sig;
+      update(g);
+      document.getElementById("ts").textContent = new Date().toLocaleTimeString();
+      pulse.classList.add("on"); setTimeout(() => pulse.classList.remove("on"), 250);
+    }
+  } catch (_) { /* server not ready / transient — try again next tick */ }
+
+  try {
+    const h = await fetch("/history.json", { cache: "no-store" });
+    const hist = await h.json();
+    const hsig = JSON.stringify(hist);
+    if (hsig !== lastHistSig) {      // refresh the open panel live as turns arrive
+      lastHistSig = hsig;
+      history = hist;
+      if (selectedId !== null) renderConvo();
+    }
+  } catch (_) { /* transient */ }
+}
+poll();
+setInterval(poll, 1000);
+
+window.addEventListener("resize", () => {
+  width = window.innerWidth; height = window.innerHeight;
+  svg.attr("width", width).attr("height", height);
+  sim.force("center", d3.forceCenter(width/2, height/2)).alpha(0.1).restart();
+});
+</script>
+</body>
+</html>

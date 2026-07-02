@@ -26,8 +26,12 @@ from __future__ import annotations
 import argparse
 import contextlib
 import os
+import re
+import socket
 import sys
+import threading
 import time
+from collections import deque
 from typing import Optional
 
 import cv2
@@ -87,6 +91,7 @@ except ImportError:
 # ─────────────────────────────────────────────────────────────────────────────
 
 _DEFAULT_FACES   = "faces.npz"
+_DEFAULT_KG      = "kg_state.json"
 _DEFAULT_ROBOT   = "chatbox"
 _DEFAULT_TICK    = 1.0
 _DEFAULT_THRESH  = 0.75
@@ -121,11 +126,54 @@ _TIER_COL = {
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# LLM action-tag parsing + ESP32 dispatch
+# ─────────────────────────────────────────────────────────────────────────────
+
+_TAG_RE = re.compile(r'^\[([A-Z_]+)\]', re.ASCII)
+
+# Map LLM action tags → ESP32 validExpressions[]
+_TAG_TO_ESP32: dict[str, str] = {
+    "GREETING": "greeting",
+    "WAVE":     "wave",
+    "NOD":      "head_nod",
+    "CONFUSED": "confused",
+    "SAD":      "sad",
+    "ANGRY":    "angry",
+    "SHRUG":    "shrug",
+    "POINT":    "point",
+    "DANCE":    "seq_dance",
+    "SLEEP":    "sleep",
+    "IDLE":     "idle",
+    "HAPPY":    "ears_wiggle",
+    "SURPRISE": "ears_perk",
+    "EARS":     "ears_perk",
+}
+
+
+def _parse_llm_response(text: str) -> tuple[str, str]:
+    """Split '[TAG] body text' into ('TAG', 'body text'). Returns ('', text) if no tag."""
+    m = _TAG_RE.match(text.strip())
+    if m:
+        return m.group(1), text[m.end():].strip()
+    return "", text.strip()
+
+
+def _send_esp32(expression: str, host: str, port: int = 8888,
+                timeout: float = 0.5) -> None:
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as s:
+            s.sendall((expression + "\n").encode())
+        print(f"[ESP32] → {expression!r}")
+    except OSError as exc:
+        print(f"[ESP32] send failed ({host}:{port}): {exc}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # LLM client
 # ─────────────────────────────────────────────────────────────────────────────
 
 class LLMClient:
-    """Stateless Ollama wrapper — each call is independent (no history)."""
+    """Ollama wrapper with optional rolling chat history."""
 
     def __init__(self, model: str = _DEFAULT_MODEL,
                  host: str = "127.0.0.1", port: int = 11434):
@@ -147,16 +195,24 @@ class LLMClient:
             print(f"[LLM] Ollama unavailable: {exc}")
         return self.available
 
-    def respond(self, system_prompt: str, user_msg: str) -> str:
+    def respond(self, system_prompt: str, user_msg: str,
+                history: list[tuple[str, str]] | None = None) -> str:
+        """
+        Args:
+            history: list of (user_text, assistant_text) pairs from previous turns.
+                     Injected as alternating user/assistant messages before user_msg.
+        """
         if not self.available or self._client is None:
             return "[LLM not connected — run with --llm]"
         try:
+            messages: list[dict] = [{"role": "system", "content": system_prompt}]
+            for u, b in (history or []):
+                messages.append({"role": "user",      "content": u})
+                messages.append({"role": "assistant", "content": b})
+            messages.append({"role": "user", "content": user_msg})
             resp = self._client.chat.completions.create(
                 model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user",   "content": user_msg},
-                ],
+                messages=messages,
                 max_tokens=140,
                 temperature=0.8,
             )
@@ -194,7 +250,7 @@ def _bar(frame, x: int, y: int, w: int, h: int,
 def draw_overlay(
     frame: np.ndarray,
     *,
-    # person state
+    # primary person (drives bottom panel)
     person_id:   Optional[str],
     sim:         float,
     box:         Optional[tuple],
@@ -205,6 +261,8 @@ def draw_overlay(
     descriptors: Optional[dict],
     rapport:     float,
     trust:       float,
+    # emotion V/A values (weighted-blend from softmax)
+    va:          tuple = (0.0, 0.0),
     # chat display
     last_user_msg: Optional[str],
     last_verbal:   Optional[str],
@@ -222,23 +280,41 @@ def draw_overlay(
     enroll_progress:  int  = 0,
     enroll_total:     int  = 12,
     llm_on:           bool = False,
+    # ALL detected faces this tick  ← new
+    all_detections: list  = [],
 ) -> np.ndarray:
     frame = frame.copy()
     h, w  = frame.shape[:2]
     tc    = _TIER_COL.get(tier, _C_UNKNOWN)
 
-    # ── Face bounding box ─────────────────────────────────────────────────────
-    if box is not None:
-        x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
-        col = tc if person_id else _C_UNKNOWN
-        cv2.rectangle(frame, (x1, y1), (x2, y2), col, 2)
+    # ── Face bounding boxes — one per detected face ───────────────────────────
+    draw_list = all_detections if all_detections else (
+        [{"person_id": person_id, "sim": sim, "box": box,
+          "emotion": emotion, "e_conf": e_conf, "tier": tier}]
+        if box is not None else []
+    )
+    for det in draw_list:
+        dbox = det.get("box")
+        if dbox is None:
+            continue
+        x1, y1, x2, y2 = int(dbox[0]), int(dbox[1]), int(dbox[2]), int(dbox[3])
+        dtier = det.get("tier", "unknown")
+        dpid  = det.get("person_id")
+        dcol  = _TIER_COL.get(dtier, _C_UNKNOWN) if dpid else _C_UNKNOWN
+        cv2.rectangle(frame, (x1, y1), (x2, y2), dcol, 2)
         # Corner accents
         clen = 18
         for cx, cy, dx, dy in [(x1,y1,1,1),(x2,y1,-1,1),(x1,y2,1,-1),(x2,y2,-1,-1)]:
-            cv2.line(frame,(cx,cy),(cx+dx*clen,cy),col,3)
-            cv2.line(frame,(cx,cy),(cx,cy+dy*clen),col,3)
-        label = f"{person_id}  {sim:.2f}" if person_id else f"?  {sim:.2f}"
-        _text(frame, label, (x1 + 4, max(y1 - 8, 18)), 0.58, col)
+            cv2.line(frame, (cx, cy), (cx + dx*clen, cy), dcol, 3)
+            cv2.line(frame, (cx, cy), (cx, cy + dy*clen), dcol, 3)
+        # Name + similarity above box
+        name_label = f"{dpid}  {det.get('sim',0):.2f}" if dpid else f"?  {det.get('sim',0):.2f}"
+        _text(frame, name_label, (x1 + 4, max(y1 - 20, 18)), 0.58, dcol)
+        # Emotion below name (inside top of box area)
+        dem, dec = det.get("emotion", ""), det.get("e_conf", 0.0)
+        if dem:
+            emo_str = f"{dem} {dec:.0f}%" if dec > 1 else dem
+            _text(frame, emo_str, (x1 + 4, max(y1 - 5, 34)), 0.46, dcol, 1)
 
     # ── Top bar ───────────────────────────────────────────────────────────────
     _panel(frame, 0, 0, w, 38)
@@ -289,7 +365,12 @@ def draw_overlay(
     if pad_state is not None:
         p, a, d = pad_state
         _text(frame, f"PAD   P={p:+.2f}   A={a:+.2f}   D={d:+.2f}", (8, y), 0.60, _C_WHITE)
-    y += 24
+    y += 22
+
+    # Emotion V/A (weighted softmax blend from camera)
+    ev, ea = va
+    _text(frame, f"V/A   V={ev:+.2f}   A={ea:+.2f}", (8, y), 0.56, _C_CYAN)
+    y += 22
 
     # Mood descriptors
     if descriptors:
@@ -404,6 +485,29 @@ def _read_rapport_trust(
     return r, t
 
 
+def _dump_kg(store: InMemoryGraphStore, robot_id: str) -> None:
+    """Print all KG nodes and edges to stdout for debugging."""
+    from modules.graph_relationship.store import _PERSON_ATTRIBUTE_TYPES, _RELATIONSHIP_TYPES
+    nodes = list(store._nodes.values())
+    edges = list(store._edges.values())
+    print("\n" + "=" * 60)
+    print(f"  KG DUMP  ({len(nodes)} nodes, {len(edges)} edges)")
+    print("=" * 60)
+    for node in nodes:
+        print(f"  [NODE] {node.node_type:8s}  id={node.id!r}")
+    print()
+    for edge in edges:
+        val = getattr(edge, "value",  None)
+        wt  = getattr(edge, "weight", None)
+        cnt = getattr(edge, "count",  None)
+        extra = ""
+        if val  is not None: extra = f"  value={val:+.3f}"
+        if wt   is not None: extra = f"  weight={wt:.3f}"
+        if cnt  is not None: extra = f"  count={cnt}"
+        print(f"  [EDGE] {edge.edge_type:18s}  {edge.source_id!r:12s} → {edge.target_id!r:12s}{extra}")
+    print("=" * 60 + "\n")
+
+
 def _update_rapport_trust(
     store: InMemoryGraphStore,
     person_id: str,
@@ -435,6 +539,114 @@ def _update_rapport_trust(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Background detection worker
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _DetectionWorker(threading.Thread):
+    """
+    Runs MTCNN + ResNet + emotion in a daemon thread.
+
+    The main display loop submits a frame via submit() and reads
+    get_results() without ever blocking — detection latency is completely
+    hidden from the display frame-rate.
+
+    Design:
+    - Only the latest submitted frame is processed; stale frames are dropped.
+    - Per-person emotion smoothers live here so the smoothing window is never
+      shared between different identities.
+    - Capped at max_faces (default 4) and downscaled by det_scale (default 0.5)
+      for fast MTCNN inference.
+    """
+
+    def __init__(
+        self,
+        face_id,
+        emotion_backend: str   = 'hsemotion',
+        max_faces:       int   = 4,
+        det_scale:       float = 0.5,
+    ):
+        super().__init__(daemon=True, name="detection-worker")
+        self._face_id         = face_id
+        self._emotion_backend = emotion_backend
+        self._max_faces       = max_faces
+        self._det_scale       = det_scale
+
+        # Per-person smoothers (only ever touched from this thread — no lock needed)
+        self._per_emotion: dict[str, EmotionDetector] = {}
+        self._unknown_emotion = EmotionDetector.create(emotion_backend)
+
+        self._lock    = threading.Lock()
+        self._frame   = None
+        self._results: list = []
+        self._event   = threading.Event()
+        self._stop    = threading.Event()
+
+    # ── Public API (called from main thread) ──────────────────────────────────
+
+    def submit(self, frame: np.ndarray) -> None:
+        """Drop latest frame in; any unprocessed previous frame is discarded."""
+        with self._lock:
+            self._frame = frame
+        self._event.set()
+
+    def get_results(self) -> list:
+        """Non-blocking — returns last completed detection list."""
+        with self._lock:
+            return list(self._results)
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._event.set()  # unblock the wait
+
+    # ── Worker loop ───────────────────────────────────────────────────────────
+
+    def run(self) -> None:
+        while not self._stop.is_set():
+            if not self._event.wait(timeout=0.1):
+                continue
+            self._event.clear()
+            if self._stop.is_set():
+                break
+
+            with self._lock:
+                frame = self._frame
+            if frame is None:
+                continue
+
+            raw = self._face_id.identify_all(
+                frame,
+                max_faces=self._max_faces,
+                scale=self._det_scale,
+            )
+
+            results = []
+            for person_id, sim, box in raw:
+                if person_id is not None:
+                    if person_id not in self._per_emotion:
+                        self._per_emotion[person_id] = EmotionDetector.create(
+                            self._emotion_backend
+                        )
+                    emo, e_conf, ev, ea = self._per_emotion[person_id].detect(
+                        frame, box=box, smooth=True
+                    )
+                else:
+                    emo, e_conf, ev, ea = self._unknown_emotion.detect(
+                        frame, box=box, smooth=False
+                    )
+                results.append({
+                    "person_id": person_id,
+                    "sim":       sim,
+                    "box":       box,
+                    "emotion":   emo,
+                    "e_conf":    e_conf,
+                    "va":        (ev, ea),
+                })
+
+            with self._lock:
+                self._results = results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main loop
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -450,14 +662,18 @@ class WebcamKGLoop:
         self,
         robot_id:        str   = _DEFAULT_ROBOT,
         faces_path:      str   = _DEFAULT_FACES,
+        kg_path:         str   = _DEFAULT_KG,
         threshold:       float = _DEFAULT_THRESH,
         tick_interval:   float = _DEFAULT_TICK,
         llm_client:      Optional[LLMClient] = None,
         show_window:     bool  = True,
         emotion_backend: str   = 'hsemotion',
+        esp32_host:      str   = "",
+        esp32_port:      int   = 8888,
     ):
         self.robot_id      = robot_id
         self.faces_path    = faces_path
+        self.kg_path       = kg_path
         self.tick_interval = tick_interval
         self.llm           = llm_client
         self.show_window   = show_window
@@ -469,10 +685,20 @@ class WebcamKGLoop:
             print(f"[WebcamLoop] No face DB at '{faces_path}' — starting empty")
 
         self.store   = InMemoryGraphStore()
+        if os.path.exists(kg_path):
+            self.store.load(kg_path)
+        else:
+            print(f"[WebcamLoop] No KG at '{kg_path}' — starting fresh")
+
         self.bridge  = KGBridge(self.store)
         self._adapters: dict[str, PADPipelineAdapter] = {}
 
-        self._emotion = EmotionDetector.create(emotion_backend)
+        self._emotion_backend = emotion_backend
+        self._esp32_host      = esp32_host
+        self._esp32_port      = esp32_port
+
+        # Per-person rolling chat history (last 5 turns)
+        self._chat_history: dict[str, deque] = {}
 
         self._robot_display = {"chatbox": "ChatBox", "ellebot": "ElleBot"}.get(
             robot_id.lower(), robot_id
@@ -484,17 +710,14 @@ class WebcamKGLoop:
             self._adapters[self.robot_id] = PADPipelineAdapter(self.robot_id)
         return self._adapters[self.robot_id]
 
-    def _get_emotion(
-        self, frame: np.ndarray, box: Optional[tuple] = None
-    ) -> tuple[str, float]:
-        """Run emotion detection. Passes MTCNN face box to avoid a second face-detect pass."""
-        return self._emotion.detect(frame, box=box, smooth=True)
-
-    def _pipeline_tick(self, person_id: str, emotion: str):
-        bi = self.bridge.pre_turn(person_id, self.robot_id, emotion)
+    def _pipeline_tick(self, person_id: str, emotion: str,
+                       va: Optional[tuple] = None):
+        bi = self.bridge.pre_turn(person_id, self.robot_id, emotion, camera_va=va)
         pad = self._adapter().process_turn(
             valence=bi.valence, arousal=bi.arousal,
             relationship_tier=bi.tier, memory_context=bi.structured_memory,
+            rapport=bi.rapport, trust=bi.trust,
+            interaction_count=bi.interaction_count,
         )
         self.bridge.post_turn(person_id, self.robot_id, pad)
         p = pad["pad_state"][0]
@@ -517,7 +740,20 @@ class WebcamKGLoop:
 
         llm_status = "LLM ready" if (self.llm and self.llm.available) else "no LLM (restart with --llm)"
         print(f"\n[WebcamLoop] robot={self._robot_display}  tick={self.tick_interval}s  cam={camera_index}  {llm_status}")
-        print("  T=chat  E=enroll  B=boost  S=save  Q=quit  (all in the OpenCV window)\n")
+        print("  T=chat  E=enroll  B=boost  K=dump KG  S=save  Q=quit  (all in the OpenCV window)\n")
+
+        # ── Background detection worker ───────────────────────────────────────
+        worker = _DetectionWorker(
+            self.face_id,
+            emotion_backend=self._emotion_backend,
+            max_faces=4,
+            det_scale=0.5,
+        )
+        worker.start()
+
+        # ── KG state — updated every tick, survives between ticks ─────────────
+        # person_id -> {tier, pad_state, descriptors, rapport, trust}
+        _kg_state: dict[str, dict] = {}
 
         # ── Persistent display state ──────────────────────────────────────────
         tick_n          = 0
@@ -535,6 +771,8 @@ class WebcamKGLoop:
         last_user_msg   : Optional[str]   = None
         last_verbal     : Optional[str]   = None
         chat_expire_t   : float           = 0.0
+        last_all_detections: list         = []
+        last_va         : tuple           = (0.0, 0.0)
 
         # ── In-window input state ─────────────────────────────────────────────
         input_mode      : int  = _MODE_IDLE
@@ -586,33 +824,89 @@ class WebcamKGLoop:
                         enroll_progress  = 0
                         enroll_attempts  = 0
 
-                # ── Pipeline tick ─────────────────────────────────────────────
+                # ── Submit frame to background worker ─────────────────────────
+                if not enroll_capturing:
+                    worker.submit(frame)
+
+                # ── Read latest worker results (non-blocking, every frame) ─────
+                raw_dets = worker.get_results()
+
+                # Merge worker detections with last known KG state for the overlay
+                last_all_detections = []
+                for d in raw_dets:
+                    pid = d["person_id"]
+                    kg  = _kg_state.get(pid, {}) if pid else {}
+                    last_all_detections.append({
+                        **d,
+                        "tier":        kg.get("tier",        "unknown"),
+                        "pad_state":   kg.get("pad_state",   None),
+                        "descriptors": kg.get("descriptors", None),
+                        "rapport":     kg.get("rapport",     0.0),
+                        "trust":       kg.get("trust",       0.0),
+                    })
+
+                # Update primary-person visual refs every frame
+                # (boxes/names track live; tier/PAD come from last tick below)
+                primary_det = None
+                for d in last_all_detections:
+                    if d["person_id"] is not None:
+                        primary_det = d
+                        break
+                if primary_det:
+                    last_person_id = primary_det["person_id"]
+                    last_sim       = primary_det["sim"]
+                    last_box       = primary_det["box"]
+                    last_emotion   = primary_det["emotion"]
+                    last_e_conf    = primary_det["e_conf"]
+                    last_tier      = primary_det["tier"]
+                    last_pad_state = primary_det["pad_state"]
+                    last_descriptors = primary_det["descriptors"]
+                    last_rapport   = primary_det["rapport"]
+                    last_trust     = primary_det["trust"]
+                    last_va        = primary_det.get("va", (0.0, 0.0))
+                elif last_all_detections:
+                    first = last_all_detections[0]
+                    last_person_id = None
+                    last_sim       = first["sim"]
+                    last_box       = first["box"]
+                    last_emotion   = first["emotion"]
+                    last_e_conf    = first["e_conf"]
+                else:
+                    last_person_id = None
+                    last_sim       = 0.0
+                    last_box       = None
+
+                # ── KG / PAD tick (every tick_interval) ───────────────────────
                 now = time.time()
                 if not enroll_capturing and now - last_tick_t >= self.tick_interval:
                     last_tick_t = now
                     tick_n += 1
 
-                    person_id, sim, box = self.face_id.identify(frame)
-                    last_person_id = person_id
-                    last_sim       = sim
-                    last_box       = box
+                    for d in raw_dets:
+                        pid = d["person_id"]
+                        if pid is None:
+                            continue
+                        bi, pad = self._pipeline_tick(pid, d["emotion"], va=d.get("va"))
+                        r, t    = _read_rapport_trust(self.store, pid, self.robot_id)
+                        _kg_state[pid] = {
+                            "tier":        bi.tier,
+                            "pad_state":   pad["pad_state"],
+                            "descriptors": pad["descriptors"],
+                            "rapport":     r,
+                            "trust":       t,
+                        }
+                        if pid == last_person_id:
+                            self._last_pad_result = pad
+                            last_tier        = bi.tier
+                            last_pad_state   = pad["pad_state"]
+                            last_descriptors = pad["descriptors"]
+                            last_rapport     = r
+                            last_trust       = t
 
-                    # Pass MTCNN box so emotion model uses the same face crop
-                    emotion, e_conf = self._get_emotion(frame, box=box)
-                    last_emotion    = emotion
-                    last_e_conf     = e_conf
-
-                    if person_id is not None:
-                        bi, pad = self._pipeline_tick(person_id, emotion)
-                        last_tier        = bi.tier
-                        last_pad_state   = pad["pad_state"]
-                        last_descriptors = pad["descriptors"]
-                        last_rapport, last_trust = _read_rapport_trust(
-                            self.store, person_id, self.robot_id
-                        )
-                        pass  # tick info shown in the OpenCV overlay
-                    else:
-                        pass  # unknown face — overlay shows "(no face)"
+                    # Persist after the tick so the live viz server
+                    # (modules.graph_relationship.viz.server) can poll it within ~1s.
+                    if self.kg_path and any(d["person_id"] for d in raw_dets):
+                        self.store.save(self.kg_path)
 
                 # Clear stale chat
                 if last_user_msg and time.time() > chat_expire_t:
@@ -634,6 +928,7 @@ class WebcamKGLoop:
                         descriptors = last_descriptors,
                         rapport     = last_rapport,
                         trust       = last_trust,
+                        va          = last_va,
                         last_user_msg = last_user_msg,
                         last_verbal   = last_verbal,
                         robot_name  = self._robot_display,
@@ -647,6 +942,7 @@ class WebcamKGLoop:
                         enroll_progress  = enroll_progress,
                         enroll_total     = enroll_total,
                         llm_on          = bool(self.llm and self.llm.available),
+                        all_detections  = last_all_detections,
                     )
                     # _mute_stderr on first frame only — Qt finishes font init there
                     if tick_n <= 1:
@@ -671,11 +967,31 @@ class WebcamKGLoop:
                                 chat_expire_t  = time.time() + 45.0
                                 print(f"\n  [you]  \"{msg}\"")
                                 if self._last_pad_result and self.llm and self.llm.available:
-                                    verbal = self.llm.respond(
-                                        self._last_pad_result["system_prompt"], msg
+                                    hist = list(self._chat_history.get(
+                                        last_person_id or "", []
+                                    ))
+                                    raw_reply = self.llm.respond(
+                                        self._last_pad_result["system_prompt"],
+                                        msg,
+                                        history=hist,
                                     )
+                                    tag, verbal = _parse_llm_response(raw_reply)
                                     last_verbal = verbal
+                                    if tag:
+                                        print(f"  [tag]   [{tag}]")
+                                        if self._esp32_host:
+                                            expr = _TAG_TO_ESP32.get(tag)
+                                            if expr:
+                                                _send_esp32(expr, self._esp32_host,
+                                                            self._esp32_port)
+                                            else:
+                                                print(f"  [ESP32] no mapping for [{tag}]")
                                     print(f"  [{self._robot_display}]  \"{verbal}\"\n")
+                                    # Save to per-person history
+                                    pid_key = last_person_id or "__unknown__"
+                                    if pid_key not in self._chat_history:
+                                        self._chat_history[pid_key] = deque(maxlen=5)
+                                    self._chat_history[pid_key].append((msg, verbal))
                                 elif not (self.llm and self.llm.available):
                                     last_verbal = "[LLM not enabled — run with --llm]"
                                     print("  [chat] LLM not connected. Run with --llm.\n")
@@ -723,19 +1039,26 @@ class WebcamKGLoop:
                         input_mode  = _MODE_ENROLL
                         input_text  = ""
                         input_error = ""
+                    elif key in (ord("k"), ord("K")):
+                        _dump_kg(self.store, self.robot_id)
                     elif key in (ord("b"), ord("B")) and last_person_id:
                         _update_rapport_trust(
                             self.store, last_person_id, self.robot_id,
                             delta=0.15, verbose=True,
                         )
+                        if self.kg_path:
+                            self.store.save(self.kg_path)
                     elif key in (ord("s"), ord("S")):
                         self.face_id.save(self.faces_path)
 
         except KeyboardInterrupt:
             print("\n[WebcamLoop] Interrupted.")
         finally:
+            worker.stop()
+            worker.join(timeout=2.0)
             if self.face_id.known_people():
                 self.face_id.save(self.faces_path)
+            self.store.save(self.kg_path)
             cap.release()
             if self.show_window:
                 cv2.destroyAllWindows()
@@ -771,6 +1094,8 @@ def main() -> None:
                    help="Person name for enroll mode")
     p.add_argument("--faces",      default=_DEFAULT_FACES,
                    help=f"Face DB .npz path (default: {_DEFAULT_FACES})")
+    p.add_argument("--kg",         default=_DEFAULT_KG,
+                   help=f"KG state JSON path (default: {_DEFAULT_KG})")
     p.add_argument("--robot",      default=_DEFAULT_ROBOT,
                    choices=["chatbox", "ellebot"])
     p.add_argument("--camera",     type=int,   default=_DEFAULT_CAMERA)
@@ -789,6 +1114,10 @@ def main() -> None:
                    help="Emotion detection backend (default: hsemotion)")
     p.add_argument("--no-window",  action="store_true",
                    help="Headless — terminal output only")
+    p.add_argument("--esp32-host", default="",
+                   help="ESP32 IP address for TCP expression dispatch (blank=disabled)")
+    p.add_argument("--esp32-port", type=int, default=8888,
+                   help="ESP32 TCP port (default: 8888)")
     args = p.parse_args()
 
     if args.mode == "enroll":
@@ -806,11 +1135,14 @@ def main() -> None:
     loop = WebcamKGLoop(
         robot_id         = args.robot,
         faces_path       = args.faces,
+        kg_path          = args.kg,
         threshold        = args.threshold,
         tick_interval    = args.tick,
         llm_client       = llm,
         show_window      = not args.no_window,
         emotion_backend  = args.emotion,
+        esp32_host       = args.esp32_host,
+        esp32_port       = args.esp32_port,
     )
     loop.run(camera_index=args.camera)
 

@@ -39,7 +39,7 @@ from .schema import (
     TrustEdge,
 )
 from .store import InMemoryGraphStore
-from .kg_bridge import KGBridge, derive_tier
+from .kg_bridge import KGBridge, derive_tier, _tier_from_edges
 
 try:
     from ..pad_persona.pipeline_adapter import PADPipelineAdapter
@@ -219,6 +219,15 @@ def _edge_label(edge) -> str:
     return et
 
 
+def _conversation_path(kg_path: str) -> str:
+    """Derive the conversation sidecar path from the KG path.
+
+    kg_state.json -> kg_state_conversations.json  (same directory).
+    """
+    base, ext = os.path.splitext(kg_path)
+    return f"{base}_conversations{ext or '.json'}"
+
+
 def export_graph_json(store: InMemoryGraphStore, out_path: str) -> None:
     data = {
         "nodes": [n.model_dump(mode="json") for n in store._nodes.values()],
@@ -338,12 +347,21 @@ class Harness:
         robot_id: str = "chatbox",
         obsidian: bool = False,
         llm: Optional[LLMClient] = None,
+        kg_path: Optional[str] = None,
     ) -> None:
         self.store    = InMemoryGraphStore()
         self.bridge   = KGBridge(self.store)
         self.robot_id = robot_id
         self.obsidian = obsidian
         self.llm      = llm
+        # When set, the graph is persisted to this file after every turn so the
+        # standalone viz server (graph_relationship.viz) can poll it live.
+        self.kg_path  = kg_path
+        # Conversation transcript sidecar, keyed by person_id. Derived from
+        # kg_path (e.g. kg_state.json -> kg_state_conversations.json). The viz
+        # server serves this at /history.json for the click-to-view panel.
+        self.conv_path = _conversation_path(kg_path) if kg_path else None
+        self._conversations: dict[str, list[dict]] = {}
         self.turn_n   = 0
         self._pad_adapters: dict[str, PADPipelineAdapter] = {}
 
@@ -413,13 +431,50 @@ class Harness:
         )
 
         # 6. Verbal response — only when a message was provided and LLM is live
+        verbal: Optional[str] = None
         if user_message is not None and self.llm is not None and self.llm.available:
             display = _ROBOT_DISPLAY.get(robot_id, robot_id.title())
             verbal  = self.llm.respond(pad_result["system_prompt"], user_message)
             print(f"         {_DIM}[child]   {user_message!r}{_RST}")
             print(f"         {_BOLD}[{display}]{_RST}  {_GREEN}{verbal}{_RST}")
 
+        # 7. Persist the graph so the live viz server can pick it up within ~1s,
+        #    plus the conversation transcript sidecar for the click-to-view panel.
+        if self.kg_path:
+            self.store.save(self.kg_path)
+            self._record_conversation(person_id, robot_id, emotion,
+                                      user_message, verbal)
+
         return pad_result
+
+    def _record_conversation(
+        self,
+        person_id: str,
+        robot_id: str,
+        emotion: str,
+        child_message: Optional[str],
+        robot_reply: Optional[str],
+    ) -> None:
+        """Append this turn to the per-person transcript and rewrite the sidecar.
+
+        Skips turns with no dialogue (an emotion-only tick with no message and
+        no reply) so the panel stays a real conversation log.
+        """
+        if not self.conv_path or (not child_message and not robot_reply):
+            return
+        self._conversations.setdefault(person_id, []).append({
+            "turn": self.turn_n,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "robot": robot_id,
+            "emotion": emotion,
+            "child": child_message,
+            "reply": robot_reply,
+        })
+        try:
+            with open(self.conv_path, "w", encoding="utf-8") as fh:
+                json.dump(self._conversations, fh, indent=2)
+        except OSError as exc:
+            print(f"  [conv] could not write {self.conv_path}: {exc}")
 
     # ── Summary view ──────────────────────────────────────────────────────────
 
@@ -431,8 +486,7 @@ class Harness:
         print(f"  {'Person':<12s}  {'Tier':<10s}  {'Count':>5s}  {'Rapport':>7s}  {'Trust':>5s}")
         print("  " + "─" * 48)
         for node in sorted(persons, key=lambda n: n.id):
-            ctx  = self.store.get_person_context(node.id)
-            tier = derive_tier(ctx.relationship_edges)
+            tier = derive_tier(node.id, self.robot_id, self.store)
             rel  = _relationship_snapshot(self.store, node.id, self.robot_id)
             tc   = _TIER_COLOUR.get(tier, "")
             print(
@@ -479,6 +533,7 @@ def run_scripted(
     obsidian: bool = False,
     llm: Optional[LLMClient] = None,
     scenario: str = _DEFAULT_SCENARIO,
+    kg_path: Optional[str] = None,
 ) -> None:
     """
     Fixed proof sequence — no typing required.
@@ -487,7 +542,7 @@ def run_scripted(
     alice (close), bob (visitor), and casey (unknown) back-to-back so you
     can SEE the verbal divergence, not just the PAD numbers.
     """
-    h = Harness(robot_id=robot_id, obsidian=obsidian, llm=llm)
+    h = Harness(robot_id=robot_id, obsidian=obsidian, llm=llm, kg_path=kg_path)
 
     llm_on = llm is not None and llm.available
     display = _ROBOT_DISPLAY.get(robot_id, robot_id.title())
@@ -618,8 +673,9 @@ def run_interactive(
     obsidian: bool = False,
     llm: Optional[LLMClient] = None,
     scenario: Optional[str] = None,
+    kg_path: Optional[str] = None,
 ) -> None:
-    h       = Harness(robot_id=robot_id, obsidian=obsidian, llm=llm)
+    h       = Harness(robot_id=robot_id, obsidian=obsidian, llm=llm, kg_path=kg_path)
     llm_on  = llm is not None and llm.available
 
     print("=" * 72)
@@ -685,6 +741,8 @@ def run_interactive(
                 print()
                 continue
             seed_relationship(h.store, person_id, h.robot_id, rapport, trust)
+            if h.kg_path:
+                h.store.save(h.kg_path)
             print()
             continue
 
@@ -771,6 +829,10 @@ def main(argv: Optional[list[str]] = None) -> None:
     ap.add_argument("--scenario", default=None, metavar="TEXT",
                     help=(f"Fixed child message for every LLM turn "
                           f"(default: {_DEFAULT_SCENARIO!r})"))
+    ap.add_argument("--kg-path", default=None, metavar="FILE",
+                    help=("Persist the graph to FILE after every turn so the "
+                          "live viz server (python3 -m modules.graph_relationship."
+                          "viz.server) can poll it. e.g. --kg-path kg_state.json"))
     args = ap.parse_args(argv)
 
     # ── LLM setup ─────────────────────────────────────────────────────────────
@@ -788,10 +850,11 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     if args.scripted:
         run_scripted(robot_id=args.robot, obsidian=args.obsidian,
-                     llm=llm, scenario=scenario or _DEFAULT_SCENARIO)
+                     llm=llm, scenario=scenario or _DEFAULT_SCENARIO,
+                     kg_path=args.kg_path)
     else:
         run_interactive(robot_id=args.robot, obsidian=args.obsidian,
-                        llm=llm, scenario=scenario)
+                        llm=llm, scenario=scenario, kg_path=args.kg_path)
 
 
 if __name__ == "__main__":

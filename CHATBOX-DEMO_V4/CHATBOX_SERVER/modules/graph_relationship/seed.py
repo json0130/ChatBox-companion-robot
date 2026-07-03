@@ -47,7 +47,6 @@ from .schema import (
     HasPersonaEdge,
     HasRoleEdge,
     InterestNode,
-    KnowsEdge,
     PersonaNode,
     PersonNode,
     Provenance,
@@ -62,7 +61,6 @@ _SINGLE_ATTRS = {
     "persona": (PersonaNode, HasPersonaEdge),
     "role":    (RoleNode,    HasRoleEdge),
 }
-_CAPABILITY = (CapabilityNode, HasCapabilityEdge)
 
 
 def _slug(value: str) -> str:
@@ -137,36 +135,30 @@ def seed_from_spec(store: InMemoryGraphStore, spec_path: str) -> Dict[str, int]:
         n_nodes += 1
         n_edges += 1
 
-    # --- multi-valued: capabilities -----------------------------------------
-    NodeCls, EdgeCls = _CAPABILITY
+    # --- capabilities: ONE CapabilityNode holding all items, plus about-edges
+    #     to the topics it involves. The robot reaches shared TopicNodes THROUGH
+    #     this capability node: robot --has_capability--> Capability --about--> Topic.
+    #     resolve_topic() gives a deterministic "topic:<slug>" id so the robot's
+    #     "jazz" and a human interest's "jazz" collapse to ONE (shared) Topic.
     caps = spec.get("capabilities") or []
     if isinstance(caps, str):
         caps = [caps]
-    for value in caps:
-        value = str(value)
-        if not value:
-            continue
-        node = NodeCls(id=_attr_id(anchor_id, "capability", value), descriptor=value)
-        store.upsert_node(node)
-        store.upsert_edge(EdgeCls(
-            source_id=anchor_id, target_id=node.id, provenance=_prov(),
+    caps = [str(c) for c in caps if str(c).strip()]
+    know = [str(t) for t in (spec.get("knows_topics") or []) if str(t).strip()]
+    if caps or know:
+        cap_node = CapabilityNode(id=f"{anchor_id}:capability", items=caps)
+        store.upsert_node(cap_node)
+        store.upsert_edge(HasCapabilityEdge(
+            source_id=anchor_id, target_id=cap_node.id, provenance=_prov(),
         ))
         n_nodes += 1
         n_edges += 1
-
-    # --- robot: knows_topics -> shared TopicNode via KnowsEdge --------------
-    # resolve_topic() gives a deterministic "topic:<slug>" id so a robot's
-    # "jazz" and a human interest's "jazz" collapse to ONE Topic node. The
-    # topic node may be shared, so it is not counted as this spec's own node.
-    for value in spec.get("knows_topics") or []:
-        value = str(value)
-        if not value:
-            continue
-        topic = resolve_topic(store, value)
-        store.upsert_edge(KnowsEdge(
-            source_id=anchor_id, target_id=topic.id, provenance=_prov(),
-        ))
-        n_edges += 1
+        for topic_label in know:
+            topic = resolve_topic(store, topic_label)  # shared node, not counted
+            store.upsert_edge(AboutEdge(
+                source_id=cap_node.id, target_id=topic.id, provenance=_prov(),
+            ))
+            n_edges += 1
 
     # --- human: interests -> Interest node --about--> shared TopicNode -------
     for interest in spec.get("interests") or []:

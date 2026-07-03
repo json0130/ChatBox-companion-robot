@@ -28,20 +28,21 @@ from .schema import (
     AnyEdge,
     AttentionEdge,
     Embodiment,
-    InteractionCountEdge,
     MoodEdge,
     PersonNode,
     Provenance,
-    RapportEdge,
     RobotNode,
-    TrustEdge,
 )
 from .store import GraphStore, InMemoryGraphStore
-from .events import (
+from .interactions import (
     append_turn,
     count_person_sessions,
     count_person_turns,
-    start_session_event,
+    get_interaction,
+    get_or_create_interaction,
+    set_closeness,
+    start_session,
+    sync_interaction_count,
 )
 
 # ---------------------------------------------------------------------------
@@ -99,28 +100,17 @@ def emotion_label_to_va(label: Optional[str]) -> tuple[float, float]:
     return _EMOTION_VA.get(label.lower(), (0.0, 0.0))
 
 
-def _tier_from_edges(relationship_edges: List[AnyEdge]) -> str:
+def _tier_from_scores(rapport: float, trust: float, count: int) -> str:
     """
-    Core tier logic over a pre-fetched edge list.
-    Used by derive_tier() and by tests that build edge lists directly.
+    Core tier thresholds (unchanged behaviour).
 
-    score = (rapport.weight + trust.weight) / 2
+    score = (rapport + trust) / 2
       score > 0.70  → "close"
       score > 0.45  → "known"
       count > 5     → "known"   (even with low score — seen enough turns)
       count > 0     → "visitor"
       else          → "unknown"
     """
-    rapport = 0.0
-    trust = 0.0
-    count = 0
-    for edge in relationship_edges:
-        if edge.edge_type == "rapport":
-            rapport = edge.weight
-        elif edge.edge_type == "trust":
-            trust = edge.weight
-        elif edge.edge_type == "interaction_count":
-            count = edge.count
     score = (rapport + trust) / 2.0
     if score > 0.70:
         return "close"
@@ -133,29 +123,35 @@ def _tier_from_edges(relationship_edges: List[AnyEdge]) -> str:
     return "unknown"
 
 
+def _tier_from_edges(relationship_edges: List[AnyEdge]) -> str:
+    """Tier from a pre-fetched edge list (used by tests that build edges directly)."""
+    rapport = 0.0
+    trust = 0.0
+    count = 0
+    for edge in relationship_edges:
+        if edge.edge_type == "rapport":
+            rapport = edge.weight
+        elif edge.edge_type == "trust":
+            trust = edge.weight
+        elif edge.edge_type == "interaction_count":
+            count = edge.count
+    return _tier_from_scores(rapport, trust, count)
+
+
 def derive_tier(person_id: str, robot_id: str, store: GraphStore) -> str:
     """
-    Derive the relationship tier from the KG store.
+    Derive the relationship tier from the pair's InteractionNode.
 
-    Scoring is unchanged (_tier_from_edges); only the interaction *count* is now
-    rerouted through Event nodes rather than a direct InteractionCountEdge:
-      RapportEdge:  person → robot          (read directly)
-      TrustEdge:    person → robot          (read directly)
-      interaction count = number of the person's Event nodes (count_person_events)
-
-    A synthetic InteractionCountEdge is fed to _tier_from_edges so the pure
-    threshold logic — and its tests — stay exactly as before.
+    Closeness (rapport, trust) and the interaction count are now FIELDS on the
+    single InteractionNode — there are no direct person→robot rapport/trust
+    edges. Scoring thresholds are unchanged (_tier_from_scores).
     """
-    rapport_edge = store.get_edge(person_id, robot_id, "rapport")
-    trust_edge   = store.get_edge(person_id, robot_id, "trust")
-    edges = [e for e in (rapport_edge, trust_edge) if e is not None]
-    count = count_person_turns(store, person_id)
-    if count > 0:
-        edges.append(InteractionCountEdge(
-            source_id=robot_id, target_id=person_id,
-            provenance=_prov(robot_id), count=count,
-        ))
-    return _tier_from_edges(edges)
+    interaction = get_interaction(store, person_id, robot_id)
+    if interaction is None:
+        return "unknown"
+    return _tier_from_scores(
+        interaction.rapport, interaction.trust, interaction.interaction_count,
+    )
 
 
 def format_slow_edges(attribute_edges: List[AnyEdge]) -> str:
@@ -217,8 +213,9 @@ class KGBridge:
         self._store = store
         # One session (meetup) per person for the lifetime of this bridge.
         # A fresh bridge = a fresh run = a new session, so next-meetup turns
-        # land on a new Event node. person_id -> current session event id.
-        self._session_event: dict[str, str] = {}
+        # land on a new Session node under the pair's InteractionNode.
+        # person_id -> current session node id.
+        self._session: dict[str, str] = {}
 
     def pre_turn(
         self,
@@ -247,20 +244,13 @@ class KGBridge:
 
         ctx = self._store.get_person_context(person_id)
 
-        # Tier: derived fresh from the three KG relationship edges each turn.
+        # Tier + closeness now come from the pair's InteractionNode.
         # D is never read from the graph here.
         tier = derive_tier(person_id, robot_id, self._store)
-
-        # Read rapport / trust for prompt injection. Interaction count is
-        # rerouted through Event nodes (count_person_events), not a direct edge.
-        rapport = 0.0
-        trust = 0.0
-        for edge in ctx.relationship_edges:
-            if edge.edge_type == "rapport":
-                rapport = edge.weight
-            elif edge.edge_type == "trust":
-                trust = edge.weight
-        count = count_person_turns(self._store, person_id)
+        interaction = get_interaction(self._store, person_id, robot_id)
+        rapport = interaction.rapport if interaction else 0.0
+        trust = interaction.trust if interaction else 0.0
+        count = interaction.interaction_count if interaction else 0
 
         # Valence blend: camera is primary (0.7); graph MoodEdge softens spikes (0.3).
         # Arousal is NOT blended — only the camera frame contributes A.
@@ -296,17 +286,17 @@ class KGBridge:
         """
         Write PAD turn output to the KG.
 
-        Writes two self-attribute edges (MoodEdge, AttentionEdge) and appends
-        this turn to the current SESSION Event node linking the person and robot
-        (creating that Event on the first turn of the session). The Event REPLACES
-        the old direct InteractionCountEdge: interaction count is now the total
-        turns across a person's sessions (see derive_tier).
+        Writes two self-attribute edges (MoodEdge, AttentionEdge), then appends
+        this turn to the current SESSION under the pair's InteractionNode
+        (creating the interaction and/or session as needed) and refreshes the
+        interaction's turn count. Closeness (rapport/trust) is updated separately
+        by set_closeness — not here.
 
-        The optional emotion / child_message / reply are stored on the Event's
+        The optional emotion / child_message / reply are stored on the session's
         turn list, so the graph holds the conversation (no separate transcript).
 
-        D (Dominance) is NOT written — it is re-derived from relationship edges
-        each turn and must never be persisted as its own edge.
+        D (Dominance) is NOT written — it is re-derived each turn and must never
+        be persisted as its own edge.
         """
         if person_id is None:
             return
@@ -338,21 +328,25 @@ class KGBridge:
             ]
         )
 
-        # Reroute interaction through a per-meetup session Event. Start one on
-        # the session's first turn; append every turn to it thereafter.
-        event_id = self._session_event.get(person_id)
-        if event_id is None:
+        # Ensure the pair's InteractionNode, then append this turn to the
+        # current per-meetup session hanging under it (start one on first turn).
+        interaction = get_or_create_interaction(
+            self._store, person_id, robot_node_id, source=robot_id,
+        )
+        session_id = self._session.get(person_id)
+        if session_id is None:
             label = f"session {count_person_sessions(self._store, person_id) + 1}"
-            event = start_session_event(
-                self._store, person_id=person_id, robot_id=robot_node_id,
-                label=label, source=robot_id,
+            session = start_session(
+                self._store, interaction_id_=interaction.id, label=label, source=robot_id,
             )
-            event_id = event.id
-            self._session_event[person_id] = event_id
+            session_id = session.id
+            self._session[person_id] = session_id
         append_turn(
-            self._store, event_id=event_id,
+            self._store, session_id=session_id,
             emotion=emotion, child_message=child_message, reply=reply,
         )
+        # Keep interaction_count (total turns) in sync on the InteractionNode.
+        sync_interaction_count(self._store, person_id, robot_node_id)
 
 
 # ---------------------------------------------------------------------------
@@ -363,22 +357,12 @@ class KG:
     """
     Thin convenience wrapper for scripts and notebooks.
 
-    Methods use SET semantics (not accumulate): calling set_interaction_count(r, p, 6)
-    after set_interaction_count(r, p, 1) yields count=6, not 7.
-
-    Edge directions match the production KGBridge contract:
-      RapportEdge / TrustEdge:   person → robot
-      InteractionCountEdge:      robot  → person
+    Closeness (rapport / trust) and interaction_count are SET semantics and live
+    as fields on the pair's InteractionNode (see interactions.py).
     """
 
     def __init__(self) -> None:
         self._store = InMemoryGraphStore()
-
-    def _prov(self) -> Provenance:
-        return Provenance(
-            source="kg-facade", confidence=1.0,
-            timestamp=datetime.now(timezone.utc),
-        )
 
     def _ensure(self, person_id: str, robot_id: str) -> None:
         if self._store.get_node(person_id) is None:
@@ -391,24 +375,8 @@ class KG:
 
     def set_rapport(self, person_id: str, robot_id: str, weight: float) -> None:
         self._ensure(person_id, robot_id)
-        self._store.upsert_edge(RapportEdge(
-            source_id=person_id, target_id=robot_id,
-            provenance=self._prov(), weight=weight,
-        ))
+        set_closeness(self._store, person_id, robot_id, rapport=weight, source="kg-facade")
 
     def set_trust(self, person_id: str, robot_id: str, weight: float) -> None:
         self._ensure(person_id, robot_id)
-        self._store.upsert_edge(TrustEdge(
-            source_id=person_id, target_id=robot_id,
-            provenance=self._prov(), weight=weight,
-        ))
-
-    def set_interaction_count(self, robot_id: str, person_id: str, count: int) -> None:
-        """Set the interaction count to an exact value (delete-then-insert)."""
-        self._ensure(person_id, robot_id)
-        self._store.delete_edge(robot_id, person_id, "interaction_count")
-        if count > 0:
-            self._store.upsert_edge(InteractionCountEdge(
-                source_id=robot_id, target_id=person_id,
-                provenance=self._prov(), count=count,
-            ))
+        set_closeness(self._store, person_id, robot_id, trust=weight, source="kg-facade")

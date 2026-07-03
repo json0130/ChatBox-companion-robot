@@ -91,13 +91,28 @@ class TopicNode(BaseModel):
     node_type: Literal["topic"] = "topic"
 
 
-class EventNode(BaseModel):
-    """A conversation SESSION (a meetup) between a person and a robot.
+class InteractionNode(BaseModel):
+    """The SINGLE abstraction of a person↔robot relationship.
 
-    Events mediate the Person↔Robot connection: instead of a direct interaction
-    edge, one Event per meetup is created and BOTH participants link to it. Each
-    turn of that meetup is appended to `turns`, so the Event node itself holds
-    the session's conversation history. A later meetup creates a new Event.
+    One InteractionNode per (person, robot) pair; both link to it. It holds the
+    aggregate relationship state — how close they are and how much they have
+    interacted — and its Session subnodes hold the actual conversation history:
+
+        person --has_interaction--> Interaction <--has_interaction-- robot
+        Interaction --has_session--> Session {turns...}
+    """
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    rapport: float = 0.0
+    trust: float = 0.0
+    interaction_count: int = 0        # total turns across all sessions
+    node_type: Literal["interaction"] = "interaction"
+
+
+class SessionNode(BaseModel):
+    """A conversation SESSION (a meetup), hanging under an InteractionNode.
+
+    Each turn of the meetup is appended to `turns`, so the node holds the
+    session's conversation history. A later meetup creates a new SessionNode.
 
     `turns` entries look like:
         {"turn": int, "emotion": str|None, "child": str|None,
@@ -108,7 +123,7 @@ class EventNode(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     turn_count: int = 0
     turns: List[Dict[str, Any]] = Field(default_factory=list)
-    node_type: Literal["event"] = "event"
+    node_type: Literal["session"] = "session"
 
 
 # ---------------------------------------------------------------------------
@@ -134,9 +149,11 @@ class RoleNode(BaseModel):
 
 
 class CapabilityNode(BaseModel):
-    """Authored capability descriptor, e.g. 'tells stories'."""
+    """A robot's capabilities as ONE node holding a list of items, e.g.
+    ['tells stories', 'knows jazz']. Topic-bearing capabilities also link to a
+    shared TopicNode: capability --about--> Topic."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    descriptor: str
+    items: List[str] = Field(default_factory=list)
     node_type: Literal["capability"] = "capability"
 
 
@@ -150,8 +167,9 @@ class InterestNode(BaseModel):
 
 # Union alias used by GraphSchema
 AnyNode = Union[
-    RobotNode, PersonNode, TopicNode, EventNode,
+    RobotNode, PersonNode, TopicNode,
     PersonaNode, RoleNode, CapabilityNode, InterestNode,
+    InteractionNode, SessionNode,
 ]
 
 
@@ -274,15 +292,10 @@ IdentityEdge = Union[
 # ---------------------------------------------------------------------------
 # Topic / Interest edges  (shared-TopicNode layer)
 # ---------------------------------------------------------------------------
-# A single TopicNode is reached from both sides. The robot reaches it directly
-# (knows); the human reaches it through an Interest node (has_interest → about).
+# A single TopicNode is reached from both sides THROUGH a subnode:
+#   robot  --has_capability--> Capability --about--> Topic
+#   person --has_interest-->   Interest   --about--> Topic
 # All authored, SLOW, replace-on-newer.
-
-class KnowsEdge(EdgeBase):
-    """robot → TopicNode: the robot knows about this topic."""
-    edge_type: Literal["knows"] = "knows"
-    timescale: Timescale = Timescale.SLOW
-
 
 class HasInterestEdge(EdgeBase):
     """person → InterestNode."""
@@ -291,29 +304,36 @@ class HasInterestEdge(EdgeBase):
 
 
 class AboutEdge(EdgeBase):
-    """interest → TopicNode: the interest is about this shared topic."""
+    """subnode (Interest | Capability) → TopicNode: about this shared topic."""
     edge_type: Literal["about"] = "about"
     timescale: Timescale = Timescale.SLOW
 
 
-TopicEdge = Union[KnowsEdge, HasInterestEdge, AboutEdge]
+TopicEdge = Union[HasInterestEdge, AboutEdge]
 
 
 # ---------------------------------------------------------------------------
-# Event edges  (participant → Event)
+# Interaction / Session edges
 # ---------------------------------------------------------------------------
-# An Event node represents one conversation turn. Both the Person and the
-# Robot link to it via a ParticipatedEdge, so the two clusters connect THROUGH
-# events rather than by a direct Person↔Robot edge. The number of a person's
-# events is the rerouted "interaction count".
+# Person and Robot connect through ONE InteractionNode (has_interaction from
+# each). The interaction's Session subnodes (conversation history) hang off it
+# via has_session. This abstracts the whole relationship into one node.
 
-class ParticipatedEdge(EdgeBase):
-    """participant (Person | Robot) → EventNode: took part in a turn."""
-    edge_type: Literal["participated_in"] = "participated_in"
+class HasInteractionEdge(EdgeBase):
+    """participant (Person | Robot) → InteractionNode."""
+    edge_type: Literal["has_interaction"] = "has_interaction"
+
+
+class HasSessionEdge(EdgeBase):
+    """InteractionNode → SessionNode (a meetup's conversation)."""
+    edge_type: Literal["has_session"] = "has_session"
+
+
+InteractionEdge = Union[HasInteractionEdge, HasSessionEdge]
 
 
 AnyEdge = Union[
-    RelationshipEdge, PersonAttributeEdge, IdentityEdge, TopicEdge, ParticipatedEdge
+    RelationshipEdge, PersonAttributeEdge, IdentityEdge, TopicEdge, InteractionEdge
 ]
 
 

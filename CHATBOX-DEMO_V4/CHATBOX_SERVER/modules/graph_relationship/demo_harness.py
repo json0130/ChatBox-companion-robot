@@ -33,14 +33,11 @@ from typing import Optional
 from .schema import (
     Embodiment,
     PersonNode,
-    Provenance,
-    RapportEdge,
     RobotNode,
-    TrustEdge,
 )
 from .store import InMemoryGraphStore
 from .kg_bridge import KGBridge, derive_tier, _tier_from_edges
-from .events import count_person_turns
+from .interactions import count_person_turns, get_interaction, set_closeness
 
 try:
     from ..pad_persona.pipeline_adapter import PADPipelineAdapter
@@ -146,12 +143,11 @@ def _relationship_snapshot(
     person_id: str,
     robot_id: str,
 ) -> dict:
-    rp = store.get_edge(robot_id, person_id, "rapport")
-    tr = store.get_edge(robot_id, person_id, "trust")
-    # interaction_count is rerouted through Event nodes — count them.
+    # rapport / trust / interaction_count all live on the InteractionNode now.
+    interaction = get_interaction(store, person_id, robot_id)
     return {
-        "rapport":           rp.weight if rp else 0.0,
-        "trust":             tr.weight if tr else 0.0,
+        "rapport":           interaction.rapport if interaction else 0.0,
+        "trust":             interaction.trust if interaction else 0.0,
         "interaction_count": count_person_turns(store, person_id),
     }
 
@@ -179,8 +175,8 @@ def seed_relationship(
     """
     TEST AID — NOT production logic.
 
-    Directly writes RapportEdge and TrustEdge so the harness can push a person
-    into 'known' / 'close' tier without running enough interaction turns.
+    Sets rapport and trust on the pair's InteractionNode so the harness can push
+    a person into 'known' / 'close' tier without running enough interaction turns.
 
     Tier thresholds: score = (rapport + trust) / 2
       score > 0.70 → "close"  |  score > 0.45 → "known"
@@ -189,17 +185,8 @@ def seed_relationship(
     trust   = max(0.0, min(1.0, trust))
     _ensure_person(store, person_id)
     _ensure_robot(store, robot_id)
-    prov = Provenance(
-        source="harness:seed",
-        confidence=1.0,
-        timestamp=datetime.now(timezone.utc),
-    )
-    store.apply_delta(edges=[
-        RapportEdge(source_id=robot_id, target_id=person_id,
-                    provenance=prov, weight=rapport),
-        TrustEdge  (source_id=robot_id, target_id=person_id,
-                    provenance=prov, weight=trust),
-    ])
+    set_closeness(store, person_id, robot_id, rapport=rapport, trust=trust,
+                  source="harness:seed")
     score      = (rapport + trust) / 2.0
     tier_after = "close" if score > 0.70 else ("known" if score > 0.45 else "visitor")
     tc         = _TIER_COLOUR.get(tier_after, "")

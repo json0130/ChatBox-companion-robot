@@ -50,14 +50,14 @@ _TIMESCALE_BY_EDGE_TYPE = {
     "trust": "RELATIONSHIP",
     "disclosure_depth": "RELATIONSHIP",
     "interaction_count": "RELATIONSHIP",
-    # Event participation links person+robot through a turn (rerouted interaction).
-    "participated_in": "RELATIONSHIP",
+    # Interaction abstraction: person+robot <-> Interaction, Interaction -> Session.
+    "has_interaction": "RELATIONSHIP",
+    "has_session": "RELATIONSHIP",
     # Authored identity edges (seed.py) — SLOW, cross-session.
     "has_persona": "SLOW",
     "has_role": "SLOW",
     "has_capability": "SLOW",
     # Shared-topic layer (seed.py) — SLOW.
-    "knows": "SLOW",
     "has_interest": "SLOW",
     "about": "SLOW",
 }
@@ -67,17 +67,26 @@ _NODE_TYPE_DISPLAY = {
     "person": "Person",
     "robot": "Robot",
     "topic": "Topic",
-    "event": "Event",
     # Authored-attribute subnodes (seed.py).
     "persona": "Persona",
     "role": "Role",
     "capability": "Capability",
     "interest": "Interest",
+    # Interaction abstraction (interactions.py).
+    "interaction": "Interaction",
+    "session": "Session",
 }
 
 
 def _node_label(node: dict) -> str:
-    """Human-readable label: name (Robot), display_name (Person), label/descriptor."""
+    """Human-readable label for each node type."""
+    nt = node.get("node_type")
+    if nt == "capability":
+        items = node.get("items") or []
+        return ", ".join(str(i) for i in items) if items else "capabilities"
+    if nt == "interaction":
+        return (f"interaction  rapport {node.get('rapport', 0):.2f} · "
+                f"trust {node.get('trust', 0):.2f} · {node.get('interaction_count', 0)} turns")
     for key in ("display_name", "name", "label", "descriptor"):
         val = node.get(key)
         if val:
@@ -99,8 +108,8 @@ def _edge_weight(edge: dict) -> float:
 def transform(raw: dict) -> dict:
     """Turn the raw kg_state.json dict into {nodes:[...], edges:[...]} for the UI.
 
-    Event (session) nodes carry their `turns` transcript and `turn_count`, and
-    their label shows the turn count so the click panel can render the session.
+    Session nodes carry their `turns` transcript and `turn_count`, and their
+    label shows the turn count so the click panel can render the session.
     """
     node_ids = set()
     nodes = []
@@ -115,7 +124,7 @@ def transform(raw: dict) -> dict:
             "type": _NODE_TYPE_DISPLAY.get(node_type, "Topic"),
             "label": _node_label(n),
         }
-        if node_type == "event":
+        if node_type == "session":
             turns = n.get("turns", []) or []
             obj["turns"] = turns
             obj["turn_count"] = n.get("turn_count", len(turns))

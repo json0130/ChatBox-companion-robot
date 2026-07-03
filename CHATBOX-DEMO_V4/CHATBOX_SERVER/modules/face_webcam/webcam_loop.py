@@ -475,14 +475,11 @@ def draw_overlay(
 def _read_rapport_trust(
     store: InMemoryGraphStore, person_id: str, robot_id: str
 ) -> tuple[float, float]:
-    ctx = store.get_person_context(person_id)
-    r, t = 0.0, 0.0
-    for edge in ctx.relationship_edges:
-        if edge.edge_type == "rapport":
-            r = edge.weight
-        elif edge.edge_type == "trust":
-            t = edge.weight
-    return r, t
+    from modules.graph_relationship.interactions import get_interaction
+    interaction = get_interaction(store, person_id, robot_id)
+    if interaction is None:
+        return 0.0, 0.0
+    return interaction.rapport, interaction.trust
 
 
 def _dump_kg(store: InMemoryGraphStore, robot_id: str) -> None:
@@ -515,10 +512,8 @@ def _update_rapport_trust(
     delta: float,
     verbose: bool = False,
 ) -> None:
-    from modules.graph_relationship.schema import (
-        PersonNode, RobotNode, RapportEdge, TrustEdge, Provenance, Embodiment,
-    )
-    from datetime import datetime, timezone
+    from modules.graph_relationship.schema import PersonNode, RobotNode, Embodiment
+    from modules.graph_relationship.interactions import set_closeness
 
     if store.get_node(person_id) is None:
         store.upsert_node(PersonNode(id=person_id))
@@ -528,12 +523,9 @@ def _update_rapport_trust(
     r_cur, t_cur = _read_rapport_trust(store, person_id, robot_id)
     r_new = min(1.0, r_cur + delta)
     t_new = min(1.0, t_cur + delta)
-    prov  = Provenance(source="webcam_loop", confidence=0.8,
-                       timestamp=datetime.now(timezone.utc))
-    store.upsert_edge(RapportEdge(source_id=person_id, target_id=robot_id,
-                                  weight=r_new, provenance=prov))
-    store.upsert_edge(TrustEdge(  source_id=person_id, target_id=robot_id,
-                                  weight=t_new, provenance=prov))
+    # Closeness lives on the pair's InteractionNode.
+    set_closeness(store, person_id, robot_id, rapport=r_new, trust=t_new,
+                  source="webcam_loop")
     if verbose:
         print(f"[Boost] {person_id} → rapport={r_new:.2f}  trust={t_new:.2f}")
 

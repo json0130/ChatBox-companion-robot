@@ -27,7 +27,9 @@ from .schema import (
     MoodEdge,
 )
 from .store import InMemoryGraphStore
-from .events import count_person_sessions, count_person_turns
+from .interactions import (
+    count_person_sessions, count_person_turns, get_interaction, set_closeness,
+)
 from .kg_bridge import (
     BridgeInput,
     KGBridge,
@@ -114,45 +116,40 @@ def test_derive_tier_unknown():
 
 
 def test_derive_tier_store_based():
-    """derive_tier(person_id, robot_id, store) reads the correct edge directions."""
+    """derive_tier reads rapport/trust/count from the pair's InteractionNode."""
     store, robot, person = _make_store_with_robot_and_person()
     # Empty store → unknown
     assert derive_tier(person.id, robot.id, store) == "unknown"
-    # Add rapport + trust (person → robot direction)
-    store.upsert_edge(RapportEdge(
-        source_id=person.id, target_id=robot.id, provenance=_prov(), weight=0.8))
-    store.upsert_edge(TrustEdge(
-        source_id=person.id, target_id=robot.id, provenance=_prov(), weight=0.75))
+    # Set rapport + trust on the InteractionNode
+    set_closeness(store, person.id, robot.id, rapport=0.8, trust=0.75)
     assert derive_tier(person.id, robot.id, store) == "close"
-    # Add count (robot → person direction)
-    store.upsert_edge(InteractionCountEdge(
-        source_id=robot.id, target_id=person.id, provenance=_prov(), count=3))
-    assert derive_tier(person.id, robot.id, store) == "close"  # score still wins
 
 
 # ---------------------------------------------------------------------------
-# post_turn — mood + attention self-edges, interaction rerouted to an Event
+# post_turn — mood + attention self-edges, interaction rerouted to a session
 # ---------------------------------------------------------------------------
 
-def test_post_turn_writes_mood_attention_and_session_event():
+def test_post_turn_writes_mood_attention_and_session():
     store, robot, person = _make_store_with_robot_and_person()
     bridge = KGBridge(store)
 
     bridge.post_turn(person.id, "chatbox", {"pad_state": (0.5, 0.3, 0.2)})
 
-    # interaction is rerouted to a session Event; person context now holds
-    # exactly the two self-attribute edges.
+    # interaction is abstracted into an Interaction+Session; person context
+    # still holds exactly the two self-attribute edges.
     ctx = store.get_person_context(person.id)
     all_edges = ctx.person_attribute_edges + ctx.relationship_edges
     assert {e.edge_type for e in all_edges} == {"mood", "attention"}
 
-    # Exactly one session Event was created (linking person + robot), holding
-    # this one turn.
-    events = [n for n in store._nodes.values() if n.node_type == "event"]
-    assert len(events) == 1
+    # One Interaction node and one Session under it, holding this one turn.
+    interactions = [n for n in store._nodes.values() if n.node_type == "interaction"]
+    sessions = [n for n in store._nodes.values() if n.node_type == "session"]
+    assert len(interactions) == 1
+    assert len(sessions) == 1
     assert count_person_sessions(store, person.id) == 1
     assert count_person_turns(store, person.id) == 1
-    assert events[0].turn_count == 1
+    assert sessions[0].turn_count == 1
+    assert interactions[0].interaction_count == 1
 
 
 def test_post_turn_provenance_source_is_robot_id():

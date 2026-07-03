@@ -68,13 +68,23 @@ def _person_topic_ids(store: GraphStore, person_id: str) -> set:
     return ids
 
 
-def shared_topics(store: GraphStore, person_id: str, robot_id: str) -> List[str]:
-    """Labels of topics the robot KNOWS that the person reaches via an interest.
+def robot_topics(store: GraphStore, robot_id: str) -> List[TopicNode]:
+    """Topics the robot reaches via has_capability -> capability -> about -> topic."""
+    seen: dict = {}
+    for capability in _neighbors_of_type(store, robot_id, "has_capability", "capability"):
+        for topic in _neighbors_of_type(store, capability.id, "about", "topic"):
+            seen[topic.id] = topic
+    return list(seen.values())
 
-    Traverses person -> interest -> topic (one extra hop) intersected with
-    robot -> knows -> topic. Index-based; O(neighbours), no full scan.
+
+def shared_topics(store: GraphStore, person_id: str, robot_id: str) -> List[str]:
+    """Labels of topics BOTH sides reach — the robot via its capability and the
+    person via an interest — i.e. the shared TopicNodes.
+
+    Traverses robot -> capability -> about -> topic intersected with
+    person -> interest -> about -> topic. Index-based; O(neighbours), no scan.
     """
-    robot_topics = {t.id: t for t in _neighbors_of_type(store, robot_id, "knows", "topic")}
+    robot_by_id = {t.id: t for t in robot_topics(store, robot_id)}
     person_ids = _person_topic_ids(store, person_id)
-    shared_ids = person_ids & set(robot_topics)
-    return sorted(robot_topics[tid].label for tid in shared_ids)
+    shared_ids = person_ids & set(robot_by_id)
+    return sorted(robot_by_id[tid].label for tid in shared_ids)

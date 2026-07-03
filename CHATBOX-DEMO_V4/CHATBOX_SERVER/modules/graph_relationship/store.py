@@ -240,6 +240,17 @@ class InMemoryGraphStore(GraphStore):
         edge_id = self._endpoint_type_index.get((src_id, dst_id, edge_type))
         return self._edges.get(edge_id) if edge_id else None
 
+    def delete_edge(self, src_id: str, dst_id: str, edge_type: str) -> bool:
+        """Remove one edge by (src, dst, type). Returns True if it existed."""
+        key = (src_id, dst_id, edge_type)
+        edge_id = self._endpoint_type_index.pop(key, None)
+        if edge_id is None:
+            return False
+        edge = self._edges.pop(edge_id)
+        self._node_edge_index[edge.source_id].discard(edge_id)
+        self._node_edge_index[edge.target_id].discard(edge_id)
+        return True
+
     def query_neighbors(
         self, node_id: str, edge_type: Optional[str] = None
     ) -> List[Tuple[AnyEdge, AnyNode]]:
@@ -279,6 +290,39 @@ class InMemoryGraphStore(GraphStore):
             self.upsert_node(node)
         for edge in edges or []:
             self.upsert_edge(edge)
+
+    # -- JSON persistence -----------------------------------------------------
+
+    def save(self, path: str) -> None:
+        """Serialise the full graph to a JSON file using Pydantic model_dump."""
+        import json
+        data = {
+            "nodes": [n.model_dump(mode="json") for n in self._nodes.values()],
+            "edges": [e.model_dump(mode="json") for e in self._edges.values()],
+        }
+        with open(path, "w") as fh:
+            json.dump(data, fh, indent=2, default=str)
+        print(f"[KG] saved {len(self._nodes)} nodes, {len(self._edges)} edges → {path}")
+
+    def load(self, path: str) -> bool:
+        """Load a JSON file written by save(). Returns True on success."""
+        import json, os
+        if not os.path.exists(path):
+            return False
+        with open(path) as fh:
+            data = json.load(fh)
+        for nd in data.get("nodes", []):
+            node = _node_adapter.validate_python(nd)
+            self._nodes[node.id] = node
+        for ed in data.get("edges", []):
+            edge = _edge_adapter.validate_python(ed)
+            self._edges[edge.id] = edge
+            key = (edge.source_id, edge.target_id, edge.edge_type)
+            self._endpoint_type_index[key] = edge.id
+            self._node_edge_index[edge.source_id].add(edge.id)
+            self._node_edge_index[edge.target_id].add(edge.id)
+        print(f"[KG] loaded {len(self._nodes)} nodes, {len(self._edges)} edges ← {path}")
+        return True
 
 
 # ---------------------------------------------------------------------------

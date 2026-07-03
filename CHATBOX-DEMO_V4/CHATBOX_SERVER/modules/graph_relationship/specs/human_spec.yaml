@@ -4,3 +4,7 @@
 id: jay
 name: Jay
 persona: "curious, talkative"
+role: "student"
+interests:                 # person -> Interest -> (about) -> shared TopicNode
+  - label: music
+    topics: [jazz]

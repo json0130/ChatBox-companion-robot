@@ -105,13 +105,13 @@
     <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Event (triangle)</div>
     <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Persona (hexagon)</div>
     <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Role (pentagon)</div>
-    <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Style (star)</div>
     <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Capability (plus)</div>
+    <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Interest (star)</div>
   </div>
   <div class="legend-section">
     <div class="legend-title">Edge timescale → colour</div>
     <div class="legend-row"><span class="swatch-line" style="border-color:var(--fast)"></span>FAST — mood / attention / topic</div>
-    <div class="legend-row"><span class="swatch-line" style="border-color:var(--slow)"></span>SLOW — trait / pref / persona·role·style·capability</div>
+    <div class="legend-row"><span class="swatch-line" style="border-color:var(--slow)"></span>SLOW — persona·role·capability · interest·about·knows</div>
     <div class="legend-row"><span class="swatch-line" style="border-color:var(--relationship)"></span>RELATIONSHIP — rapport / trust / …</div>
   </div>
   <div class="legend-section muted" style="font-size:11px">line thickness = weight · hover for value</div>
@@ -161,13 +161,13 @@ function shapePath(type) {
     case "Event":      return {tag:"path",  attrs:{d:`M0,${-R*1.3} L${R*1.2},${R} L${-R*1.2},${R} Z`}};
     case "Persona":    return {tag:"path",  attrs:{d: polyD(6, R*1.2)}};           // hexagon
     case "Role":       return {tag:"path",  attrs:{d: polyD(5, R*1.25)}};          // pentagon
-    case "Style":      return {tag:"path",  attrs:{d: starD(5, R*1.45, R*0.6)}};   // star
     case "Capability": return {tag:"path",  attrs:{d: plusD(R*1.25, R*0.42)}};     // plus
+    case "Interest":   return {tag:"path",  attrs:{d: starD(5, R*1.45, R*0.6)}};   // star
     default:           return {tag:"circle",attrs:{r:R}};  // Person
   }
 }
 document.querySelectorAll("#legend .shape").forEach((svg, i) => {
-  const type = ["Person","Robot","Topic","Event","Persona","Role","Style","Capability"][i];
+  const type = ["Person","Robot","Topic","Event","Persona","Role","Capability","Interest"][i];
   const s = shapePath(type);
   const el = document.createElementNS("http://www.w3.org/2000/svg", s.tag);
   for (const [k,v] of Object.entries(s.attrs)) el.setAttribute(k, v);

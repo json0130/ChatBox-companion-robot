@@ -5,7 +5,8 @@ name: ChatBox
 embodiment: CAT          # one of the schema Embodiment enum values (CAT | ELEPHANT)
 persona: "introverted, shy"
 role: "companion"
-style: "warm, brief"
 capabilities:
   - "tells stories"
   - "knows jazz"
+knows_topics:            # -> KnowsEdge robot -> shared TopicNode
+  - jazz

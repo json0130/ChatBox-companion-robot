@@ -133,13 +133,6 @@ class RoleNode(BaseModel):
     node_type: Literal["role"] = "role"
 
 
-class StyleNode(BaseModel):
-    """Authored conversational-style descriptor, e.g. 'warm, brief'."""
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    descriptor: str
-    node_type: Literal["style"] = "style"
-
-
 class CapabilityNode(BaseModel):
     """Authored capability descriptor, e.g. 'tells stories'."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -147,10 +140,18 @@ class CapabilityNode(BaseModel):
     node_type: Literal["capability"] = "capability"
 
 
+class InterestNode(BaseModel):
+    """A human's interest area, e.g. 'music'. Bridges a person to a shared
+    TopicNode: person --has_interest--> Interest --about--> Topic."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    label: str
+    node_type: Literal["interest"] = "interest"
+
+
 # Union alias used by GraphSchema
 AnyNode = Union[
     RobotNode, PersonNode, TopicNode, EventNode,
-    PersonaNode, RoleNode, StyleNode, CapabilityNode,
+    PersonaNode, RoleNode, CapabilityNode, InterestNode,
 ]
 
 
@@ -259,12 +260,6 @@ class HasRoleEdge(EdgeBase):
     timescale: Timescale = Timescale.SLOW
 
 
-class HasStyleEdge(EdgeBase):
-    """anchor → StyleNode."""
-    edge_type: Literal["has_style"] = "has_style"
-    timescale: Timescale = Timescale.SLOW
-
-
 class HasCapabilityEdge(EdgeBase):
     """anchor → CapabilityNode."""
     edge_type: Literal["has_capability"] = "has_capability"
@@ -272,8 +267,36 @@ class HasCapabilityEdge(EdgeBase):
 
 
 IdentityEdge = Union[
-    HasPersonaEdge, HasRoleEdge, HasStyleEdge, HasCapabilityEdge
+    HasPersonaEdge, HasRoleEdge, HasCapabilityEdge
 ]
+
+
+# ---------------------------------------------------------------------------
+# Topic / Interest edges  (shared-TopicNode layer)
+# ---------------------------------------------------------------------------
+# A single TopicNode is reached from both sides. The robot reaches it directly
+# (knows); the human reaches it through an Interest node (has_interest → about).
+# All authored, SLOW, replace-on-newer.
+
+class KnowsEdge(EdgeBase):
+    """robot → TopicNode: the robot knows about this topic."""
+    edge_type: Literal["knows"] = "knows"
+    timescale: Timescale = Timescale.SLOW
+
+
+class HasInterestEdge(EdgeBase):
+    """person → InterestNode."""
+    edge_type: Literal["has_interest"] = "has_interest"
+    timescale: Timescale = Timescale.SLOW
+
+
+class AboutEdge(EdgeBase):
+    """interest → TopicNode: the interest is about this shared topic."""
+    edge_type: Literal["about"] = "about"
+    timescale: Timescale = Timescale.SLOW
+
+
+TopicEdge = Union[KnowsEdge, HasInterestEdge, AboutEdge]
 
 
 # ---------------------------------------------------------------------------
@@ -290,7 +313,7 @@ class ParticipatedEdge(EdgeBase):
 
 
 AnyEdge = Union[
-    RelationshipEdge, PersonAttributeEdge, IdentityEdge, ParticipatedEdge
+    RelationshipEdge, PersonAttributeEdge, IdentityEdge, TopicEdge, ParticipatedEdge
 ]
 
 

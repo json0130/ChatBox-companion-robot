@@ -39,26 +39,28 @@ except ImportError:  # pragma: no cover - environment dependent
     _HAVE_YAML = False
 
 from .schema import (
+    AboutEdge,
     CapabilityNode,
     Embodiment,
     HasCapabilityEdge,
+    HasInterestEdge,
     HasPersonaEdge,
     HasRoleEdge,
-    HasStyleEdge,
+    InterestNode,
+    KnowsEdge,
     PersonaNode,
     PersonNode,
     Provenance,
     RoleNode,
     RobotNode,
-    StyleNode,
 )
 from .store import InMemoryGraphStore
+from .topics import interest_id, resolve_topic
 
 # kind -> (NodeClass, EdgeClass).  Order fixes the seeding order.
 _SINGLE_ATTRS = {
     "persona": (PersonaNode, HasPersonaEdge),
     "role":    (RoleNode,    HasRoleEdge),
-    "style":   (StyleNode,   HasStyleEdge),
 }
 _CAPABILITY = (CapabilityNode, HasCapabilityEdge)
 
@@ -151,6 +153,44 @@ def seed_from_spec(store: InMemoryGraphStore, spec_path: str) -> Dict[str, int]:
         ))
         n_nodes += 1
         n_edges += 1
+
+    # --- robot: knows_topics -> shared TopicNode via KnowsEdge --------------
+    # resolve_topic() gives a deterministic "topic:<slug>" id so a robot's
+    # "jazz" and a human interest's "jazz" collapse to ONE Topic node. The
+    # topic node may be shared, so it is not counted as this spec's own node.
+    for value in spec.get("knows_topics") or []:
+        value = str(value)
+        if not value:
+            continue
+        topic = resolve_topic(store, value)
+        store.upsert_edge(KnowsEdge(
+            source_id=anchor_id, target_id=topic.id, provenance=_prov(),
+        ))
+        n_edges += 1
+
+    # --- human: interests -> Interest node --about--> shared TopicNode -------
+    for interest in spec.get("interests") or []:
+        if isinstance(interest, str):
+            interest = {"label": interest, "topics": []}
+        label = str(interest.get("label", "")).strip()
+        if not label:
+            continue
+        inode = InterestNode(id=interest_id(anchor_id, label), label=label)
+        store.upsert_node(inode)
+        store.upsert_edge(HasInterestEdge(
+            source_id=anchor_id, target_id=inode.id, provenance=_prov(),
+        ))
+        n_nodes += 1
+        n_edges += 1
+        for topic_label in interest.get("topics") or []:
+            topic_label = str(topic_label)
+            if not topic_label:
+                continue
+            topic = resolve_topic(store, topic_label)
+            store.upsert_edge(AboutEdge(
+                source_id=inode.id, target_id=topic.id, provenance=_prov(),
+            ))
+            n_edges += 1
 
     print(f"[seed] {os.path.basename(spec_path)}: anchor={anchor_id} "
           f"({'robot' if is_robot else 'person'})  +{n_nodes} nodes, +{n_edges} edges")

@@ -55,8 +55,11 @@ _TIMESCALE_BY_EDGE_TYPE = {
     # Authored identity edges (seed.py) — SLOW, cross-session.
     "has_persona": "SLOW",
     "has_role": "SLOW",
-    "has_style": "SLOW",
     "has_capability": "SLOW",
+    # Shared-topic layer (seed.py) — SLOW.
+    "knows": "SLOW",
+    "has_interest": "SLOW",
+    "about": "SLOW",
 }
 
 # node_type -> display type (frontend maps this to a shape)
@@ -68,8 +71,8 @@ _NODE_TYPE_DISPLAY = {
     # Authored-attribute subnodes (seed.py).
     "persona": "Persona",
     "role": "Role",
-    "style": "Style",
     "capability": "Capability",
+    "interest": "Interest",
 }
 
 

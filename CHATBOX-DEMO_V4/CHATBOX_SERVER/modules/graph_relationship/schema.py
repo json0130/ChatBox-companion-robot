@@ -85,9 +85,15 @@ class PersonNode(BaseModel):
 
 
 class TopicNode(BaseModel):
-    """A concept or subject that a person engages with."""
+    """A concept or subject that a person engages with.
+
+    `notes` accumulates short per-person conversation summaries about this topic
+    (extracted from sessions), so the topic node holds a summary of interactions:
+        {"person": str, "text": str, "ts": iso8601}
+    """
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     label: str
+    notes: List[Dict[str, Any]] = Field(default_factory=list)
     node_type: Literal["topic"] = "topic"
 
 
@@ -149,12 +155,20 @@ class RoleNode(BaseModel):
 
 
 class CapabilityNode(BaseModel):
-    """A robot's capabilities as ONE node holding a list of items, e.g.
-    ['tells stories', 'knows jazz']. Topic-bearing capabilities also link to a
-    shared TopicNode: capability --about--> Topic."""
+    """A robot's capability HUB (one per robot). The robot links here via
+    has_capability; each individual capability hangs off it as a SkillNode via
+    has_skill:  robot --has_capability--> Capability --has_skill--> Skill."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    items: List[str] = Field(default_factory=list)
+    label: str = "capabilities"
     node_type: Literal["capability"] = "capability"
+
+
+class SkillNode(BaseModel):
+    """One individual robot capability, e.g. 'tells stories' or 'knows jazz'.
+    Topic-bearing skills link to a shared TopicNode: skill --about--> Topic."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    label: str
+    node_type: Literal["skill"] = "skill"
 
 
 class InterestNode(BaseModel):
@@ -168,7 +182,7 @@ class InterestNode(BaseModel):
 # Union alias used by GraphSchema
 AnyNode = Union[
     RobotNode, PersonNode, TopicNode,
-    PersonaNode, RoleNode, CapabilityNode, InterestNode,
+    PersonaNode, RoleNode, CapabilityNode, SkillNode, InterestNode,
     InteractionNode, SessionNode,
 ]
 
@@ -279,13 +293,19 @@ class HasRoleEdge(EdgeBase):
 
 
 class HasCapabilityEdge(EdgeBase):
-    """anchor → CapabilityNode."""
+    """robot → CapabilityNode (the capability hub)."""
     edge_type: Literal["has_capability"] = "has_capability"
     timescale: Timescale = Timescale.SLOW
 
 
+class HasSkillEdge(EdgeBase):
+    """CapabilityNode (hub) → SkillNode (one individual capability)."""
+    edge_type: Literal["has_skill"] = "has_skill"
+    timescale: Timescale = Timescale.SLOW
+
+
 IdentityEdge = Union[
-    HasPersonaEdge, HasRoleEdge, HasCapabilityEdge
+    HasPersonaEdge, HasRoleEdge, HasCapabilityEdge, HasSkillEdge
 ]
 
 

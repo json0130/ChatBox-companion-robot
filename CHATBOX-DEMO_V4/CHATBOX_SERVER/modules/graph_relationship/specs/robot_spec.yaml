@@ -9,6 +9,9 @@ capabilities:
   - "tells stories"
   - "knows jazz"
   - "knows about space"
+  - "knows about coding"
+  - "good at math"
+
 knows_topics:            # capability --about--> shared TopicNode
   - jazz
   - space

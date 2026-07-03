@@ -57,6 +57,7 @@ _TIMESCALE_BY_EDGE_TYPE = {
     "has_persona": "SLOW",
     "has_role": "SLOW",
     "has_capability": "SLOW",
+    "has_skill": "SLOW",
     # Shared-topic layer (seed.py) — SLOW.
     "has_interest": "SLOW",
     "about": "SLOW",
@@ -70,7 +71,8 @@ _NODE_TYPE_DISPLAY = {
     # Authored-attribute subnodes (seed.py).
     "persona": "Persona",
     "role": "Role",
-    "capability": "Capability",
+    "capability": "Capability",   # hub
+    "skill": "Skill",             # individual capability
     "interest": "Interest",
     # Interaction abstraction (interactions.py).
     "interaction": "Interaction",
@@ -81,9 +83,6 @@ _NODE_TYPE_DISPLAY = {
 def _node_label(node: dict) -> str:
     """Human-readable label for each node type."""
     nt = node.get("node_type")
-    if nt == "capability":
-        items = node.get("items") or []
-        return ", ".join(str(i) for i in items) if items else "capabilities"
     if nt == "interaction":
         return (f"interaction  rapport {node.get('rapport', 0):.2f} · "
                 f"trust {node.get('trust', 0):.2f} · {node.get('interaction_count', 0)} turns")
@@ -129,6 +128,11 @@ def transform(raw: dict) -> dict:
             obj["turns"] = turns
             obj["turn_count"] = n.get("turn_count", len(turns))
             obj["label"] = f"{obj['label']} ({obj['turn_count']} turns)"
+        elif node_type == "topic":
+            notes = n.get("notes", []) or []
+            obj["notes"] = notes
+            if notes:
+                obj["label"] = f"{obj['label']} ({len(notes)})"
         nodes.append(obj)
 
     edges = []

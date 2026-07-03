@@ -44,12 +44,12 @@ def test_normalize_clamps_deltas():
 
 def test_normalize_dedupes_and_shapes_interests():
     u = normalize({"interests": [
-        {"label": "Music", "topics": ["jazz", "jazz", "piano"]},
+        {"label": "Music", "topics": ["jazz", "jazz", "piano"], "summary": "loves jazz"},
         {"label": "music", "topics": []},        # duplicate label (case-insensitive)
         {"label": "", "topics": ["x"]},          # empty label dropped
         "not a dict",                             # ignored
     ]})
-    assert u.interests == [("Music", ["jazz", "piano"])]
+    assert u.interests == [("Music", ["jazz", "piano"], "loves jazz")]
 
 
 def test_normalize_bad_input_is_empty():
@@ -73,7 +73,7 @@ def test_extract_empty_transcript_skips_llm():
 
 def test_apply_update_writes_closeness_and_interest():
     store = _store_with_pair()
-    update = KnowledgeUpdate(interests=[("music", ["jazz"])],
+    update = KnowledgeUpdate(interests=[("music", ["jazz"], "loves jazz piano")],
                              rapport_delta=0.1, trust_delta=0.05)
     summary = apply_update(store, "jay", "chatbox", update)
 
@@ -81,20 +81,28 @@ def test_apply_update_writes_closeness_and_interest():
     assert abs(inter.rapport - 0.1) < 1e-9 and abs(inter.trust - 0.05) < 1e-9
     assert [(i.label, [t.label for t in ts]) for i, ts in person_interests(store, "jay")] \
         == [("music", ["jazz"])]
-    assert summary["interests_added"] == [("music", ["jazz"])]
+    assert summary["interests_added"] == [("music", ["jazz"], "loves jazz piano")]
+    # the summary is attached as a note on the jazz topic
+    jazz = store.get_node("topic:jazz")
+    assert jazz.notes and jazz.notes[0]["person"] == "jay"
+    assert jazz.notes[0]["text"] == "loves jazz piano"
 
 
 def test_extracted_interest_shares_robot_topic():
     """An extracted interest that matches the robot's capability topic is shared."""
     store = _store_with_pair()
-    # robot knows jazz via its capability
-    from .schema import CapabilityNode, HasCapabilityEdge, AboutEdge, Provenance
+    # robot knows jazz via capability(hub) -> skill -> about -> topic
+    from .schema import (CapabilityNode, HasCapabilityEdge, HasSkillEdge,
+                         SkillNode, AboutEdge, Provenance)
     from .topics import resolve_topic
     prov = Provenance(source="t", confidence=1.0)
-    cap = CapabilityNode(id="chatbox:capability", items=["knows jazz"])
-    store.upsert_node(cap)
-    store.upsert_edge(HasCapabilityEdge(source_id="chatbox", target_id=cap.id, provenance=prov))
-    store.upsert_edge(AboutEdge(source_id=cap.id, target_id=resolve_topic(store, "jazz").id, provenance=prov))
+    hub = CapabilityNode(id="chatbox:capability", label="capabilities")
+    store.upsert_node(hub)
+    store.upsert_edge(HasCapabilityEdge(source_id="chatbox", target_id=hub.id, provenance=prov))
+    skill = SkillNode(id="chatbox:skill:knows-jazz", label="knows jazz")
+    store.upsert_node(skill)
+    store.upsert_edge(HasSkillEdge(source_id=hub.id, target_id=skill.id, provenance=prov))
+    store.upsert_edge(AboutEdge(source_id=skill.id, target_id=resolve_topic(store, "jazz").id, provenance=prov))
 
     llm = _fake_llm('{"interests":[{"label":"music","topics":["jazz"]}],'
                     '"rapport_delta":0.1,"trust_delta":0.0}')

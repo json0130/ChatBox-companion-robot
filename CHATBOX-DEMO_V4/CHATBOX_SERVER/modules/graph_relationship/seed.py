@@ -46,15 +46,17 @@ from .schema import (
     HasInterestEdge,
     HasPersonaEdge,
     HasRoleEdge,
+    HasSkillEdge,
     InterestNode,
     PersonaNode,
     PersonNode,
     Provenance,
     RoleNode,
     RobotNode,
+    SkillNode,
 )
 from .store import InMemoryGraphStore
-from .topics import interest_id, resolve_topic
+from .topics import interest_id, normalize_label, resolve_topic
 
 # kind -> (NodeClass, EdgeClass).  Order fixes the seeding order.
 _SINGLE_ATTRS = {
@@ -135,29 +137,65 @@ def seed_from_spec(store: InMemoryGraphStore, spec_path: str) -> Dict[str, int]:
         n_nodes += 1
         n_edges += 1
 
-    # --- capabilities: ONE CapabilityNode holding all items, plus about-edges
-    #     to the topics it involves. The robot reaches shared TopicNodes THROUGH
-    #     this capability node: robot --has_capability--> Capability --about--> Topic.
-    #     resolve_topic() gives a deterministic "topic:<slug>" id so the robot's
-    #     "jazz" and a human interest's "jazz" collapse to ONE (shared) Topic.
+    # --- capabilities: a hub CapabilityNode with one SkillNode per capability,
+    #     each topic-bearing skill linking to a shared Topic:
+    #       robot --has_capability--> Capability(hub) --has_skill--> Skill --about--> Topic
+    #     A capability item may be a plain string, or {label, topics: [...]}.
+    #     Top-level `knows_topics` are attached to the skill whose label mentions
+    #     them, else to a new "knows <topic>" skill. resolve_topic() gives a
+    #     deterministic "topic:<slug>" id so robot + human topics collapse to ONE.
     caps = spec.get("capabilities") or []
-    if isinstance(caps, str):
+    if isinstance(caps, (str, dict)):
         caps = [caps]
-    caps = [str(c) for c in caps if str(c).strip()]
     know = [str(t) for t in (spec.get("knows_topics") or []) if str(t).strip()]
     if caps or know:
-        cap_node = CapabilityNode(id=f"{anchor_id}:capability", items=caps)
-        store.upsert_node(cap_node)
+        hub = CapabilityNode(id=f"{anchor_id}:capability", label="capabilities")
+        store.upsert_node(hub)
         store.upsert_edge(HasCapabilityEdge(
-            source_id=anchor_id, target_id=cap_node.id, provenance=_prov(),
-        ))
+            source_id=anchor_id, target_id=hub.id, provenance=_prov()))
         n_nodes += 1
         n_edges += 1
-        for topic_label in know:
+
+        skills_by_norm: Dict[str, Any] = {}
+
+        def _add_skill(label: str) -> Any:
+            skill = SkillNode(id=f"{anchor_id}:skill:{_slug(label)}", label=label)
+            store.upsert_node(skill)
+            store.upsert_edge(HasSkillEdge(
+                source_id=hub.id, target_id=skill.id, provenance=_prov()))
+            skills_by_norm[normalize_label(label)] = skill
+            return skill
+
+        def _skill_about(skill: Any, topic_label: str) -> None:
             topic = resolve_topic(store, topic_label)  # shared node, not counted
             store.upsert_edge(AboutEdge(
-                source_id=cap_node.id, target_id=topic.id, provenance=_prov(),
-            ))
+                source_id=skill.id, target_id=topic.id, provenance=_prov()))
+
+        for item in caps:
+            if isinstance(item, dict):
+                label = str(item.get("label", "")).strip()
+                item_topics = [str(t) for t in (item.get("topics") or []) if str(t).strip()]
+            else:
+                label = str(item).strip()
+                item_topics = []
+            if not label:
+                continue
+            skill = _add_skill(label)
+            n_nodes += 1
+            n_edges += 1
+            for tl in item_topics:
+                _skill_about(skill, tl)
+                n_edges += 1
+
+        # Top-level knows_topics: attach to a matching skill, else a new one.
+        for tl in know:
+            ntl = normalize_label(tl)
+            match = next((s for norm, s in skills_by_norm.items() if ntl in norm), None)
+            if match is None:
+                match = _add_skill(f"knows {tl}")
+                n_nodes += 1
+                n_edges += 1
+            _skill_about(match, tl)
             n_edges += 1
 
     # --- human: interests -> Interest node --about--> shared TopicNode -------

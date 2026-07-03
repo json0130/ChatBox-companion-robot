@@ -216,7 +216,7 @@ def run_session_extraction(h, llm) -> None:
             h.store, pid, h.robot_id, turns, llm.respond, source="extraction")
         ints = s["interests_added"]
         int_str = ("  interests: " + ", ".join(
-            f"{lab}→{'/'.join(ts)}" if ts else lab for lab, ts in ints)
+            f"{lab}→{'/'.join(ts)}" if ts else lab for lab, ts, _sm in ints)
         ) if ints else "  (no new interests)"
         print(f"  {_GREEN}{pid}{_RST}: Δrapport {s['rapport_delta']:+.2f}"
               f"  Δtrust {s['trust_delta']:+.2f}{int_str}")

@@ -106,7 +106,8 @@
     <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Session (triangle)</div>
     <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Persona (hexagon)</div>
     <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Role (pentagon)</div>
-    <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Capability (plus)</div>
+    <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Capability hub (plus)</div>
+    <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Skill (pill)</div>
     <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Interest (star)</div>
   </div>
   <div class="legend-section">
@@ -116,7 +117,7 @@
     <div class="legend-row"><span class="swatch-line" style="border-color:var(--relationship)"></span>RELATIONSHIP — has_interaction / has_session</div>
   </div>
   <div class="legend-section muted" style="font-size:11px">line thickness = weight · hover for value</div>
-  <div class="legend-section muted" style="font-size:11px">click a session (triangle) → conversation history</div>
+  <div class="legend-section muted" style="font-size:11px">click a session → transcript · a topic → summaries</div>
 </div>
 
 <div id="convo" class="panel">
@@ -163,13 +164,14 @@ function shapePath(type) {
     case "Interaction": return {tag:"path",  attrs:{d: polyD(8, R*1.5)}};           // octagon (hub)
     case "Persona":     return {tag:"path",  attrs:{d: polyD(6, R*1.2)}};           // hexagon
     case "Role":        return {tag:"path",  attrs:{d: polyD(5, R*1.25)}};          // pentagon
-    case "Capability":  return {tag:"path",  attrs:{d: plusD(R*1.25, R*0.42)}};     // plus
+    case "Capability":  return {tag:"path",  attrs:{d: plusD(R*1.25, R*0.42)}};     // plus (hub)
+    case "Skill":       return {tag:"rect",  attrs:{x:-R*1.5, y:-R*0.7, width:3*R, height:1.4*R, rx:4}}; // pill
     case "Interest":    return {tag:"path",  attrs:{d: starD(5, R*1.45, R*0.6)}};   // star
     default:            return {tag:"circle",attrs:{r:R}};  // Person
   }
 }
 document.querySelectorAll("#legend .shape").forEach((svg, i) => {
-  const type = ["Person","Robot","Topic","Interaction","Session","Persona","Role","Capability","Interest"][i];
+  const type = ["Person","Robot","Topic","Interaction","Session","Persona","Role","Capability","Skill","Interest"][i];
   const s = shapePath(type);
   const el = document.createElementNS("http://www.w3.org/2000/svg", s.tag);
   for (const [k,v] of Object.entries(s.attrs)) el.setAttribute(k, v);
@@ -212,10 +214,11 @@ function update(graph) {
     if (nodeById.has(n.id)) {
       const cur = nodeById.get(n.id);
       cur.type = n.type; cur.label = n.label;   // refresh mutable fields
-      cur.turns = n.turns;                       // event session transcript (if any)
+      cur.turns = n.turns;                       // session transcript (if any)
+      cur.notes = n.notes;                       // topic conversation summaries (if any)
     } else {
       nodeById.set(n.id, {
-        id: n.id, type: n.type, label: n.label, turns: n.turns,
+        id: n.id, type: n.type, label: n.label, turns: n.turns, notes: n.notes,
         x: width/2 + (Math.random()-0.5)*80,
         y: height/2 + (Math.random()-0.5)*80,
       });
@@ -334,9 +337,8 @@ const titleEl   = document.getElementById("convo-title");
 const bodyEl    = document.getElementById("convo-body");
 
 function openConvo(d) {
-  // Conversation lives on session (Event) nodes only — clicking a person,
-  // robot or attribute node does not open the panel.
-  if (!d.turns) { closeConvo(); return; }
+  // Panel opens for session nodes (transcript) and topic nodes (summaries).
+  if (!d.turns && !d.notes) { closeConvo(); return; }
   selectedId = d.id;
   gNodes.selectAll("g.node").classed("selected", n => n.id === d.id);
   renderConvo();
@@ -354,22 +356,38 @@ function esc(s) { return String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<
 function renderConvo() {
   if (selectedId === null) return;
   const node = nodeById.get(selectedId);
-  if (!node || !node.turns) { closeConvo(); return; }
-  const label = node.label;
-  const turns = node.turns;
-  titleEl.innerHTML = `${esc(label)}<small>${turns.length} turn${turns.length===1?"":"s"}</small>`;
+  if (!node) { closeConvo(); return; }
 
-  if (turns.length === 0) {
-    bodyEl.innerHTML = `<div class="convo-empty">No conversation recorded for this node.</div>`;
-  } else {
-    bodyEl.innerHTML = turns.map(t => {
-      const when = t.ts ? new Date(t.ts).toLocaleTimeString() : "";
-      const child = t.child ? `<div class="bubble child"><span class="who">child</span>${esc(t.child)}</div>` : "";
-      const reply = t.reply ? `<div class="bubble reply"><span class="who">${esc(t.robot || "robot")}</span>${esc(t.reply)}</div>` : "";
-      return `<div class="turn"><div class="meta">turn ${t.turn ?? "?"} · ${esc(t.emotion||"")} · ${when}</div>${child}${reply}</div>`;
-    }).join("");
+  if (node.turns) {                 // session node → transcript
+    const turns = node.turns;
+    titleEl.innerHTML = `${esc(node.label)}<small>${turns.length} turn${turns.length===1?"":"s"}</small>`;
+    bodyEl.innerHTML = turns.length === 0
+      ? `<div class="convo-empty">No conversation recorded for this session.</div>`
+      : turns.map(t => {
+          const when = t.ts ? new Date(t.ts).toLocaleTimeString() : "";
+          const child = t.child ? `<div class="bubble child"><span class="who">child</span>${esc(t.child)}</div>` : "";
+          const reply = t.reply ? `<div class="bubble reply"><span class="who">${esc(t.robot || "robot")}</span>${esc(t.reply)}</div>` : "";
+          return `<div class="turn"><div class="meta">turn ${t.turn ?? "?"} · ${esc(t.emotion||"")} · ${when}</div>${child}${reply}</div>`;
+        }).join("");
+    convoEl.style.display = "flex";
+    return;
   }
-  convoEl.style.display = "flex";
+
+  if (node.notes) {                 // topic node → conversation summaries
+    const notes = node.notes;
+    titleEl.innerHTML = `${esc(node.label)}<small>${notes.length} note${notes.length===1?"":"s"}</small>`;
+    bodyEl.innerHTML = notes.length === 0
+      ? `<div class="convo-empty">No conversation summaries about this topic yet.</div>`
+      : notes.map(n => {
+          const when = n.ts ? new Date(n.ts).toLocaleString() : "";
+          return `<div class="turn"><div class="meta">${esc(n.person||"")} · ${when}</div>`
+               + `<div class="bubble child">${esc(n.text||"")}</div></div>`;
+        }).join("");
+    convoEl.style.display = "flex";
+    return;
+  }
+
+  closeConvo();
 }
 
 // ---- polling loop ---------------------------------------------------------

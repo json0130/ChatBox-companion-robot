@@ -41,10 +41,12 @@ _SYSTEM_PROMPT = (
     "companion ROBOT. Output ONLY a single JSON object, no prose, no code fences.\n"
     "Schema:\n"
     '{"interests": [{"label": "<short interest area, e.g. music>", '
-    '"topics": ["<specific topic the child mentioned, e.g. jazz>"]}], '
+    '"topics": ["<specific topic the child mentioned, e.g. jazz>"], '
+    '"summary": "<one short sentence on what the child said about this>"}], '
     '"rapport_delta": <number between -0.2 and 0.2>, '
     '"trust_delta": <number between -0.2 and 0.2>}\n'
-    "Rules: include ONLY interests/topics the CHILD actually expressed. "
+    "Rules: include ONLY interests/topics the CHILD actually expressed. The "
+    "summary is a brief note about what the child shared on that interest. "
     "rapport_delta rises with warmth and positive affect; trust_delta rises with "
     "the child sharing personal things. Use values near 0 if the exchange was "
     "neutral or too short. If nothing was expressed, return empty interests and "
@@ -54,8 +56,12 @@ _SYSTEM_PROMPT = (
 
 @dataclass
 class KnowledgeUpdate:
-    """Validated, ready-to-apply extraction result."""
-    interests: List[Tuple[str, List[str]]] = field(default_factory=list)
+    """Validated, ready-to-apply extraction result.
+
+    Each interest is (label, [topics], summary); the summary is attached as a
+    per-person note on each of the interest's topic nodes.
+    """
+    interests: List[Tuple[str, List[str], str]] = field(default_factory=list)
     rapport_delta: float = 0.0
     trust_delta: float = 0.0
 
@@ -114,7 +120,7 @@ def normalize(obj: Optional[dict]) -> KnowledgeUpdate:
     if not isinstance(obj, dict):
         return KnowledgeUpdate()
 
-    interests: List[Tuple[str, List[str]]] = []
+    interests: List[Tuple[str, List[str], str]] = []
     seen_labels = set()
     for item in (obj.get("interests") or [])[:_MAX_INTERESTS]:
         if not isinstance(item, dict):
@@ -132,7 +138,8 @@ def normalize(obj: Optional[dict]) -> KnowledgeUpdate:
             if tp and tp.lower() not in seen_topics:
                 seen_topics.add(tp.lower())
                 topics.append(tp)
-        interests.append((label, topics))
+        summary = str(item.get("summary", "")).strip()[:280]
+        interests.append((label, topics, summary))
 
     return KnowledgeUpdate(
         interests=interests,
@@ -168,10 +175,11 @@ def apply_update(
                          d_rapport=update.rapport_delta, d_trust=update.trust_delta,
                          source=source)
     added = []
-    for label, topics in update.interests:
-        node = add_person_interest(store, person_id, label, topics, source=source)
+    for label, topics, summary in update.interests:
+        node = add_person_interest(store, person_id, label, topics,
+                                   summary=summary or None, source=source)
         if node is not None:
-            added.append((label, topics))
+            added.append((label, topics, summary))
     return {
         "interests_added": added,
         "rapport_delta": update.rapport_delta,

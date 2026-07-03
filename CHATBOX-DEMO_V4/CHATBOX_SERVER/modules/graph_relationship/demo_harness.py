@@ -194,6 +194,36 @@ def seed_relationship(
           f"  score={score:.2f}  → tier now {tc}{tier_after}{_RST}")
 
 
+# ── End-of-session knowledge extraction ────────────────────────────────────────
+
+def run_session_extraction(h, llm) -> None:
+    """Distill each of this meetup's session transcripts into graph updates —
+    closeness (rapport/trust) on the InteractionNode and new human interests →
+    topics — via the LLM with deterministic guards (graph_relationship.extraction).
+    """
+    from .extraction import extract_and_apply
+    sessions = h.bridge.current_sessions()
+    if not sessions:
+        print("  (no session this run — nothing to extract)")
+        return
+    print("Extracting knowledge from this session …")
+    for pid, sid in sessions.items():
+        sess = h.store.get_node(sid)
+        turns = getattr(sess, "turns", None) if sess is not None else None
+        if not turns:
+            continue
+        _update, s = extract_and_apply(
+            h.store, pid, h.robot_id, turns, llm.respond, source="extraction")
+        ints = s["interests_added"]
+        int_str = ("  interests: " + ", ".join(
+            f"{lab}→{'/'.join(ts)}" if ts else lab for lab, ts in ints)
+        ) if ints else "  (no new interests)"
+        print(f"  {_GREEN}{pid}{_RST}: Δrapport {s['rapport_delta']:+.2f}"
+              f"  Δtrust {s['trust_delta']:+.2f}{int_str}")
+    if h.kg_path:
+        h.store.save(h.kg_path)
+
+
 # ── Graph export ──────────────────────────────────────────────────────────────
 
 def _edge_label(edge) -> str:
@@ -607,8 +637,9 @@ Commands
   robot <chatbox|ellebot>         switch active robot
   who                             list all known people and their tiers
   graph                           export graph snapshot right now
+  extract                         distill this session → interests + closeness (needs --llm)
   help                            show this message
-  q / quit                        exit (exports graph)
+  q / quit                        exit (extracts this session, then exports graph)
 
 Emotions:  happy  sad  neutral  angry  calm  fear  disgust  surprise
 
@@ -698,6 +729,14 @@ def run_interactive(
             print()
             continue
 
+        if cmd == "extract":
+            if not llm_on:
+                print("  extraction needs the LLM — run with --llm")
+            else:
+                run_session_extraction(h, llm)
+            print()
+            continue
+
         # ── <person> <emotion> [message…] ─────────────────────────────────────
         if len(parts) >= 2:
             person_id = parts[0]
@@ -754,6 +793,11 @@ def run_interactive(
 
         print(f"  Unrecognised input: {raw!r}  —  type 'help' for commands")
         print()
+
+    # End-of-session trigger: distill the meetup's transcript into graph updates.
+    if llm_on:
+        print()
+        run_session_extraction(h, llm)
 
     print()
     print("Exiting — writing final graph …")

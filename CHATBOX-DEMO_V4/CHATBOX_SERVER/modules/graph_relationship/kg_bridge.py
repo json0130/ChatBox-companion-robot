@@ -217,6 +217,14 @@ class KGBridge:
         # person_id -> current session node id.
         self._session: dict[str, str] = {}
 
+    def current_sessions(self) -> dict:
+        """person_id -> current session node id for this bridge's lifetime.
+
+        Used by end-of-session hooks (e.g. knowledge extraction) to find the
+        transcript(s) produced during this meetup.
+        """
+        return dict(self._session)
+
     def pre_turn(
         self,
         person_id: Optional[str],

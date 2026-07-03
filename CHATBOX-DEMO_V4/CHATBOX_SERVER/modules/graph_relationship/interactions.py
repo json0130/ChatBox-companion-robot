@@ -87,6 +87,20 @@ def set_closeness(
     return node
 
 
+def adjust_closeness(
+    store: GraphStore, person_id: str, robot_id: str, *,
+    d_rapport: float = 0.0, d_trust: float = 0.0, source: Optional[str] = None,
+) -> InteractionNode:
+    """Add a delta to rapport/trust on the InteractionNode, clamped to [0, 1]."""
+    node = get_or_create_interaction(store, person_id, robot_id, source=source)
+    node = node.model_copy(update={
+        "rapport": max(0.0, min(1.0, node.rapport + d_rapport)),
+        "trust":   max(0.0, min(1.0, node.trust + d_trust)),
+    })
+    store.upsert_node(node)
+    return node
+
+
 # --- Sessions --------------------------------------------------------------
 
 def sessions_of(store: GraphStore, interaction_id_: str) -> List[SessionNode]:

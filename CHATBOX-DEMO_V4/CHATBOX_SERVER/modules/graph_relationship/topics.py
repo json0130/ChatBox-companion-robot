@@ -14,10 +14,18 @@ Design contract: imports ONLY schema.py + store.py — no PAD, no kg_bridge.
 from __future__ import annotations
 
 import re
-from typing import List, Tuple
+from datetime import datetime, timezone
+from typing import List, Optional, Tuple
 
-from .schema import InterestNode, TopicNode
+from .schema import (
+    AboutEdge, HasInterestEdge, InterestNode, Provenance, TopicNode,
+)
 from .store import GraphStore
+
+
+def _prov(source: Optional[str]) -> Provenance:
+    return Provenance(source=source or "topics", confidence=1.0,
+                      timestamp=datetime.now(timezone.utc))
 
 
 def normalize_label(label: str) -> str:
@@ -31,6 +39,32 @@ def topic_id(label: str) -> str:
 
 def interest_id(person_id: str, label: str) -> str:
     return f"interest:{person_id}:{normalize_label(label)}"
+
+
+def add_person_interest(
+    store: GraphStore, person_id: str, interest_label: str,
+    topic_labels: Optional[List[str]] = None, *, source: Optional[str] = None,
+) -> Optional[InterestNode]:
+    """Upsert a person's Interest (deterministic id) with has_interest, and an
+    about-edge to each shared Topic. Idempotent — re-adding does not duplicate.
+
+    The person node must already exist.
+    """
+    label = str(interest_label).strip()
+    if not label:
+        return None
+    inode = InterestNode(id=interest_id(person_id, label), label=label)
+    store.upsert_node(inode)
+    store.upsert_edge(HasInterestEdge(
+        source_id=person_id, target_id=inode.id, provenance=_prov(source)))
+    for t in topic_labels or []:
+        t = str(t).strip()
+        if not t:
+            continue
+        topic = resolve_topic(store, t)
+        store.upsert_edge(AboutEdge(
+            source_id=inode.id, target_id=topic.id, provenance=_prov(source)))
+    return inode
 
 
 def resolve_topic(store: GraphStore, label: str) -> TopicNode:

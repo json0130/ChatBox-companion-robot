@@ -8,5 +8,8 @@ role: "companion"
 capabilities:
   - "tells stories"
   - "knows jazz"
-knows_topics:            # -> KnowsEdge robot -> shared TopicNode
+  - "knows about space"
+knows_topics:            # capability --about--> shared TopicNode
   - jazz
+  - space
+  - mars

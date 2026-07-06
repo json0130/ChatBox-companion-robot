@@ -304,8 +304,8 @@ class InMemoryGraphStore(GraphStore):
             json.dump(data, fh, indent=2, default=str)
         print(f"[KG] saved {len(self._nodes)} nodes, {len(self._edges)} edges → {path}")
 
-    def load(self, path: str) -> bool:
-        """Load a JSON file written by save(). Returns True on success."""
+    def load(self, path: str, *, quiet: bool = False) -> bool:
+        """Load a JSON file written by save() (merges into current state)."""
         import json, os
         if not os.path.exists(path):
             return False
@@ -321,7 +321,40 @@ class InMemoryGraphStore(GraphStore):
             self._endpoint_type_index[key] = edge.id
             self._node_edge_index[edge.source_id].add(edge.id)
             self._node_edge_index[edge.target_id].add(edge.id)
-        print(f"[KG] loaded {len(self._nodes)} nodes, {len(self._edges)} edges ← {path}")
+        if not quiet:
+            print(f"[KG] loaded {len(self._nodes)} nodes, {len(self._edges)} edges ← {path}")
+        return True
+
+    def reload(self, path: str) -> bool:
+        """REPLACE all in-memory state with the on-disk graph.
+
+        Used to re-sync with external edits (e.g. deletions made in the viz)
+        between turns. Validates the file fully BEFORE clearing, so a missing or
+        mid-write file leaves the current graph untouched (returns False).
+        """
+        import json, os
+        if not os.path.exists(path):
+            return False
+        try:
+            with open(path) as fh:
+                data = json.load(fh)
+            nodes = [_node_adapter.validate_python(nd) for nd in data.get("nodes", [])]
+            edges = [_edge_adapter.validate_python(ed) for ed in data.get("edges", [])]
+        except Exception:
+            return False  # keep current state on any read/parse/validate error
+
+        self._nodes.clear()
+        self._edges.clear()
+        self._node_edge_index.clear()
+        self._endpoint_type_index.clear()
+        for node in nodes:
+            self._nodes[node.id] = node
+        for edge in edges:
+            self._edges[edge.id] = edge
+            key = (edge.source_id, edge.target_id, edge.edge_type)
+            self._endpoint_type_index[key] = edge.id
+            self._node_edge_index[edge.source_id].add(edge.id)
+            self._node_edge_index[edge.target_id].add(edge.id)
         return True
 
 

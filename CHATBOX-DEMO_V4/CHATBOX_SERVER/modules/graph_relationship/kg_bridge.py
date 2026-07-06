@@ -342,7 +342,8 @@ class KGBridge:
             self._store, person_id, robot_node_id, source=robot_id,
         )
         session_id = self._session.get(person_id)
-        if session_id is None:
+        # Recreate if we have no session yet, or ours was deleted externally.
+        if session_id is None or self._store.get_node(session_id) is None:
             label = f"session {count_person_sessions(self._store, person_id) + 1}"
             session = start_session(
                 self._store, interaction_id_=interaction.id, label=label, source=robot_id,

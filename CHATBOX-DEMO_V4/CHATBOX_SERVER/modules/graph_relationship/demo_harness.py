@@ -205,6 +205,10 @@ def run_session_extraction(h, llm, matcher=None) -> None:
     or the embedding matcher when --embed is on) so shared topics link up.
     """
     from .extraction import extract_and_apply
+    from .interactions import unextracted_turns, mark_session_extracted
+    # Respect any external edits (viz deletions) before extracting.
+    if h.kg_path:
+        h.store.reload(h.kg_path)
     sessions = h.bridge.current_sessions()
     if not sessions:
         print("  (no session this run — nothing to extract)")
@@ -212,12 +216,17 @@ def run_session_extraction(h, llm, matcher=None) -> None:
     print("Extracting knowledge from this session …")
     for pid, sid in sessions.items():
         sess = h.store.get_node(sid)
-        turns = getattr(sess, "turns", None) if sess is not None else None
+        if sess is None or sess.node_type != "session":
+            continue
+        # Only the turns of THIS session not yet extracted — not the whole history.
+        turns = unextracted_turns(sess)
         if not turns:
+            print(f"  {_GREEN}{pid}{_RST}: no new turns since last extract")
             continue
         _update, s = extract_and_apply(
             h.store, pid, h.robot_id, turns, llm.respond,
             matcher=matcher, source="extraction")
+        mark_session_extracted(h.store, sid)
         ints = s["interests_added"]
         int_str = ("  interests: " + ", ".join(
             f"{lab}→{'/'.join(ts)}" if ts else lab for lab, ts, _sm in ints)
@@ -401,6 +410,11 @@ class Harness:
         makes the per-person PAD differences audible, not just numeric.
         """
         self.turn_n += 1
+
+        # 0. Re-sync from disk so external edits (e.g. deletions made in the viz)
+        #    are respected instead of being overwritten by our in-memory graph.
+        if self.kg_path:
+            self.store.reload(self.kg_path)
 
         # 1. KG → bridge input (tier, blended v/a, slow-edge memory)
         bi = self.bridge.pre_turn(person_id, robot_id, emotion)

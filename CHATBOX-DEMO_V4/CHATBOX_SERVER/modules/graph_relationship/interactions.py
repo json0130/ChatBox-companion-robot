@@ -125,6 +125,21 @@ def start_session(
     return session
 
 
+def unextracted_turns(session: SessionNode) -> List[dict]:
+    """Turns of a session not yet fed to knowledge extraction."""
+    return list(session.turns[session.extracted_turns:])
+
+
+def mark_session_extracted(store: GraphStore, session_id: str) -> Optional[SessionNode]:
+    """Record that all current turns of a session have been extracted."""
+    session = store.get_node(session_id)
+    if session is None or session.node_type != "session":
+        return None
+    updated = session.model_copy(update={"extracted_turns": len(session.turns)})
+    store.upsert_node(updated)
+    return updated
+
+
 def append_turn(
     store: GraphStore, *, session_id: str,
     emotion: Optional[str] = None, child_message: Optional[str] = None,

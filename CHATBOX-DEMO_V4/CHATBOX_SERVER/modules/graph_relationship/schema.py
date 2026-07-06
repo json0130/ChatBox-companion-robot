@@ -129,6 +129,9 @@ class SessionNode(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     turn_count: int = 0
     turns: List[Dict[str, Any]] = Field(default_factory=list)
+    # How many turns have already been fed to knowledge extraction, so a later
+    # extract only processes NEW turns of this session (not the whole history).
+    extracted_turns: int = 0
     node_type: Literal["session"] = "session"
 
 

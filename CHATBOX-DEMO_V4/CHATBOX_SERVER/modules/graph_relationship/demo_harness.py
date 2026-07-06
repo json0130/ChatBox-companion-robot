@@ -196,10 +196,13 @@ def seed_relationship(
 
 # ── End-of-session knowledge extraction ────────────────────────────────────────
 
-def run_session_extraction(h, llm) -> None:
+def run_session_extraction(h, llm, matcher=None) -> None:
     """Distill each of this meetup's session transcripts into graph updates —
     closeness (rapport/trust) on the InteractionNode and new human interests →
     topics — via the LLM with deterministic guards (graph_relationship.extraction).
+
+    `matcher` selects which robot capability covers a topic (keyword by default,
+    or the embedding matcher when --embed is on) so shared topics link up.
     """
     from .extraction import extract_and_apply
     sessions = h.bridge.current_sessions()
@@ -213,7 +216,8 @@ def run_session_extraction(h, llm) -> None:
         if not turns:
             continue
         _update, s = extract_and_apply(
-            h.store, pid, h.robot_id, turns, llm.respond, source="extraction")
+            h.store, pid, h.robot_id, turns, llm.respond,
+            matcher=matcher, source="extraction")
         ints = s["interests_added"]
         int_str = ("  interests: " + ", ".join(
             f"{lab}→{'/'.join(ts)}" if ts else lab for lab, ts, _sm in ints)
@@ -640,6 +644,7 @@ Commands
   who                             list all known people and their tiers
   graph                           export graph snapshot right now
   extract                         distill this session → interests + closeness (needs --llm)
+  relink                          re-match capabilities → topics (embedding if --embed)
   help                            show this message
   q / quit                        exit (extracts this session, then exports graph)
 
@@ -659,6 +664,7 @@ def run_interactive(
     llm: Optional[LLMClient] = None,
     scenario: Optional[str] = None,
     kg_path: Optional[str] = None,
+    matcher=None,
 ) -> None:
     h       = Harness(robot_id=robot_id, obsidian=obsidian, llm=llm, kg_path=kg_path)
     llm_on  = llm is not None and llm.available
@@ -735,7 +741,22 @@ def run_interactive(
             if not llm_on:
                 print("  extraction needs the LLM — run with --llm")
             else:
-                run_session_extraction(h, llm)
+                run_session_extraction(h, llm, matcher=matcher)
+            print()
+            continue
+
+        if cmd == "relink":
+            from .topics import relink_capability_topics
+            linked = relink_capability_topics(h.store, h.robot_id, matcher=matcher)
+            how = "embedding" if matcher is not None else "keyword"
+            if linked:
+                print(f"  re-linked ({how}) capability → topic:")
+                for item, tl in linked:
+                    print(f"      chatbox [{item}] → {tl}")
+            else:
+                print(f"  no new capability→topic links ({how} matcher)")
+            if h.kg_path:
+                h.store.save(h.kg_path)
             print()
             continue
 
@@ -799,7 +820,7 @@ def run_interactive(
     # End-of-session trigger: distill the meetup's transcript into graph updates.
     if llm_on:
         print()
-        run_session_extraction(h, llm)
+        run_session_extraction(h, llm, matcher=matcher)
 
     print()
     print("Exiting — writing final graph …")
@@ -831,7 +852,25 @@ def main(argv: Optional[list[str]] = None) -> None:
                     help=("Persist the graph to FILE after every turn so the "
                           "live viz server (python3 -m modules.graph_relationship."
                           "viz.server) can poll it. e.g. --kg-path kg_state.json"))
+    ap.add_argument("--embed", action="store_true",
+                    help="Match extracted topics to robot capabilities by embedding "
+                         "similarity (Ollama) instead of keywords, so near-matches "
+                         "(addition→math, planets→space) connect")
+    ap.add_argument("--embed-model", default="nomic-embed-text", metavar="MODEL",
+                    help="Ollama embedding model (default: nomic-embed-text)")
+    ap.add_argument("--embed-floor", type=float, default=0.5, metavar="F",
+                    help="Min cosine similarity to link a topic to a capability "
+                         "(default: 0.5)")
     args = ap.parse_args(argv)
+
+    # ── Topic matcher (keyword default; embedding when --embed) ────────────────
+    matcher = None
+    if args.embed:
+        from .embedding import make_embedding_matcher, ollama_embed_fn
+        matcher = make_embedding_matcher(
+            ollama_embed_fn(model=args.embed_model), floor=args.embed_floor)
+        print(f"  [embed] topic matching via {args.embed_model} "
+              f"(floor {args.embed_floor})")
 
     # ── LLM setup ─────────────────────────────────────────────────────────────
     llm: Optional[LLMClient] = None
@@ -852,7 +891,8 @@ def main(argv: Optional[list[str]] = None) -> None:
                      kg_path=args.kg_path)
     else:
         run_interactive(robot_id=args.robot, obsidian=args.obsidian,
-                        llm=llm, scenario=scenario, kg_path=args.kg_path)
+                        llm=llm, scenario=scenario, kg_path=args.kg_path,
+                        matcher=matcher)
 
 
 if __name__ == "__main__":

@@ -22,10 +22,10 @@ from .schema import (
 )
 from .store import GraphStore
 
-# A matcher decides whether a robot capability item (e.g. 'knows jazz') covers a
-# topic label (e.g. 'jazz'). keyword_match is the default; an embedding-based
-# matcher can be injected later without changing any call site.
-Matcher = Callable[[str, str], bool]
+# A matcher SELECTS the best capability item (e.g. 'knows jazz') that covers a
+# topic label (e.g. 'jazz'), or None. keyword_matcher is the default; an
+# embedding-based matcher can be injected without changing any call site.
+Matcher = Callable[[List[str], str], Optional[str]]
 
 
 def _prov(source: Optional[str]) -> Provenance:
@@ -161,8 +161,8 @@ def robot_topics(store: GraphStore, robot_id: str) -> List[TopicNode]:
 # --- capability ↔ topic matching + linking ---------------------------------
 
 def keyword_match(item: str, topic_label: str) -> bool:
-    """Default matcher: capability item and topic share a word, or one contains
-    the other (normalized). e.g. 'good at math' ~ 'math', 'knows jazz' ~ 'jazz'."""
+    """True if capability item and topic share a word, or one contains the other
+    (normalized). e.g. 'good at math' ~ 'math', 'knows jazz' ~ 'jazz'."""
     a, b = normalize_label(item), normalize_label(topic_label)
     if not a or not b:
         return False
@@ -173,17 +173,25 @@ def keyword_match(item: str, topic_label: str) -> bool:
     return b in a or a in b
 
 
+def keyword_matcher(items: List[str], topic_label: str) -> Optional[str]:
+    """Default selector: the first capability item that keyword-matches `topic`."""
+    for item in items:
+        if keyword_match(item, topic_label):
+            return item
+    return None
+
+
 def link_capability_to_topic(
     store: GraphStore, robot_id: str, topic, *,
     matcher: Optional[Matcher] = None, source: Optional[str] = None,
 ) -> Optional[str]:
-    """If a robot capability item matches `topic`, add a labeled about-edge
-    Capability --about[label=<item>]--> Topic. Returns the matching item or None.
+    """If the matcher selects a capability item for `topic`, add a labeled
+    about-edge Capability --about[label=<item>]--> Topic. Returns the item or None.
 
     Idempotent: if an about-edge already exists it is left as-is (not relabeled).
     `topic` may be a TopicNode or a topic label.
     """
-    matcher = matcher or keyword_match
+    matcher = matcher or keyword_matcher
     cap = robot_capability(store, robot_id)
     if cap is None:
         return None
@@ -193,11 +201,11 @@ def link_capability_to_topic(
         return None
     if store.get_edge(cap.id, tid, "about") is not None:
         return None
-    for item in cap.items:
-        if matcher(item, tnode.label):
-            store.upsert_edge(AboutEdge(
-                source_id=cap.id, target_id=tid, label=item, provenance=_prov(source)))
-            return item
+    item = matcher(cap.items, tnode.label)
+    if item is not None:
+        store.upsert_edge(AboutEdge(
+            source_id=cap.id, target_id=tid, label=item, provenance=_prov(source)))
+        return item
     return None
 
 

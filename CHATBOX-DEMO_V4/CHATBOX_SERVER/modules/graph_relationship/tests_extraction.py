@@ -91,18 +91,15 @@ def test_apply_update_writes_closeness_and_interest():
 def test_extracted_interest_shares_robot_topic():
     """An extracted interest that matches the robot's capability topic is shared."""
     store = _store_with_pair()
-    # robot knows jazz via capability(hub) -> skill -> about -> topic
-    from .schema import (CapabilityNode, HasCapabilityEdge, HasSkillEdge,
-                         SkillNode, AboutEdge, Provenance)
+    # robot knows jazz via capability(items) -> about -> topic
+    from .schema import CapabilityNode, HasCapabilityEdge, AboutEdge, Provenance
     from .topics import resolve_topic
     prov = Provenance(source="t", confidence=1.0)
-    hub = CapabilityNode(id="chatbox:capability", label="capabilities")
-    store.upsert_node(hub)
-    store.upsert_edge(HasCapabilityEdge(source_id="chatbox", target_id=hub.id, provenance=prov))
-    skill = SkillNode(id="chatbox:skill:knows-jazz", label="knows jazz")
-    store.upsert_node(skill)
-    store.upsert_edge(HasSkillEdge(source_id=hub.id, target_id=skill.id, provenance=prov))
-    store.upsert_edge(AboutEdge(source_id=skill.id, target_id=resolve_topic(store, "jazz").id, provenance=prov))
+    cap = CapabilityNode(id="chatbox:capability", items=["knows jazz"])
+    store.upsert_node(cap)
+    store.upsert_edge(HasCapabilityEdge(source_id="chatbox", target_id=cap.id, provenance=prov))
+    store.upsert_edge(AboutEdge(source_id=cap.id, target_id=resolve_topic(store, "jazz").id,
+                                label="knows jazz", provenance=prov))
 
     llm = _fake_llm('{"interests":[{"label":"music","topics":["jazz"]}],'
                     '"rapport_delta":0.1,"trust_delta":0.0}')

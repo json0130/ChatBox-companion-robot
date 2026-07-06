@@ -6,14 +6,15 @@ from datetime import timezone
 
 from .schema import (
     AboutEdge, CapabilityNode, Embodiment, HasCapabilityEdge, HasInterestEdge,
-    HasSkillEdge, InterestNode, PersonNode, Provenance, RobotNode, SkillNode,
+    InterestNode, PersonNode, Provenance, RobotNode,
 )
 from .store import InMemoryGraphStore
 from .topics import (
-    interest_id, person_interests, resolve_topic, shared_topics, topic_id,
+    interest_id, keyword_match, link_capability_to_topic, person_interests,
+    resolve_topic, robot_topics, shared_topics, topic_id,
 )
 
-_SKILL_ID = "chatbox:skill:knows-jazz"
+_CAP_ID = "chatbox:capability"
 
 
 def _prov():
@@ -21,18 +22,15 @@ def _prov():
 
 
 def _seed_shared(store):
-    """robot reaches jazz via capability→skill; person via interest 'music'."""
+    """robot reaches jazz via capability list; person via interest 'music'."""
     store.upsert_node(RobotNode(id="chatbox", name="ChatBox", embodiment=Embodiment.CAT))
     store.upsert_node(PersonNode(id="jay", display_name="Jay"))
-    # robot: has_capability -> capability(hub) -> has_skill -> skill -> about -> topic
-    hub = CapabilityNode(id="chatbox:capability", label="capabilities")
-    store.upsert_node(hub)
-    store.upsert_edge(HasCapabilityEdge(source_id="chatbox", target_id=hub.id, provenance=_prov()))
-    skill = SkillNode(id=_SKILL_ID, label="knows jazz")
-    store.upsert_node(skill)
-    store.upsert_edge(HasSkillEdge(source_id=hub.id, target_id=skill.id, provenance=_prov()))
+    # robot: has_capability -> capability(items) --about[label]--> topic
+    cap = CapabilityNode(id=_CAP_ID, items=["tells stories", "knows jazz"])
+    store.upsert_node(cap)
+    store.upsert_edge(HasCapabilityEdge(source_id="chatbox", target_id=cap.id, provenance=_prov()))
     t1 = resolve_topic(store, "jazz")
-    store.upsert_edge(AboutEdge(source_id=skill.id, target_id=t1.id, provenance=_prov()))
+    store.upsert_edge(AboutEdge(source_id=cap.id, target_id=t1.id, label="knows jazz", provenance=_prov()))
     # person: has_interest -> interest -> about -> topic
     inode = InterestNode(id=interest_id("jay", "music"), label="music")
     store.upsert_node(inode)
@@ -40,6 +38,29 @@ def _seed_shared(store):
     t2 = resolve_topic(store, "jazz")
     store.upsert_edge(AboutEdge(source_id=inode.id, target_id=t2.id, provenance=_prov()))
     return t1, t2
+
+
+def test_keyword_match():
+    assert keyword_match("knows jazz", "jazz")
+    assert keyword_match("good at math", "math")
+    assert keyword_match("knows about space", "space")
+    assert not keyword_match("good at math", "addition")
+
+
+def test_link_capability_to_topic_labels_edge():
+    store = InMemoryGraphStore()
+    store.upsert_node(RobotNode(id="chatbox", name="ChatBox", embodiment=Embodiment.CAT))
+    store.upsert_node(CapabilityNode(id=_CAP_ID, items=["good at math"]))
+    store.upsert_edge(HasCapabilityEdge(source_id="chatbox", target_id=_CAP_ID, provenance=_prov()))
+    resolve_topic(store, "math")
+    item = link_capability_to_topic(store, "chatbox", "math")
+    assert item == "good at math"
+    edge = store.get_edge(_CAP_ID, "topic:math", "about")
+    assert edge is not None and edge.label == "good at math"
+    assert [t.label for t in robot_topics(store, "chatbox")] == ["math"]
+    # keyword can't bridge 'addition' to 'good at math'
+    resolve_topic(store, "addition")
+    assert link_capability_to_topic(store, "chatbox", "addition") is None
 
 
 def test_resolve_topic_is_one_shared_node():
@@ -63,10 +84,10 @@ def test_shared_topics_empty_when_human_interest_removed():
     assert shared_topics(store, "jay", "chatbox") == []
 
 
-def test_shared_topics_empty_when_robot_skill_topic_removed():
+def test_shared_topics_empty_when_robot_capability_topic_removed():
     store = InMemoryGraphStore()
     _seed_shared(store)
-    store.delete_edge(_SKILL_ID, "topic:jazz", "about")   # robot no longer reaches jazz
+    store.delete_edge(_CAP_ID, "topic:jazz", "about")   # robot no longer reaches jazz
     assert shared_topics(store, "jay", "chatbox") == []
 
 

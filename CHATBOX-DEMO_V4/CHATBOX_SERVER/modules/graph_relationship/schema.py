@@ -155,20 +155,16 @@ class RoleNode(BaseModel):
 
 
 class CapabilityNode(BaseModel):
-    """A robot's capability HUB (one per robot). The robot links here via
-    has_capability; each individual capability hangs off it as a SkillNode via
-    has_skill:  robot --has_capability--> Capability --has_skill--> Skill."""
+    """A robot's capabilities as ONE node holding a list of items, e.g.
+    ['tells stories', 'knows jazz', 'good at math'].
+
+    When a capability item matches a Topic (keyword now, embedding later), the
+    node gets an about-edge to that shared Topic whose `label` records the
+    matching item ('knows jazz'):  robot --has_capability--> Capability
+    --about[label='knows jazz']--> Topic."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    label: str = "capabilities"
+    items: List[str] = Field(default_factory=list)
     node_type: Literal["capability"] = "capability"
-
-
-class SkillNode(BaseModel):
-    """One individual robot capability, e.g. 'tells stories' or 'knows jazz'.
-    Topic-bearing skills link to a shared TopicNode: skill --about--> Topic."""
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    label: str
-    node_type: Literal["skill"] = "skill"
 
 
 class InterestNode(BaseModel):
@@ -182,7 +178,7 @@ class InterestNode(BaseModel):
 # Union alias used by GraphSchema
 AnyNode = Union[
     RobotNode, PersonNode, TopicNode,
-    PersonaNode, RoleNode, CapabilityNode, SkillNode, InterestNode,
+    PersonaNode, RoleNode, CapabilityNode, InterestNode,
     InteractionNode, SessionNode,
 ]
 
@@ -293,19 +289,13 @@ class HasRoleEdge(EdgeBase):
 
 
 class HasCapabilityEdge(EdgeBase):
-    """robot → CapabilityNode (the capability hub)."""
+    """robot → CapabilityNode (the capability node holding the items list)."""
     edge_type: Literal["has_capability"] = "has_capability"
     timescale: Timescale = Timescale.SLOW
 
 
-class HasSkillEdge(EdgeBase):
-    """CapabilityNode (hub) → SkillNode (one individual capability)."""
-    edge_type: Literal["has_skill"] = "has_skill"
-    timescale: Timescale = Timescale.SLOW
-
-
 IdentityEdge = Union[
-    HasPersonaEdge, HasRoleEdge, HasCapabilityEdge, HasSkillEdge
+    HasPersonaEdge, HasRoleEdge, HasCapabilityEdge
 ]
 
 
@@ -324,8 +314,13 @@ class HasInterestEdge(EdgeBase):
 
 
 class AboutEdge(EdgeBase):
-    """subnode (Interest | Capability) → TopicNode: about this shared topic."""
+    """subnode (Interest | Capability) → TopicNode: about this shared topic.
+
+    `label` records which capability produced a robot→topic link, e.g.
+    'knows jazz'. Left None for a person Interest → Topic edge.
+    """
     edge_type: Literal["about"] = "about"
+    label: Optional[str] = None
     timescale: Timescale = Timescale.SLOW
 
 

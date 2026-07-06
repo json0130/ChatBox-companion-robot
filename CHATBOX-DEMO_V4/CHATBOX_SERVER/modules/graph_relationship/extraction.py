@@ -26,7 +26,7 @@ from typing import Callable, List, Optional, Tuple
 
 from .interactions import adjust_closeness
 from .store import GraphStore
-from .topics import add_person_interest
+from .topics import Matcher, add_person_interest, link_capability_to_topic
 
 # Type of the injected LLM call — matches demo_harness LLMClient.respond.
 LLMFn = Callable[[str, str], str]
@@ -167,21 +167,33 @@ def extract(turns: List[dict], llm_fn: LLMFn) -> KnowledgeUpdate:
 
 def apply_update(
     store: GraphStore, person_id: str, robot_id: str, update: KnowledgeUpdate,
-    *, source: str = "extraction",
+    *, matcher: Optional[Matcher] = None, source: str = "extraction",
 ) -> dict:
-    """Write a KnowledgeUpdate to the graph. Returns a summary dict."""
+    """Write a KnowledgeUpdate to the graph. Returns a summary dict.
+
+    After adding each interest → topic, tries to link the robot's capability to
+    that topic (via `matcher`, keyword by default) so a topic the child raised
+    that the robot can cover becomes shared.
+    """
     if update.rapport_delta or update.trust_delta:
         adjust_closeness(store, person_id, robot_id,
                          d_rapport=update.rapport_delta, d_trust=update.trust_delta,
                          source=source)
-    added = []
+    added, capability_links = [], []
     for label, topics, summary in update.interests:
         node = add_person_interest(store, person_id, label, topics,
                                    summary=summary or None, source=source)
-        if node is not None:
-            added.append((label, topics, summary))
+        if node is None:
+            continue
+        added.append((label, topics, summary))
+        for tl in topics:
+            item = link_capability_to_topic(store, robot_id, tl,
+                                            matcher=matcher, source=source)
+            if item is not None:
+                capability_links.append((item, tl))
     return {
         "interests_added": added,
+        "capability_links": capability_links,
         "rapport_delta": update.rapport_delta,
         "trust_delta": update.trust_delta,
     }
@@ -189,9 +201,9 @@ def apply_update(
 
 def extract_and_apply(
     store: GraphStore, person_id: str, robot_id: str, turns: List[dict], llm_fn: LLMFn,
-    *, source: str = "extraction",
+    *, matcher: Optional[Matcher] = None, source: str = "extraction",
 ) -> Tuple[KnowledgeUpdate, dict]:
     """Convenience: extract from a transcript and apply it in one call."""
     update = extract(turns, llm_fn)
-    summary = apply_update(store, person_id, robot_id, update, source=source)
+    summary = apply_update(store, person_id, robot_id, update, matcher=matcher, source=source)
     return update, summary

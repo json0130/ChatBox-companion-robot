@@ -220,6 +220,8 @@ def run_session_extraction(h, llm) -> None:
         ) if ints else "  (no new interests)"
         print(f"  {_GREEN}{pid}{_RST}: Δrapport {s['rapport_delta']:+.2f}"
               f"  Δtrust {s['trust_delta']:+.2f}{int_str}")
+        for item, tl in s.get("capability_links", []):
+            print(f"      {_DIM}↳ shared topic '{tl}' — chatbox [{item}]{_RST}")
     if h.kg_path:
         h.store.save(h.kg_path)
 

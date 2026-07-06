@@ -15,12 +15,17 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from .schema import (
     AboutEdge, HasInterestEdge, InterestNode, Provenance, TopicNode,
 )
 from .store import GraphStore
+
+# A matcher decides whether a robot capability item (e.g. 'knows jazz') covers a
+# topic label (e.g. 'jazz'). keyword_match is the default; an embedding-based
+# matcher can be injected later without changing any call site.
+Matcher = Callable[[str, str], bool]
 
 
 def _prov(source: Optional[str]) -> Provenance:
@@ -138,15 +143,79 @@ def _person_topic_ids(store: GraphStore, person_id: str) -> set:
     return ids
 
 
+def robot_capability(store: GraphStore, robot_id: str):
+    """The robot's CapabilityNode (holds the items list), or None."""
+    caps = _neighbors_of_type(store, robot_id, "has_capability", "capability")
+    return caps[0] if caps else None
+
+
 def robot_topics(store: GraphStore, robot_id: str) -> List[TopicNode]:
-    """Topics the robot reaches via
-    has_capability -> capability(hub) -> has_skill -> skill -> about -> topic."""
-    seen: dict = {}
-    for capability in _neighbors_of_type(store, robot_id, "has_capability", "capability"):
-        for skill in _neighbors_of_type(store, capability.id, "has_skill", "skill"):
-            for topic in _neighbors_of_type(store, skill.id, "about", "topic"):
-                seen[topic.id] = topic
+    """Topics the robot reaches via has_capability -> capability -> about -> topic."""
+    cap = robot_capability(store, robot_id)
+    if cap is None:
+        return []
+    seen: dict = {t.id: t for t in _neighbors_of_type(store, cap.id, "about", "topic")}
     return list(seen.values())
+
+
+# --- capability ↔ topic matching + linking ---------------------------------
+
+def keyword_match(item: str, topic_label: str) -> bool:
+    """Default matcher: capability item and topic share a word, or one contains
+    the other (normalized). e.g. 'good at math' ~ 'math', 'knows jazz' ~ 'jazz'."""
+    a, b = normalize_label(item), normalize_label(topic_label)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if set(a.split("-")) & set(b.split("-")):
+        return True
+    return b in a or a in b
+
+
+def link_capability_to_topic(
+    store: GraphStore, robot_id: str, topic, *,
+    matcher: Optional[Matcher] = None, source: Optional[str] = None,
+) -> Optional[str]:
+    """If a robot capability item matches `topic`, add a labeled about-edge
+    Capability --about[label=<item>]--> Topic. Returns the matching item or None.
+
+    Idempotent: if an about-edge already exists it is left as-is (not relabeled).
+    `topic` may be a TopicNode or a topic label.
+    """
+    matcher = matcher or keyword_match
+    cap = robot_capability(store, robot_id)
+    if cap is None:
+        return None
+    tid = topic.id if hasattr(topic, "id") else topic_id(topic)
+    tnode = store.get_node(tid)
+    if tnode is None or tnode.node_type != "topic":
+        return None
+    if store.get_edge(cap.id, tid, "about") is not None:
+        return None
+    for item in cap.items:
+        if matcher(item, tnode.label):
+            store.upsert_edge(AboutEdge(
+                source_id=cap.id, target_id=tid, label=item, provenance=_prov(source)))
+            return item
+    return None
+
+
+def relink_capability_topics(
+    store: GraphStore, robot_id: str, *, matcher: Optional[Matcher] = None,
+) -> List[Tuple[str, str]]:
+    """Re-run capability→topic matching over ALL topic nodes. Useful after
+    seeding or after swapping the matcher (e.g. to embeddings). Returns the
+    (item, topic_label) pairs newly linked."""
+    nodes = getattr(store, "_nodes", {}) or {}
+    linked: List[Tuple[str, str]] = []
+    for node in list(nodes.values()):
+        if node.node_type != "topic":
+            continue
+        item = link_capability_to_topic(store, robot_id, node, matcher=matcher)
+        if item:
+            linked.append((item, node.label))
+    return linked
 
 
 def shared_topics(store: GraphStore, person_id: str, robot_id: str) -> List[str]:

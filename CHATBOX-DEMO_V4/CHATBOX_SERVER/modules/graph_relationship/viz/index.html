@@ -106,8 +106,7 @@
     <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Session (triangle)</div>
     <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Persona (hexagon)</div>
     <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Role (pentagon)</div>
-    <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Capability hub (plus)</div>
-    <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Skill (pill)</div>
+    <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Capability (plus)</div>
     <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Interest (star)</div>
   </div>
   <div class="legend-section">
@@ -164,14 +163,13 @@ function shapePath(type) {
     case "Interaction": return {tag:"path",  attrs:{d: polyD(8, R*1.5)}};           // octagon (hub)
     case "Persona":     return {tag:"path",  attrs:{d: polyD(6, R*1.2)}};           // hexagon
     case "Role":        return {tag:"path",  attrs:{d: polyD(5, R*1.25)}};          // pentagon
-    case "Capability":  return {tag:"path",  attrs:{d: plusD(R*1.25, R*0.42)}};     // plus (hub)
-    case "Skill":       return {tag:"rect",  attrs:{x:-R*1.5, y:-R*0.7, width:3*R, height:1.4*R, rx:4}}; // pill
+    case "Capability":  return {tag:"path",  attrs:{d: plusD(R*1.25, R*0.42)}};     // plus
     case "Interest":    return {tag:"path",  attrs:{d: starD(5, R*1.45, R*0.6)}};   // star
     default:            return {tag:"circle",attrs:{r:R}};  // Person
   }
 }
 document.querySelectorAll("#legend .shape").forEach((svg, i) => {
-  const type = ["Person","Robot","Topic","Interaction","Session","Persona","Role","Capability","Skill","Interest"][i];
+  const type = ["Person","Robot","Topic","Interaction","Session","Persona","Role","Capability","Interest"][i];
   const s = shapePath(type);
   const el = document.createElementNS("http://www.w3.org/2000/svg", s.tag);
   for (const [k,v] of Object.entries(s.attrs)) el.setAttribute(k, v);
@@ -232,7 +230,7 @@ function update(graph) {
     .filter(e => nodeById.has(e.source) && nodeById.has(e.target))
     .map(e => ({
       source: nodeById.get(e.source), target: nodeById.get(e.target),
-      type: e.type, timescale: e.timescale, weight: e.weight,
+      type: e.type, timescale: e.timescale, weight: e.weight, elabel: e.elabel,
     }));
 
   const maxW = d3.max(links, d => Math.abs(d.weight)) || 1;
@@ -262,7 +260,7 @@ function render(nodes) {
   const wl = gLabels.selectAll("text").data(links, d => d.source.id + "→" + d.target.id + d.type);
   wl.exit().remove();
   wl.enter().append("text").attr("class", "edge-weight").attr("text-anchor", "middle")
-    .merge(wl).text(d => d.weight);
+    .merge(wl).text(d => d.elabel != null ? d.elabel : d.weight);
 
   // nodes
   const node = gNodes.selectAll("g.node").data(nodes, d => d.id);

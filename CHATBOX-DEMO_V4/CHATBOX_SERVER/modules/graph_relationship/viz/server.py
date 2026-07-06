@@ -177,6 +177,42 @@ class GraphState:
     def read(self) -> dict:
         return transform(self._raw())
 
+    def _read_fresh(self) -> dict:
+        """Read the file directly (no cache) for a read-modify-write delete."""
+        with open(self.kg_path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+
+    def _write(self, raw: dict) -> None:
+        with open(self.kg_path, "w", encoding="utf-8") as fh:
+            json.dump(raw, fh, indent=2, default=str)
+        self._last_good_raw = raw
+
+    def delete_node(self, node_id: str) -> dict:
+        """Remove a node and every edge touching it. Returns removed counts."""
+        raw = self._read_fresh()
+        nodes = [n for n in raw.get("nodes", []) if n.get("id") != node_id]
+        edges = [e for e in raw.get("edges", [])
+                 if e.get("source_id") != node_id and e.get("target_id") != node_id]
+        removed = {"nodes": len(raw.get("nodes", [])) - len(nodes),
+                   "edges": len(raw.get("edges", [])) - len(edges)}
+        raw["nodes"], raw["edges"] = nodes, edges
+        self._write(raw)
+        return removed
+
+    def delete_edge(self, source: str, target: str, edge_type: str) -> dict:
+        """Remove one edge by (source, target, edge_type). Returns removed counts."""
+        raw = self._read_fresh()
+        kept, removed = [], 0
+        for e in raw.get("edges", []):
+            if (e.get("source_id") == source and e.get("target_id") == target
+                    and e.get("edge_type") == edge_type):
+                removed += 1
+            else:
+                kept.append(e)
+        raw["edges"] = kept
+        self._write(raw)
+        return {"nodes": 0, "edges": removed}
+
 
 def make_handler(state: GraphState):
     class Handler(BaseHTTPRequestHandler):
@@ -205,6 +241,29 @@ def make_handler(state: GraphState):
                 self._send(200, body, "application/json")
             else:
                 self._send(404, b"not found", "text/plain")
+
+        def do_POST(self):
+            if self.path.split("?", 1)[0] != "/delete":
+                self._send(404, b"not found", "text/plain")
+                return
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                kind = body.get("kind")
+                if kind == "node":
+                    removed = state.delete_node(str(body["id"]))
+                elif kind == "edge":
+                    removed = state.delete_edge(
+                        str(body["source"]), str(body["target"]), str(body["edge_type"]))
+                else:
+                    self._send(400, b'{"ok":false,"error":"kind must be node|edge"}',
+                               "application/json")
+                    return
+                self._send(200, json.dumps({"ok": True, "removed": removed}).encode(),
+                           "application/json")
+            except Exception as exc:  # never 500 — report as JSON
+                self._send(200, json.dumps({"ok": False, "error": str(exc)}).encode(),
+                           "application/json")
 
     return Handler
 

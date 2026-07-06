@@ -83,6 +83,18 @@
   .bubble.reply { background: #2f2540; border: 1px solid var(--relationship); }
   .bubble .who { display: block; font-size: 10px; color: var(--muted); margin-bottom: 2px; }
   .convo-empty { color: var(--muted); font-size: 12.5px; padding: 4px 0; }
+  .sec-title { color: var(--muted); font-size: 11px; text-transform: uppercase;
+               letter-spacing: .5px; margin: 12px 0 6px; }
+  .conn { display: flex; align-items: center; justify-content: space-between;
+          gap: 8px; font-size: 12px; line-height: 1.9; }
+  .conn .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .conn .del, .btn-danger { cursor: pointer; }
+  .conn .del { color: var(--muted); padding: 0 6px; border-radius: 4px; }
+  .conn .del:hover { color: #fff; background: #b3402f; }
+  .btn-danger { display: block; width: 100%; margin-top: 12px; padding: 8px;
+                background: #3a2020; color: #ff9b8a; border: 1px solid #b3402f;
+                border-radius: 8px; font-size: 12.5px; }
+  .btn-danger:hover { background: #b3402f; color: #fff; }
 </style>
 </head>
 <body>
@@ -116,7 +128,7 @@
     <div class="legend-row"><span class="swatch-line" style="border-color:var(--relationship)"></span>RELATIONSHIP — has_interaction / has_session</div>
   </div>
   <div class="legend-section muted" style="font-size:11px">line thickness = weight · hover for value</div>
-  <div class="legend-section muted" style="font-size:11px">click a session → transcript · a topic → summaries</div>
+  <div class="legend-section muted" style="font-size:11px">click a node → details, connections & delete</div>
 </div>
 
 <div id="convo" class="panel">
@@ -335,8 +347,7 @@ const titleEl   = document.getElementById("convo-title");
 const bodyEl    = document.getElementById("convo-body");
 
 function openConvo(d) {
-  // Panel opens for session nodes (transcript) and topic nodes (summaries).
-  if (!d.turns && !d.notes) { closeConvo(); return; }
+  // Any node opens the panel: transcript/summaries (if any) + connections + delete.
   selectedId = d.id;
   gNodes.selectAll("g.node").classed("selected", n => n.id === d.id);
   renderConvo();
@@ -356,10 +367,11 @@ function renderConvo() {
   const node = nodeById.get(selectedId);
   if (!node) { closeConvo(); return; }
 
+  let html = "";
   if (node.turns) {                 // session node → transcript
     const turns = node.turns;
-    titleEl.innerHTML = `${esc(node.label)}<small>${turns.length} turn${turns.length===1?"":"s"}</small>`;
-    bodyEl.innerHTML = turns.length === 0
+    html += `<div class="sec-title">transcript · ${turns.length} turn${turns.length===1?"":"s"}</div>`;
+    html += turns.length === 0
       ? `<div class="convo-empty">No conversation recorded for this session.</div>`
       : turns.map(t => {
           const when = t.ts ? new Date(t.ts).toLocaleTimeString() : "";
@@ -367,25 +379,64 @@ function renderConvo() {
           const reply = t.reply ? `<div class="bubble reply"><span class="who">${esc(t.robot || "robot")}</span>${esc(t.reply)}</div>` : "";
           return `<div class="turn"><div class="meta">turn ${t.turn ?? "?"} · ${esc(t.emotion||"")} · ${when}</div>${child}${reply}</div>`;
         }).join("");
-    convoEl.style.display = "flex";
-    return;
-  }
-
-  if (node.notes) {                 // topic node → conversation summaries
+  } else if (node.notes) {          // topic node → conversation summaries
     const notes = node.notes;
-    titleEl.innerHTML = `${esc(node.label)}<small>${notes.length} note${notes.length===1?"":"s"}</small>`;
-    bodyEl.innerHTML = notes.length === 0
+    html += `<div class="sec-title">summaries · ${notes.length}</div>`;
+    html += notes.length === 0
       ? `<div class="convo-empty">No conversation summaries about this topic yet.</div>`
       : notes.map(n => {
           const when = n.ts ? new Date(n.ts).toLocaleString() : "";
           return `<div class="turn"><div class="meta">${esc(n.person||"")} · ${when}</div>`
                + `<div class="bubble child">${esc(n.text||"")}</div></div>`;
         }).join("");
-    convoEl.style.display = "flex";
-    return;
   }
 
-  closeConvo();
+  // Connections — each deletable
+  const es = links.filter(l => l.source.id === node.id || l.target.id === node.id);
+  html += `<div class="sec-title">connections · ${es.length}</div>`;
+  html += es.length === 0
+    ? `<div class="convo-empty">No connections.</div>`
+    : es.map((l, i) => {
+        const out = l.source.id === node.id;
+        const other = out ? l.target : l.source;
+        const lab = l.elabel != null ? `${l.type} (${l.elabel})` : l.type;
+        return `<div class="conn"><span class="lbl">${out?"→":"←"} ${esc(lab)} <b>${esc(other.label)}</b></span>`
+             + `<span class="del" data-i="${i}" title="delete this edge">×</span></div>`;
+      }).join("");
+
+  html += `<button class="btn-danger" id="del-node">🗑 delete node + its ${es.length} edge${es.length===1?"":"s"}</button>`;
+
+  titleEl.innerHTML = `${esc(node.label)}<small>${esc(node.type||"")}</small>`;
+  bodyEl.innerHTML = html;
+  const delBtn = bodyEl.querySelector("#del-node");
+  if (delBtn) delBtn.onclick = () => deleteNode(node);
+  bodyEl.querySelectorAll(".conn .del").forEach(el => {
+    el.onclick = () => deleteEdge(es[+el.dataset.i]);
+  });
+  convoEl.style.display = "flex";
+}
+
+// ---- delete (writes back to kg_state.json via the server) -----------------
+async function postDelete(body) {
+  try {
+    const r = await fetch("/delete", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json();
+    if (!j.ok) { alert("Delete failed: " + (j.error || "unknown")); return false; }
+    return true;
+  } catch (e) { alert("Delete failed: " + e); return false; }
+}
+async function deleteNode(node) {
+  const es = links.filter(l => l.source.id === node.id || l.target.id === node.id);
+  if (!confirm(`Delete node "${node.label}" and its ${es.length} edge(s)?`)) return;
+  if (await postDelete({ kind: "node", id: node.id })) { closeConvo(); poll(); }
+}
+async function deleteEdge(l) {
+  if (!confirm(`Delete edge: ${l.source.id} —${l.type}→ ${l.target.id}?`)) return;
+  if (await postDelete({ kind: "edge", source: l.source.id, target: l.target.id, edge_type: l.type })) {
+    await poll();       // refresh graph + links
+    renderConvo();      // re-render panel with the edge gone
+  }
 }
 
 // ---- polling loop ---------------------------------------------------------

@@ -1,20 +1,14 @@
 """
-Storage abstraction layer for the dual-cluster relational knowledge graph.
+Storage abstraction layer for the relational knowledge graph.
 
-Call-site code (response loop, learning loop) depends only on GraphStore —
-never on a concrete backend.  Two implementations are provided:
-
-  InMemoryGraphStore   — dict-backed, fully working, for dev and tests.
-  PluggableGraphStore  — thin delegation layer over an injected BackendAdapter;
-                         swap in SQLite, an embedded graph DB, or a cloud store
-                         by subclassing BackendAdapter.
+Call-site code depends only on the GraphStore interface. One implementation is
+provided: InMemoryGraphStore (dict-backed, JSON save/load, used everywhere).
 
 Indexing contract
 -----------------
 Every method that reads edges is O(neighbors of the queried node), not
 O(whole graph).  InMemoryGraphStore maintains a _node_edge_index that maps
-each node_id to the set of edge_ids touching it (source or target).  Any
-BackendAdapter implementation must provide an equivalent indexed read path.
+each node_id to the set of edge_ids touching it (source or target).
 """
 
 from __future__ import annotations
@@ -23,7 +17,7 @@ import abc
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import timezone
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from pydantic import Field, TypeAdapter
 from typing import Annotated
@@ -50,10 +44,10 @@ _edge_adapter: TypeAdapter = TypeAdapter(_AnyEdgeDisc)
 # ---------------------------------------------------------------------------
 
 _PERSON_ATTRIBUTE_TYPES: frozenset = frozenset(
-    {"mood", "attention", "current_topic", "trait", "preference"}
+    {"mood", "attention", "trait", "preference"}
 )
 _RELATIONSHIP_TYPES: frozenset = frozenset(
-    {"rapport", "trust", "disclosure_depth", "interaction_count"}
+    {"rapport", "trust", "interaction_count"}
 )
 
 
@@ -75,7 +69,7 @@ class PersonContext:
 
 
 # ---------------------------------------------------------------------------
-# Merge helper (shared by InMemoryGraphStore and PluggableGraphStore)
+# Merge helper (used by InMemoryGraphStore.upsert_edge)
 # ---------------------------------------------------------------------------
 
 def _merge_edge(existing: AnyEdge, incoming: AnyEdge) -> AnyEdge:
@@ -117,10 +111,8 @@ def _merge_edge(existing: AnyEdge, incoming: AnyEdge) -> AnyEdge:
 
 class GraphStore(abc.ABC):
     """
-    Backend-agnostic interface for the dual-cluster graph.
-
-    No SQL, no file paths, no cloud SDK identifiers appear in any method
-    signature.  Inject a concrete backend via PluggableGraphStore.
+    Backend-agnostic interface for the graph. InMemoryGraphStore is the
+    concrete implementation used throughout.
     """
 
     @abc.abstractmethod
@@ -356,139 +348,3 @@ class InMemoryGraphStore(GraphStore):
             self._node_edge_index[edge.source_id].add(edge.id)
             self._node_edge_index[edge.target_id].add(edge.id)
         return True
-
-
-# ---------------------------------------------------------------------------
-# BackendAdapter — seam for concrete storage backends
-# ---------------------------------------------------------------------------
-
-class BackendAdapter(abc.ABC):
-    """
-    Interface for a concrete storage backend.
-
-    All methods pass and return plain dicts (via schema's model_dump / validate)
-    so implementations have no Pydantic dependency.  Merge logic lives in
-    PluggableGraphStore._merge_before_write; adapters only do raw reads/writes.
-
-    Implement this to drop in:
-      - SQLite / SQLAlchemy (on-device)
-      - An embedded graph DB (e.g. Kuzu, DuckDB)
-      - A cloud store (e.g. Firestore, DynamoDB)
-    """
-
-    @abc.abstractmethod
-    def upsert_node(self, node_dict: Dict[str, Any]) -> Dict[str, Any]:
-        # TODO: persist node_dict keyed by node_dict["id"]; return the stored dict
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def get_node(self, node_id: str) -> Optional[Dict[str, Any]]:
-        # TODO: return the stored node dict or None
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def upsert_edge(self, edge_dict: Dict[str, Any]) -> Dict[str, Any]:
-        # TODO: persist edge_dict keyed by edge_dict["id"]; return the stored dict.
-        #       Merge rules are applied before this call — just write the merged dict.
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def get_edge(
-        self, src_id: str, dst_id: str, edge_type: str
-    ) -> Optional[Dict[str, Any]]:
-        # TODO: return the stored edge dict matching (src_id, dst_id, edge_type) or None.
-        #       Requires an index on (source_id, target_id, edge_type).
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def query_neighbors(
-        self, node_id: str, edge_type: Optional[str]
-    ) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
-        # TODO: return [(edge_dict, neighbor_node_dict), ...] for all edges touching node_id.
-        #       Must be O(neighbors) — requires a node→edges index in the backend.
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def get_person_context_raw(
-        self, person_id: str
-    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        # TODO: return (person_attribute_edge_dicts, relationship_edge_dicts).
-        #       O(neighbors of person_id) — same index requirement as query_neighbors.
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def apply_delta(
-        self,
-        node_dicts: List[Dict[str, Any]],
-        edge_dicts: List[Dict[str, Any]],
-    ) -> None:
-        # TODO: batch-write the delta. Must not scan the full backing store.
-        raise NotImplementedError
-
-
-# ---------------------------------------------------------------------------
-# PluggableGraphStore
-# ---------------------------------------------------------------------------
-
-class PluggableGraphStore(GraphStore):
-    """
-    Thin delegation layer: converts between Pydantic schema types and the
-    BackendAdapter's plain-dict interface, and applies merge logic before writes.
-
-    Swap backends by injecting a different BackendAdapter subclass — no
-    call-site changes required.
-    """
-
-    def __init__(self, adapter: BackendAdapter) -> None:
-        self._adapter = adapter
-
-    def upsert_node(self, node: AnyNode) -> AnyNode:
-        result = self._adapter.upsert_node(node.model_dump(mode="json"))
-        return _node_adapter.validate_python(result)
-
-    def get_node(self, node_id: str) -> Optional[AnyNode]:
-        d = self._adapter.get_node(node_id)
-        return _node_adapter.validate_python(d) if d is not None else None
-
-    def upsert_edge(self, edge: AnyEdge) -> AnyEdge:
-        existing_dict = self._adapter.get_edge(
-            edge.source_id, edge.target_id, edge.edge_type
-        )
-        if existing_dict is not None:
-            existing = _edge_adapter.validate_python(existing_dict)
-            edge = _merge_edge(existing, edge)
-        result = self._adapter.upsert_edge(edge.model_dump(mode="json"))
-        return _edge_adapter.validate_python(result)
-
-    def get_edge(
-        self, src_id: str, dst_id: str, edge_type: str
-    ) -> Optional[AnyEdge]:
-        d = self._adapter.get_edge(src_id, dst_id, edge_type)
-        return _edge_adapter.validate_python(d) if d is not None else None
-
-    def query_neighbors(
-        self, node_id: str, edge_type: Optional[str] = None
-    ) -> List[Tuple[AnyEdge, AnyNode]]:
-        pairs = self._adapter.query_neighbors(node_id, edge_type)
-        return [
-            (_edge_adapter.validate_python(e), _node_adapter.validate_python(n))
-            for e, n in pairs
-        ]
-
-    def get_person_context(self, person_id: str) -> PersonContext:
-        attr_dicts, rel_dicts = self._adapter.get_person_context_raw(person_id)
-        return PersonContext(
-            person_attribute_edges=[_edge_adapter.validate_python(d) for d in attr_dicts],
-            relationship_edges=[_edge_adapter.validate_python(d) for d in rel_dicts],
-        )
-
-    def apply_delta(
-        self,
-        nodes: Optional[List[AnyNode]] = None,
-        edges: Optional[List[AnyEdge]] = None,
-    ) -> None:
-        # INVARIANT: only the passed-in lists are written — no full-graph scan
-        self._adapter.apply_delta(
-            [n.model_dump(mode="json") for n in (nodes or [])],
-            [e.model_dump(mode="json") for e in (edges or [])],
-        )

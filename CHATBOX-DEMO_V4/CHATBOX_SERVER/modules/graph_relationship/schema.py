@@ -178,7 +178,7 @@ class InterestNode(BaseModel):
     node_type: Literal["interest"] = "interest"
 
 
-# Union alias used by GraphSchema
+# Union of all node types (discriminated on node_type for (de)serialisation)
 AnyNode = Union[
     RobotNode, PersonNode, TopicNode,
     PersonaNode, RoleNode, CapabilityNode, InterestNode,
@@ -213,12 +213,6 @@ class TrustEdge(EdgeBase):
     weight: float = Field(..., ge=0.0, le=1.0)
 
 
-class DisclosureDepthEdge(EdgeBase):
-    """Depth of personal information the child shares."""
-    edge_type: Literal["disclosure_depth"] = "disclosure_depth"
-    weight: float = Field(..., ge=0.0, le=1.0)
-
-
 class InteractionCountEdge(EdgeBase):
     """Running count of completed turns / exchanges."""
     edge_type: Literal["interaction_count"] = "interaction_count"
@@ -226,7 +220,7 @@ class InteractionCountEdge(EdgeBase):
 
 
 RelationshipEdge = Union[
-    RapportEdge, TrustEdge, DisclosureDepthEdge, InteractionCountEdge
+    RapportEdge, TrustEdge, InteractionCountEdge
 ]
 
 
@@ -248,12 +242,6 @@ class AttentionEdge(EdgeBase):
     timescale: Timescale = Timescale.FAST
 
 
-class CurrentTopicEdge(EdgeBase):
-    """Person → Topic for the active conversational subject — FAST."""
-    edge_type: Literal["current_topic"] = "current_topic"
-    timescale: Timescale = Timescale.FAST
-
-
 class TraitEdge(EdgeBase):
     """Stable personality/character attribute — SLOW."""
     edge_type: Literal["trait"] = "trait"
@@ -269,7 +257,7 @@ class PreferenceEdge(EdgeBase):
 
 
 PersonAttributeEdge = Union[
-    MoodEdge, AttentionEdge, CurrentTopicEdge, TraitEdge, PreferenceEdge
+    MoodEdge, AttentionEdge, TraitEdge, PreferenceEdge
 ]
 
 
@@ -353,82 +341,3 @@ InteractionEdge = Union[HasInteractionEdge, HasSessionEdge]
 AnyEdge = Union[
     RelationshipEdge, PersonAttributeEdge, IdentityEdge, TopicEdge, InteractionEdge
 ]
-
-
-# ---------------------------------------------------------------------------
-# GraphSchema — in-memory container
-# ---------------------------------------------------------------------------
-
-class GraphSchema(BaseModel):
-    """
-    In-memory dual-cluster graph.
-
-    Robot-cluster nodes and person-cluster nodes are stored in the same dict
-    keyed by node id so cross-cluster relationship edges resolve in O(1).
-    Persistence is out of scope here — call to_dict() / from_dict() to hand off
-    to a storage backend without modifying this class.
-    """
-
-    nodes: Dict[str, AnyNode] = Field(default_factory=dict)
-    edges: Dict[str, AnyEdge] = Field(default_factory=dict)
-
-    # -- node operations -------------------------------------------------- #
-
-    def add_node(self, node: AnyNode) -> AnyNode:
-        """Register a node; silently replaces an existing node with the same id."""
-        self.nodes[node.id] = node
-        return node
-
-    def get_node(self, node_id: str) -> Optional[AnyNode]:
-        return self.nodes.get(node_id)
-
-    def get_nodes_by_type(self, node_type: str) -> List[AnyNode]:
-        return [n for n in self.nodes.values() if n.node_type == node_type]
-
-    # -- edge operations -------------------------------------------------- #
-
-    def add_edge(self, edge: AnyEdge) -> AnyEdge:
-        """
-        Register an edge.
-
-        Raises ValueError if:
-        - source_id or target_id do not exist in the graph
-        - provenance is absent (enforced by Pydantic, but double-checked here)
-        """
-        if edge.source_id not in self.nodes:
-            raise ValueError(
-                f"source_id '{edge.source_id}' does not exist in the graph"
-            )
-        if edge.target_id not in self.nodes:
-            raise ValueError(
-                f"target_id '{edge.target_id}' does not exist in the graph"
-            )
-        # provenance is a required field on EdgeBase; Pydantic rejects edges
-        # without it at construction time, but we re-assert for clarity.
-        if edge.provenance is None:
-            raise ValueError("Every edge must carry a Provenance record")
-        self.edges[edge.id] = edge
-        return edge
-
-    def get_edge(self, edge_id: str) -> Optional[AnyEdge]:
-        return self.edges.get(edge_id)
-
-    def get_edges_by_type(self, edge_type: str) -> List[AnyEdge]:
-        return [e for e in self.edges.values() if e.edge_type == edge_type]
-
-    def get_edges_between(self, source_id: str, target_id: str) -> List[AnyEdge]:
-        return [
-            e for e in self.edges.values()
-            if e.source_id == source_id and e.target_id == target_id
-        ]
-
-    # -- serialisation ---------------------------------------------------- #
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Serialise to a plain dict; a storage backend can persist this."""
-        return self.model_dump(mode="json")
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "GraphSchema":
-        """Reconstruct from a plain dict produced by to_dict()."""
-        return cls.model_validate(data)

@@ -556,22 +556,29 @@ class _DetectionWorker(threading.Thread):
         emotion_backend: str   = 'hsemotion',
         max_faces:       int   = 4,
         det_scale:       float = 0.5,
+        detect_emotion:  bool  = True,
     ):
         super().__init__(daemon=True, name="detection-worker")
         self._face_id         = face_id
         self._emotion_backend = emotion_backend
         self._max_faces       = max_faces
         self._det_scale       = det_scale
+        self._detect_emotion  = detect_emotion
 
-        # Per-person smoothers (only ever touched from this thread — no lock needed)
+        # Per-person smoothers (only ever touched from this thread — no lock needed).
+        # Skipped entirely when emotion detection is disabled (no models loaded).
         self._per_emotion: dict[str, EmotionDetector] = {}
-        self._unknown_emotion = EmotionDetector.create(emotion_backend)
+        self._unknown_emotion = (
+            EmotionDetector.create(emotion_backend) if detect_emotion else None
+        )
 
         self._lock    = threading.Lock()
         self._frame   = None
         self._results: list = []
         self._event   = threading.Event()
-        self._stop    = threading.Event()
+        # NOTE: must NOT be named `_stop` — that shadows threading.Thread._stop,
+        # which Thread.join() calls internally (→ 'Event' object is not callable).
+        self._stop_evt = threading.Event()
 
     # ── Public API (called from main thread) ──────────────────────────────────
 
@@ -587,17 +594,17 @@ class _DetectionWorker(threading.Thread):
             return list(self._results)
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stop_evt.set()
         self._event.set()  # unblock the wait
 
     # ── Worker loop ───────────────────────────────────────────────────────────
 
     def run(self) -> None:
-        while not self._stop.is_set():
+        while not self._stop_evt.is_set():
             if not self._event.wait(timeout=0.1):
                 continue
             self._event.clear()
-            if self._stop.is_set():
+            if self._stop_evt.is_set():
                 break
 
             with self._lock:
@@ -613,7 +620,10 @@ class _DetectionWorker(threading.Thread):
 
             results = []
             for person_id, sim, box in raw:
-                if person_id is not None:
+                if not self._detect_emotion:
+                    # Emotion disabled for this pass — face identification only.
+                    emo, e_conf, ev, ea = "neutral", 0.0, 0.0, 0.0
+                elif person_id is not None:
                     if person_id not in self._per_emotion:
                         self._per_emotion[person_id] = EmotionDetector.create(
                             self._emotion_backend
@@ -662,6 +672,11 @@ class WebcamKGLoop:
         emotion_backend: str   = 'hsemotion',
         esp32_host:      str   = "",
         esp32_port:      int   = 8888,
+        spec_dir:        Optional[str] = None,
+        seed:            bool  = True,
+        matcher                = None,
+        pad_enabled:     bool  = False,
+        emotion_enabled: bool  = False,
     ):
         self.robot_id      = robot_id
         self.faces_path    = faces_path
@@ -682,12 +697,37 @@ class WebcamKGLoop:
         else:
             print(f"[WebcamLoop] No KG at '{kg_path}' — starting fresh")
 
+        # Seed authored robot/human subgraphs from spec files so a recognized
+        # person has KG info to retrieve immediately (idempotent — deterministic ids).
+        if seed:
+            spec_dir = spec_dir or os.path.join(
+                _SERVER_ROOT, "modules", "graph_relationship", "specs"
+            )
+            try:
+                from modules.graph_relationship.seed import seed_all
+                seed_all(self.store, spec_dir)
+                if self.kg_path:
+                    self.store.save(self.kg_path)
+            except Exception as exc:  # noqa: BLE001 — seeding is best-effort
+                print(f"[WebcamLoop] seed skipped ({spec_dir}): {exc}")
+
         self.bridge  = KGBridge(self.store)
         self._adapters: dict[str, PADPipelineAdapter] = {}
 
-        self._emotion_backend = emotion_backend
-        self._esp32_host      = esp32_host
-        self._esp32_port      = esp32_port
+        self._emotion_backend  = emotion_backend
+        self._esp32_host       = esp32_host
+        self._esp32_port       = esp32_port
+
+        # PAD persona engine + emotion detection are disabled for this pass
+        # (face-reco → KG-through-conversation only). Re-enable via CLI later.
+        self._pad_enabled      = pad_enabled
+        self._emotion_enabled  = emotion_enabled
+        self._matcher          = matcher
+        # person_id -> current session node id for this run (like KGBridge._session).
+        self._sessions: dict[str, str] = {}
+        # person_id -> (valence, emotion_label) last persisted — dirty-check so the
+        # per-tick mood write only hits disk when it actually changes.
+        self._last_mood: dict[str, tuple] = {}
 
         # Per-person rolling chat history (last 5 turns)
         self._chat_history: dict[str, deque] = {}
@@ -719,6 +759,206 @@ class WebcamKGLoop:
         self._last_pad_result = pad
         return bi, pad
 
+    # ── KG-only path (PAD/emotion disabled) ────────────────────────────────────
+
+    def _ensure_session(self, pid: str) -> str:
+        """Return the current session id for `pid`, creating person/interaction/
+        session as needed. One session per person for this run's lifetime."""
+        from modules.graph_relationship.schema import (
+            PersonNode, RobotNode, Embodiment,
+        )
+        from modules.graph_relationship.interactions import (
+            get_or_create_interaction, start_session, count_person_sessions,
+        )
+        sid = self._sessions.get(pid)
+        if sid is not None and self.store.get_node(sid) is not None:
+            return sid
+        if self.store.get_node(pid) is None:
+            self.store.upsert_node(PersonNode(id=pid, display_name=pid))
+        if self.store.get_node(self.robot_id) is None:
+            emb = (Embodiment.CAT if self.robot_id.lower() == "chatbox"
+                   else Embodiment.ELEPHANT)
+            self.store.upsert_node(
+                RobotNode(id=self.robot_id, name=self.robot_id, embodiment=emb))
+        interaction = get_or_create_interaction(
+            self.store, pid, self.robot_id, source=self.robot_id)
+        label = f"session {count_person_sessions(self.store, pid) + 1}"
+        session = start_session(
+            self.store, interaction_id_=interaction.id, label=label,
+            source=self.robot_id)
+        self._sessions[pid] = session.id
+        # Persist once on session creation (not every tick) so the viz can pick
+        # up the new person without flooding the disk with identical snapshots.
+        if self.kg_path:
+            self.store.save(self.kg_path)
+        return session.id
+
+    def _kg_tick(self, pid: str) -> tuple[str, float, float]:
+        """Ensure the person's session exists and return (tier, rapport, trust)
+        for the overlay. No PAD, no per-tick transcript writes."""
+        from modules.graph_relationship.kg_bridge import derive_tier
+        self._ensure_session(pid)
+        tier = derive_tier(pid, self.robot_id, self.store)
+        r, t = _read_rapport_trust(self.store, pid, self.robot_id)
+        return tier, r, t
+
+    def _mood_tick(self, pid: str, emotion: Optional[str],
+                   va: Optional[tuple]) -> bool:
+        """Write the person's FAST MoodEdge from the current camera emotion
+        (emotion → valence). No PAD. Returns True if it changed enough to save."""
+        from datetime import datetime, timezone
+        from modules.graph_relationship.schema import MoodEdge, Provenance
+        if va is not None and va[0] is not None:
+            valence = float(va[0])
+        else:
+            from modules.graph_relationship.kg_bridge import emotion_label_to_va
+            valence, _a = emotion_label_to_va(emotion)
+        valence = max(-1.0, min(1.0, valence))
+        self.store.upsert_edge(MoodEdge(
+            source_id=pid, target_id=pid,
+            provenance=Provenance(source=self.robot_id, confidence=1.0,
+                                  timestamp=datetime.now(timezone.utc)),
+            value=valence, label=emotion,
+        ))
+        prev = self._last_mood.get(pid)
+        changed = (prev is None or abs(prev[0] - valence) >= 0.04
+                   or prev[1] != emotion)
+        if changed:
+            self._last_mood[pid] = (valence, emotion)
+        return changed
+
+    def _detect_topic(self, user_msg: str, reply: str = "") -> Optional[str]:
+        """Best-effort 1–3 word label of what's being discussed, via the LLM.
+        Used to set the FAST current_topic edge. Returns None on any failure."""
+        if not (self.llm and self.llm.available):
+            return None
+        sys = ("You label the topic of a short conversation snippet. Reply with "
+               "ONLY the topic as 1-3 lowercase words (a noun phrase) — no "
+               "punctuation, no sentence. Examples: 'jazz music', 'the stock "
+               "market', 'space travel'.")
+        try:
+            raw = self.llm.respond(sys, f"Person said: {user_msg}\nRobot said: {reply}")
+        except Exception:  # noqa: BLE001
+            return None
+        topic = (raw or "").strip().strip('".\'').lower()
+        # Reject sentences / error strings — keep only short noun phrases.
+        if not topic or topic.startswith("[") or len(topic.split()) > 4 or len(topic) > 40:
+            return None
+        return topic
+
+    def _person_memory(self, pid: Optional[str]) -> str:
+        """Render what the KG knows about `pid`: interests, shared topics, notes."""
+        if not pid:
+            return ""
+        from modules.graph_relationship.topics import (
+            person_interests, shared_topics,
+        )
+        lines: list[str] = []
+        interests = person_interests(self.store, pid)
+        if interests:
+            parts = []
+            for interest, topics in interests:
+                if topics:
+                    parts.append(f"{interest.label} ({', '.join(t.label for t in topics)})")
+                else:
+                    parts.append(interest.label)
+            lines.append("Their interests: " + "; ".join(parts))
+        shared = shared_topics(self.store, pid, self.robot_id)
+        if shared:
+            lines.append("Things you both like: " + ", ".join(shared))
+        notes: list[str] = []
+        for _interest, topics in interests:
+            for t in topics:
+                for n in getattr(t, "notes", []) or []:
+                    if n.get("person") == pid and n.get("text"):
+                        notes.append(f"{t.label}: {n['text']}")
+        if notes:
+            lines.append("What you remember discussing: " + " | ".join(notes[:5]))
+        return "\n".join(lines)
+
+    def _build_system_prompt(self, pid: Optional[str]) -> str:
+        """Plain persona prompt assembled from the seeded RobotNode + retrieved
+        person memory. Used when PAD is disabled (no PAD system_prompt)."""
+        from modules.graph_relationship.topics import robot_capability
+        personas = [n.descriptor for _e, n in
+                    self.store.query_neighbors(self.robot_id, "has_persona")
+                    if n.node_type == "persona"]
+        roles = [n.descriptor for _e, n in
+                 self.store.query_neighbors(self.robot_id, "has_role")
+                 if n.node_type == "role"]
+        cap = robot_capability(self.store, self.robot_id)
+        caps = cap.items if cap else []
+
+        lines = [f"You are {self._robot_display}, a friendly companion robot "
+                 f"talking with a person through a webcam."]
+        if personas:
+            lines.append(f"Your personality: {', '.join(personas)}.")
+        if roles:
+            lines.append(f"Your role: {', '.join(roles)}.")
+        if caps:
+            lines.append(f"You can: {', '.join(caps)}.")
+        lines.append(
+            "Keep replies short, warm and natural for a spoken conversation. "
+            "Begin every reply with an emotion tag in square brackets, e.g. "
+            "[HAPPY] or [CURIOUS].")
+        if pid:
+            mem = self._person_memory(pid)
+            if mem:
+                lines.append(
+                    f"\nYou recognise this person as {pid}. "
+                    f"What you remember about them:\n{mem}\n"
+                    "Bring these memories up naturally when relevant — do not "
+                    "recite them mechanically.")
+            else:
+                lines.append(f"\nYou recognise this person as {pid}, but you do "
+                             "not remember much about them yet.")
+        else:
+            lines.append("\nYou do not recognise this person yet.")
+        return "\n".join(lines)
+
+    def _extract_session(self) -> None:
+        """End-of-session knowledge extraction: distill each session's transcript
+        into interests/topics + rapport/trust deltas, then persist. Needs the LLM."""
+        if not (self.llm and self.llm.available):
+            print("[WebcamLoop] extraction skipped — LLM not connected")
+            return
+        from modules.graph_relationship.extraction import extract_and_apply
+        from modules.graph_relationship.interactions import (
+            unextracted_turns, mark_session_extracted,
+        )
+        # Respect external edits (e.g. viz deletions) before extracting.
+        if self.kg_path and os.path.exists(self.kg_path):
+            self.store.reload(self.kg_path)
+        sessions = dict(self._sessions)
+        if not sessions:
+            print("[WebcamLoop] no session this run — nothing to extract")
+            return
+        print("[WebcamLoop] extracting knowledge from this session …")
+        for pid, sid in sessions.items():
+            sess = self.store.get_node(sid)
+            if sess is None or sess.node_type != "session":
+                continue
+            # Only real conversation turns (with child/reply text).
+            turns = [t for t in unextracted_turns(sess)
+                     if t.get("child") or t.get("reply")]
+            if not turns:
+                print(f"  {pid}: no conversation turns to extract")
+                continue
+            _update, s = extract_and_apply(
+                self.store, pid, self.robot_id, turns, self.llm.respond,
+                matcher=self._matcher, source="extraction")
+            mark_session_extracted(self.store, sid)
+            ints = s.get("interests_added", [])
+            int_str = ("  interests: " + ", ".join(
+                f"{lab}→{'/'.join(ts)}" if ts else lab for lab, ts, _sm in ints)
+            ) if ints else "  (no new interests)"
+            print(f"  {pid}: Δrapport {s['rapport_delta']:+.2f}"
+                  f"  Δtrust {s['trust_delta']:+.2f}{int_str}")
+            for item, tl in s.get("capability_links", []):
+                print(f"      ↳ shared topic '{tl}' — {self.robot_id} [{item}]")
+        if self.kg_path:
+            self.store.save(self.kg_path)
+
     def run(self, camera_index: int = _DEFAULT_CAMERA) -> None:  # noqa: C901
         cap = cv2.VideoCapture(camera_index)
         if not cap.isOpened():
@@ -731,8 +971,12 @@ class WebcamKGLoop:
                 cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
 
         llm_status = "LLM ready" if (self.llm and self.llm.available) else "no LLM (restart with --llm)"
-        print(f"\n[WebcamLoop] robot={self._robot_display}  tick={self.tick_interval}s  cam={camera_index}  {llm_status}")
-        print("  T=chat  E=enroll  B=boost  K=dump KG  S=save  Q=quit  (all in the OpenCV window)\n")
+        mode = ("PAD+emotion" if self._pad_enabled else "KG-only") + \
+               (" (emotion on)" if self._emotion_enabled else " (no emotion)")
+        print(f"\n[WebcamLoop] robot={self._robot_display}  tick={self.tick_interval}s  "
+              f"cam={camera_index}  {llm_status}  mode={mode}")
+        print("  T=chat  E=enroll  B=boost  K=dump KG  X=extract  S=save  Q=quit"
+              "  (all in the OpenCV window)\n")
 
         # ── Background detection worker ───────────────────────────────────────
         worker = _DetectionWorker(
@@ -740,6 +984,7 @@ class WebcamKGLoop:
             emotion_backend=self._emotion_backend,
             max_faces=4,
             det_scale=0.5,
+            detect_emotion=self._emotion_enabled,
         )
         worker.start()
 
@@ -873,31 +1118,55 @@ class WebcamKGLoop:
                 if not enroll_capturing and now - last_tick_t >= self.tick_interval:
                     last_tick_t = now
                     tick_n += 1
+                    mood_dirty = False
 
                     for d in raw_dets:
                         pid = d["person_id"]
                         if pid is None:
                             continue
-                        bi, pad = self._pipeline_tick(pid, d["emotion"], va=d.get("va"))
-                        r, t    = _read_rapport_trust(self.store, pid, self.robot_id)
-                        _kg_state[pid] = {
-                            "tier":        bi.tier,
-                            "pad_state":   pad["pad_state"],
-                            "descriptors": pad["descriptors"],
-                            "rapport":     r,
-                            "trust":       t,
-                        }
-                        if pid == last_person_id:
-                            self._last_pad_result = pad
-                            last_tier        = bi.tier
-                            last_pad_state   = pad["pad_state"]
-                            last_descriptors = pad["descriptors"]
-                            last_rapport     = r
-                            last_trust       = t
+                        if self._pad_enabled:
+                            bi, pad = self._pipeline_tick(pid, d["emotion"], va=d.get("va"))
+                            r, t    = _read_rapport_trust(self.store, pid, self.robot_id)
+                            _kg_state[pid] = {
+                                "tier":        bi.tier,
+                                "pad_state":   pad["pad_state"],
+                                "descriptors": pad["descriptors"],
+                                "rapport":     r,
+                                "trust":       t,
+                            }
+                            if pid == last_person_id:
+                                self._last_pad_result = pad
+                                last_tier        = bi.tier
+                                last_pad_state   = pad["pad_state"]
+                                last_descriptors = pad["descriptors"]
+                                last_rapport     = r
+                                last_trust       = t
+                        else:
+                            # KG-only tick: ensure session, refresh overlay state.
+                            tier, r, t = self._kg_tick(pid)
+                            _kg_state[pid] = {
+                                "tier":        tier,
+                                "pad_state":   None,
+                                "descriptors": None,
+                                "rapport":     r,
+                                "trust":       t,
+                            }
+                            # Emotion drives the FAST MoodEdge only (no PAD).
+                            if self._emotion_enabled and self._mood_tick(
+                                    pid, d.get("emotion"), d.get("va")):
+                                mood_dirty = True
+                            if pid == last_person_id:
+                                last_tier    = tier
+                                last_rapport = r
+                                last_trust   = t
 
                     # Persist after the tick so the live viz server
                     # (modules.graph_relationship.viz.server) can poll it within ~1s.
-                    if self.kg_path and any(d["person_id"] for d in raw_dets):
+                    # PAD mode mutates every tick; the KG-only path otherwise saves
+                    # on session creation + each chat turn, so we only add a per-tick
+                    # save when the FAST mood actually changed (mood_dirty).
+                    if (self.kg_path and (self._pad_enabled or mood_dirty)
+                            and any(d["person_id"] for d in raw_dets)):
                         self.store.save(self.kg_path)
 
                 # Clear stale chat
@@ -958,14 +1227,18 @@ class WebcamKGLoop:
                                 last_user_msg  = msg
                                 chat_expire_t  = time.time() + 45.0
                                 print(f"\n  [you]  \"{msg}\"")
-                                if self._last_pad_result and self.llm and self.llm.available:
+                                if self.llm and self.llm.available:
                                     hist = list(self._chat_history.get(
                                         last_person_id or "", []
                                     ))
+                                    # PAD off → build the system prompt from the KG
+                                    # (persona + retrieved person memory).
+                                    if self._pad_enabled and self._last_pad_result:
+                                        sys_prompt = self._last_pad_result["system_prompt"]
+                                    else:
+                                        sys_prompt = self._build_system_prompt(last_person_id)
                                     raw_reply = self.llm.respond(
-                                        self._last_pad_result["system_prompt"],
-                                        msg,
-                                        history=hist,
+                                        sys_prompt, msg, history=hist,
                                     )
                                     tag, verbal = _parse_llm_response(raw_reply)
                                     last_verbal = verbal
@@ -984,11 +1257,38 @@ class WebcamKGLoop:
                                     if pid_key not in self._chat_history:
                                         self._chat_history[pid_key] = deque(maxlen=5)
                                     self._chat_history[pid_key].append((msg, verbal))
-                                elif not (self.llm and self.llm.available):
+                                    # Record the turn into the KG session transcript
+                                    # (recognized persons only) so end-of-session
+                                    # extraction has real conversation to distill.
+                                    if last_person_id:
+                                        from modules.graph_relationship.interactions import (
+                                            append_turn, sync_interaction_count,
+                                        )
+                                        sid = self._ensure_session(last_person_id)
+                                        append_turn(
+                                            self.store, session_id=sid,
+                                            emotion=(last_emotion
+                                                     if self._emotion_enabled else None),
+                                            child_message=msg, reply=verbal,
+                                        )
+                                        sync_interaction_count(
+                                            self.store, last_person_id, self.robot_id)
+                                        # Track the FAST current_topic edge live so
+                                        # the viz shows what's being discussed now.
+                                        topic = self._detect_topic(msg, verbal)
+                                        if topic:
+                                            from modules.graph_relationship.topics import (
+                                                set_current_topic,
+                                            )
+                                            set_current_topic(
+                                                self.store, last_person_id, topic,
+                                                source="live-topic")
+                                            print(f"  [topic]  current → {topic}")
+                                        if self.kg_path:
+                                            self.store.save(self.kg_path)
+                                else:
                                     last_verbal = "[LLM not enabled — run with --llm]"
                                     print("  [chat] LLM not connected. Run with --llm.\n")
-                                else:
-                                    last_verbal = "[Waiting for face recognition …]"
                             input_mode = _MODE_IDLE
                             input_text = ""
 
@@ -1033,6 +1333,8 @@ class WebcamKGLoop:
                         input_error = ""
                     elif key in (ord("k"), ord("K")):
                         _dump_kg(self.store, self.robot_id)
+                    elif key in (ord("x"), ord("X")):
+                        self._extract_session()   # run extraction mid-session (testing)
                     elif key in (ord("b"), ord("B")) and last_person_id:
                         _update_rapport_trust(
                             self.store, last_person_id, self.robot_id,
@@ -1050,6 +1352,11 @@ class WebcamKGLoop:
             worker.join(timeout=2.0)
             if self.face_id.known_people():
                 self.face_id.save(self.faces_path)
+            # End-of-session knowledge extraction → update the graph.
+            try:
+                self._extract_session()
+            except Exception as exc:  # noqa: BLE001 — never fail on shutdown
+                print(f"[WebcamLoop] extraction failed: {exc}")
             self.store.save(self.kg_path)
             cap.release()
             if self.show_window:
@@ -1110,6 +1417,23 @@ def main() -> None:
                    help="ESP32 IP address for TCP expression dispatch (blank=disabled)")
     p.add_argument("--esp32-port", type=int, default=8888,
                    help="ESP32 TCP port (default: 8888)")
+    # ── KG integration options ────────────────────────────────────────────────
+    p.add_argument("--no-seed", action="store_true",
+                   help="Do not seed the KG from spec files on startup")
+    p.add_argument("--spec-dir", default=None,
+                   help="Directory of KG spec YAML/JSON files "
+                        "(default: modules/graph_relationship/specs)")
+    p.add_argument("--no-embed", action="store_true",
+                   help="Use the keyword matcher instead of embeddings for "
+                        "topic↔capability linking during extraction")
+    p.add_argument("--embed-model", default="nomic-embed-text",
+                   help="Ollama embedding model (default: nomic-embed-text)")
+    p.add_argument("--embed-floor", type=float, default=0.5,
+                   help="Min cosine similarity to link topic↔capability (default: 0.5)")
+    p.add_argument("--enable-pad", action="store_true",
+                   help="Enable the PAD persona engine (disabled by default this pass)")
+    p.add_argument("--enable-emotion", action="store_true",
+                   help="Enable emotion detection (disabled by default this pass)")
     args = p.parse_args()
 
     if args.mode == "enroll":
@@ -1124,6 +1448,22 @@ def main() -> None:
         llm = LLMClient(model=args.model)
         llm.connect()
 
+    # Embedding matcher (default when --llm); degrades gracefully on failure.
+    matcher = None
+    if not args.no_embed:
+        try:
+            from modules.graph_relationship.embedding import (
+                make_embedding_matcher, ollama_embed_fn,
+            )
+            matcher = make_embedding_matcher(
+                ollama_embed_fn(model=args.embed_model), floor=args.embed_floor)
+            print(f"[WebcamLoop] topic matching via embeddings "
+                  f"({args.embed_model}, floor {args.embed_floor})")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[WebcamLoop] embedding matcher unavailable ({exc}) — "
+                  "using keyword matcher")
+            matcher = None
+
     loop = WebcamKGLoop(
         robot_id         = args.robot,
         faces_path       = args.faces,
@@ -1135,6 +1475,11 @@ def main() -> None:
         emotion_backend  = args.emotion,
         esp32_host       = args.esp32_host,
         esp32_port       = args.esp32_port,
+        spec_dir         = args.spec_dir,
+        seed             = not args.no_seed,
+        matcher          = matcher,
+        pad_enabled      = args.enable_pad,
+        emotion_enabled  = args.enable_emotion,
     )
     loop.run(camera_index=args.camera)
 

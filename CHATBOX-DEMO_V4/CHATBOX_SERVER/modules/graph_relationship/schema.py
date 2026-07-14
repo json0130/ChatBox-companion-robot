@@ -229,9 +229,14 @@ RelationshipEdge = Union[
 # ---------------------------------------------------------------------------
 
 class MoodEdge(EdgeBase):
-    """Current affective state — FAST, decays between sessions."""
+    """Current affective state — FAST, decays between sessions.
+
+    `label` optionally carries the source emotion name (e.g. "happy") so the
+    live visualizer can show the current emotion alongside the valence.
+    """
     edge_type: Literal["mood"] = "mood"
     value: float = Field(..., ge=-1.0, le=1.0)  # valence: -1 sad … +1 happy
+    label: Optional[str] = None                 # emotion label, e.g. "happy"
     timescale: Timescale = Timescale.FAST
 
 
@@ -239,6 +244,17 @@ class AttentionEdge(EdgeBase):
     """Estimated engagement level — FAST."""
     edge_type: Literal["attention"] = "attention"
     value: float = Field(..., ge=0.0, le=1.0)
+    timescale: Timescale = Timescale.FAST
+
+
+class CurrentTopicEdge(EdgeBase):
+    """Person → TopicNode currently being discussed — FAST, one at a time.
+
+    Written live during a conversation and replaced as the topic shifts (unlike
+    the SLOW interest/about edges distilled at session end). Lets the visualizer
+    show what the person and robot are talking about right now.
+    """
+    edge_type: Literal["current_topic"] = "current_topic"
     timescale: Timescale = Timescale.FAST
 
 
@@ -257,7 +273,7 @@ class PreferenceEdge(EdgeBase):
 
 
 PersonAttributeEdge = Union[
-    MoodEdge, AttentionEdge, TraitEdge, PreferenceEdge
+    MoodEdge, AttentionEdge, CurrentTopicEdge, TraitEdge, PreferenceEdge
 ]
 
 

@@ -44,7 +44,7 @@ _edge_adapter: TypeAdapter = TypeAdapter(_AnyEdgeDisc)
 # ---------------------------------------------------------------------------
 
 _PERSON_ATTRIBUTE_TYPES: frozenset = frozenset(
-    {"mood", "attention", "trait", "preference"}
+    {"mood", "attention", "current_topic", "trait", "preference"}
 )
 _RELATIONSHIP_TYPES: frozenset = frozenset(
     {"rapport", "trust", "interaction_count"}

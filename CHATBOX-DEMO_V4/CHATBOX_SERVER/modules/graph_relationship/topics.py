@@ -18,7 +18,8 @@ from datetime import datetime, timezone
 from typing import Callable, List, Optional, Tuple
 
 from .schema import (
-    AboutEdge, HasInterestEdge, InterestNode, Provenance, TopicNode,
+    AboutEdge, CurrentTopicEdge, HasInterestEdge, InterestNode, Provenance,
+    TopicNode,
 )
 from .store import GraphStore
 
@@ -117,6 +118,37 @@ def add_topic_note(
     node = node.model_copy(update={"notes": notes})
     store.upsert_node(node)
     return node
+
+
+def set_current_topic(
+    store: GraphStore, person_id: str, topic_label: str, *,
+    source: Optional[str] = None,
+) -> Optional[TopicNode]:
+    """Set the person's FAST `current_topic` edge to `topic_label`, replacing any
+    previous current topic (one at a time). Creates the shared TopicNode if
+    needed. Returns the TopicNode, or None for an empty label.
+
+    Unlike the SLOW interest/about edges distilled at session end, this tracks
+    what is being discussed *right now* so the live visualizer can show it.
+    """
+    label = str(topic_label).strip()
+    if not label:
+        return None
+    topic = resolve_topic(store, label)
+    # Drop any existing current_topic edge that points elsewhere.
+    if hasattr(store, "delete_edge"):
+        for _e, tnode in store.query_neighbors(person_id, "current_topic"):
+            if tnode.id != topic.id:
+                store.delete_edge(person_id, tnode.id, "current_topic")
+    store.upsert_edge(CurrentTopicEdge(
+        source_id=person_id, target_id=topic.id, provenance=_prov(source)))
+    return topic
+
+
+def current_topic(store: GraphStore, person_id: str) -> Optional[TopicNode]:
+    """The person's current_topic TopicNode, or None."""
+    hits = _neighbors_of_type(store, person_id, "current_topic", "topic")
+    return hits[0] if hits else None
 
 
 def _neighbors_of_type(store: GraphStore, node_id: str, edge_type: str, node_type: str):

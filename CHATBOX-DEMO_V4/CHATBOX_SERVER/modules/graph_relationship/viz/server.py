@@ -111,6 +111,30 @@ def transform(raw: dict) -> dict:
     Session nodes carry their `turns` transcript and `turn_count`, and their
     label shows the turn count so the click panel can render the session.
     """
+    # Pre-scan FAST self-edges (mood/attention are person→person) so the current
+    # mood + emotion can be folded onto the person's label instead of drawn as an
+    # invisible zero-length self-loop.
+    mood_by_person: dict = {}
+    for e in raw.get("edges", []):
+        if e.get("edge_type") == "mood" and e.get("source_id") == e.get("target_id"):
+            mood_by_person[e.get("source_id")] = {
+                "value": e.get("value"), "label": e.get("label"),
+            }
+
+    def _mood_suffix(nid: str) -> str:
+        m = mood_by_person.get(nid)
+        if not m:
+            return ""
+        val = m.get("value")
+        emo = m.get("label")
+        face = "🙂" if (val or 0) > 0.15 else ("🙁" if (val or 0) < -0.15 else "😐")
+        bits = [face]
+        if emo:
+            bits.append(str(emo))
+        if val is not None:
+            bits.append(f"({float(val):+.2f})")
+        return "  " + " ".join(bits)
+
     node_ids = set()
     nodes = []
     for n in raw.get("nodes", []):
@@ -124,6 +148,8 @@ def transform(raw: dict) -> dict:
             "type": _NODE_TYPE_DISPLAY.get(node_type, "Topic"),
             "label": _node_label(n),
         }
+        if node_type == "person":
+            obj["label"] = obj["label"] + _mood_suffix(nid)
         if node_type == "session":
             turns = n.get("turns", []) or []
             obj["turns"] = turns
@@ -141,6 +167,10 @@ def transform(raw: dict) -> dict:
         src, tgt = e.get("source_id"), e.get("target_id")
         # Drop dangling edges — the frontend force layout needs both endpoints.
         if src not in node_ids or tgt not in node_ids:
+            continue
+        # Skip self-edges (mood/attention) — folded onto the person label above;
+        # a zero-length self-loop would not render usefully anyway.
+        if src == tgt:
             continue
         et = e.get("edge_type", "")
         obj = {

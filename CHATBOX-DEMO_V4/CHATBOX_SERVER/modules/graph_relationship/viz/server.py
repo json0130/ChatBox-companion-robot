@@ -53,6 +53,8 @@ _TIMESCALE_BY_EDGE_TYPE = {
     # Interaction abstraction: person+robot <-> Interaction, Interaction -> Session.
     "has_interaction": "RELATIONSHIP",
     "has_session": "RELATIONSHIP",
+    # Live conversation-status node link — FAST.
+    "has_conversation": "FAST",
     # Authored identity edges (seed.py) — SLOW, cross-session.
     "has_persona": "SLOW",
     "has_role": "SLOW",
@@ -75,6 +77,8 @@ _NODE_TYPE_DISPLAY = {
     # Interaction abstraction (interactions.py).
     "interaction": "Interaction",
     "session": "Session",
+    # Live conversation-status node (topics.py update_conversation).
+    "conversation": "Conversation",
 }
 
 
@@ -121,19 +125,22 @@ def transform(raw: dict) -> dict:
                 "value": e.get("value"), "label": e.get("label"),
             }
 
-    def _mood_suffix(nid: str) -> str:
-        m = mood_by_person.get(nid)
-        if not m:
-            return ""
-        val = m.get("value")
-        emo = m.get("label")
-        face = "🙂" if (val or 0) > 0.15 else ("🙁" if (val or 0) < -0.15 else "😐")
-        bits = [face]
+    def _mood_face(val) -> str:
+        return "🙂" if (val or 0) > 0.15 else ("🙁" if (val or 0) < -0.15 else "😐")
+
+    def _mood_bits(val, emo) -> str:
+        bits = [_mood_face(val)]
         if emo:
             bits.append(str(emo))
         if val is not None:
             bits.append(f"({float(val):+.2f})")
-        return "  " + " ".join(bits)
+        return " ".join(bits)
+
+    def _mood_suffix(nid: str) -> str:
+        m = mood_by_person.get(nid)
+        if not m:
+            return ""
+        return "  " + _mood_bits(m.get("value"), m.get("label"))
 
     node_ids = set()
     nodes = []
@@ -150,6 +157,15 @@ def transform(raw: dict) -> dict:
         }
         if node_type == "person":
             obj["label"] = obj["label"] + _mood_suffix(nid)
+        elif node_type == "conversation":
+            # Live status node: "▶ topic1 · topic2 · topic3   🙂 emotion (+0.55)".
+            topics = n.get("topics", []) or []
+            head = "▶ " + " · ".join(str(t) for t in topics) if topics else "▶ (talking…)"
+            mood = _mood_bits(n.get("mood"), n.get("emotion")) \
+                if (n.get("mood") is not None or n.get("emotion")) else ""
+            obj["label"] = head + (("   " + mood) if mood else "")
+            obj["topics"] = topics
+            obj["current"] = True
         if node_type == "session":
             turns = n.get("turns", []) or []
             obj["turns"] = turns

@@ -18,8 +18,8 @@ from datetime import datetime, timezone
 from typing import Callable, List, Optional, Tuple
 
 from .schema import (
-    AboutEdge, CurrentTopicEdge, HasInterestEdge, InterestNode, Provenance,
-    TopicNode,
+    AboutEdge, ConversationNode, HasConversationEdge, HasInterestEdge,
+    InterestNode, Provenance, TopicNode,
 )
 from .store import GraphStore
 
@@ -120,35 +120,65 @@ def add_topic_note(
     return node
 
 
-def set_current_topic(
-    store: GraphStore, person_id: str, topic_label: str, *,
-    source: Optional[str] = None,
-) -> Optional[TopicNode]:
-    """Set the person's FAST `current_topic` edge to `topic_label`, replacing any
-    previous current topic (one at a time). Creates the shared TopicNode if
-    needed. Returns the TopicNode, or None for an empty label.
+def conversation_id(person_id: str, robot_id: str) -> str:
+    return f"conversation:{person_id}:{robot_id}"
 
-    Unlike the SLOW interest/about edges distilled at session end, this tracks
-    what is being discussed *right now* so the live visualizer can show it.
+
+def update_conversation(
+    store: GraphStore, person_id: str, robot_id: str, *,
+    topic: Optional[str] = None, mood: Optional[float] = None,
+    emotion: Optional[str] = None, max_topics: int = 3,
+    create: bool = True, source: Optional[str] = None,
+) -> Optional[ConversationNode]:
+    """Update the live conversation-status node for a person↔robot IN PLACE.
+
+    `topic`   — a keyword to push onto the rolling list (deduped, most-recent
+                last, capped at `max_topics`). None leaves the list unchanged.
+    `mood`    — current valence (-1..+1); `emotion` — current label.
+    `create`  — when False, only update an existing node (never create one), so
+                a plain mood tick before any conversation is a no-op.
+
+    This is a dedicated node (NOT a shared TopicNode): it is never matched to
+    capabilities/interests, so it cannot pick up spurious about-edges. The
+    person and robot are linked to it once, via FAST has_conversation edges.
     """
-    label = str(topic_label).strip()
-    if not label:
-        return None
-    topic = resolve_topic(store, label)
-    # Drop any existing current_topic edge that points elsewhere.
-    if hasattr(store, "delete_edge"):
-        for _e, tnode in store.query_neighbors(person_id, "current_topic"):
-            if tnode.id != topic.id:
-                store.delete_edge(person_id, tnode.id, "current_topic")
-    store.upsert_edge(CurrentTopicEdge(
-        source_id=person_id, target_id=topic.id, provenance=_prov(source)))
-    return topic
+    cid = conversation_id(person_id, robot_id)
+    node = store.get_node(cid)
+    if node is None or node.node_type != "conversation":
+        if not create:
+            return None
+        node = ConversationNode(id=cid)
+        store.apply_delta(
+            nodes=[node],
+            edges=[
+                HasConversationEdge(source_id=person_id, target_id=cid,
+                                    provenance=_prov(source)),
+                HasConversationEdge(source_id=robot_id, target_id=cid,
+                                    provenance=_prov(source)),
+            ],
+        )
+        node = store.get_node(cid)
+
+    update: dict = {}
+    if topic:
+        t = str(topic).strip()
+        if t:
+            topics = [x for x in node.topics if x.lower() != t.lower()]
+            topics.append(t)
+            update["topics"] = topics[-max_topics:]
+    if mood is not None:
+        update["mood"] = max(-1.0, min(1.0, float(mood)))
+    if emotion is not None:
+        update["emotion"] = emotion
+    if update:
+        node = node.model_copy(update=update)
+        store.upsert_node(node)
+    return node
 
 
-def current_topic(store: GraphStore, person_id: str) -> Optional[TopicNode]:
-    """The person's current_topic TopicNode, or None."""
-    hits = _neighbors_of_type(store, person_id, "current_topic", "topic")
-    return hits[0] if hits else None
+def get_conversation(store: GraphStore, person_id: str, robot_id: str) -> Optional[ConversationNode]:
+    node = store.get_node(conversation_id(person_id, robot_id))
+    return node if node is not None and node.node_type == "conversation" else None
 
 
 def _neighbors_of_type(store: GraphStore, node_id: str, edge_type: str, node_type: str):

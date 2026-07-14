@@ -178,11 +178,28 @@ class InterestNode(BaseModel):
     node_type: Literal["interest"] = "interest"
 
 
+class ConversationNode(BaseModel):
+    """Live conversation-status node — a rolling list of the most recent topic
+    keywords plus the current mood/emotion.
+
+    FAST/transient and, crucially, NOT a shared TopicNode: it is never matched to
+    capabilities or interests, so it cannot pick up spurious about-edges. One per
+    person↔robot:  person --has_conversation--> Conversation <--has_conversation-- robot.
+    `topics` is updated in place (most-recent last, capped) rather than recreating
+    a node per topic.
+    """
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    topics: List[str] = Field(default_factory=list)   # rolling, most-recent last
+    mood: Optional[float] = None                       # current valence, -1..+1
+    emotion: Optional[str] = None                      # current emotion label
+    node_type: Literal["conversation"] = "conversation"
+
+
 # Union of all node types (discriminated on node_type for (de)serialisation)
 AnyNode = Union[
     RobotNode, PersonNode, TopicNode,
     PersonaNode, RoleNode, CapabilityNode, InterestNode,
-    InteractionNode, SessionNode,
+    InteractionNode, SessionNode, ConversationNode,
 ]
 
 
@@ -351,7 +368,13 @@ class HasSessionEdge(EdgeBase):
     edge_type: Literal["has_session"] = "has_session"
 
 
-InteractionEdge = Union[HasInteractionEdge, HasSessionEdge]
+class HasConversationEdge(EdgeBase):
+    """participant (Person | Robot) → ConversationNode — FAST live status link."""
+    edge_type: Literal["has_conversation"] = "has_conversation"
+    timescale: Timescale = Timescale.FAST
+
+
+InteractionEdge = Union[HasInteractionEdge, HasSessionEdge, HasConversationEdge]
 
 
 AnyEdge = Union[

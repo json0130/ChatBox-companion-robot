@@ -820,11 +820,20 @@ class WebcamKGLoop:
                                   timestamp=datetime.now(timezone.utc)),
             value=valence, label=emotion,
         ))
+        # Only treat as "changed" (→ a disk save) on an emotion-label change or a
+        # real valence shift; the raw detector valence jitters frame-to-frame, so
+        # a tight threshold here would save on almost every tick (log spam).
         prev = self._last_mood.get(pid)
-        changed = (prev is None or abs(prev[0] - valence) >= 0.04
-                   or prev[1] != emotion)
+        changed = (prev is None or prev[1] != emotion
+                   or abs(prev[0] - valence) >= 0.15)
         if changed:
             self._last_mood[pid] = (valence, emotion)
+            # Mirror onto the live conversation node if one exists (don't create
+            # one just from being seen — only once a conversation has started).
+            from modules.graph_relationship.topics import update_conversation
+            update_conversation(self.store, pid, self.robot_id,
+                                mood=valence, emotion=emotion, create=False,
+                                source="live-mood")
         return changed
 
     def _detect_topic(self, user_msg: str, reply: str = "") -> Optional[str]:
@@ -846,39 +855,86 @@ class WebcamKGLoop:
             return None
         return topic
 
+    # Memory caps — keep the prompt bounded as the graph grows.
+    _MAX_INTERESTS = 4
+    _MAX_TOPICS_PER_INTEREST = 3
+    _MAX_NOTES = 3
+
     def _person_memory(self, pid: Optional[str]) -> str:
-        """Render what the KG knows about `pid`: interests, shared topics, notes."""
+        """The 'WHO YOU'RE TALKING TO' body: key interests (capped), common
+        ground, and the most recent notes (deduped). Returns "" if nothing known."""
         if not pid:
             return ""
         from modules.graph_relationship.topics import (
             person_interests, shared_topics,
         )
-        lines: list[str] = []
         interests = person_interests(self.store, pid)
+        lines: list[str] = []
+
         if interests:
+            # Richer interests (more topics) first, then cap.
+            ranked = sorted(interests, key=lambda it: len(it[1]), reverse=True)
             parts = []
-            for interest, topics in interests:
+            for interest, topics in ranked[:self._MAX_INTERESTS]:
                 if topics:
-                    parts.append(f"{interest.label} ({', '.join(t.label for t in topics)})")
+                    labels = [t.label for t in topics][:self._MAX_TOPICS_PER_INTEREST]
+                    parts.append(f"{interest.label} ({', '.join(labels)})")
                 else:
                     parts.append(interest.label)
-            lines.append("Their interests: " + "; ".join(parts))
+            lines.append("Interests: " + " · ".join(parts))
+
         shared = shared_topics(self.store, pid, self.robot_id)
         if shared:
-            lines.append("Things you both like: " + ", ".join(shared))
-        notes: list[str] = []
+            lines.append("Common ground: " + ", ".join(shared))
+
+        # Most-recent note PER TOPIC (for variety), capped.
+        collected: list = []
         for _interest, topics in interests:
             for t in topics:
                 for n in getattr(t, "notes", []) or []:
                     if n.get("person") == pid and n.get("text"):
-                        notes.append(f"{t.label}: {n['text']}")
-        if notes:
-            lines.append("What you remember discussing: " + " | ".join(notes[:5]))
+                        collected.append((n.get("ts", ""), t.label, n["text"]))
+        collected.sort(key=lambda x: x[0], reverse=True)   # most recent first
+        seen_topics: set = set()
+        note_lines: list[str] = []
+        for _ts, label, text in collected:
+            if label in seen_topics:
+                continue
+            seen_topics.add(label)
+            note_lines.append(f"  – {label}: {text}")
+            if len(note_lines) >= self._MAX_NOTES:
+                break
+        if note_lines:
+            lines.append("Recently about them:\n" + "\n".join(note_lines))
+
         return "\n".join(lines)
 
-    def _build_system_prompt(self, pid: Optional[str]) -> str:
-        """Plain persona prompt assembled from the seeded RobotNode + retrieved
-        person memory. Used when PAD is disabled (no PAD system_prompt)."""
+    @staticmethod
+    def _mood_phrase(valence: Optional[float], emotion: Optional[str]) -> str:
+        """One-line mood read for the prompt context, from the (smoothed) valence.
+        Kept separate from the per-turn emotion label so a wrong single-frame read
+        can still be balanced by the mood trend."""
+        if valence is None and not emotion:
+            return ""
+        v = valence or 0.0
+        if v > 0.15:
+            word, face = "positive", "🙂"
+        elif v < -0.15:
+            word, face = "low", "🙁"
+        else:
+            word, face = "neutral", "😐"
+        tail = f" (mood {v:+.2f})" if valence is not None else ""
+        return f"Right now they seem {word} {face}{tail}."
+
+    def _build_system_prompt(self, pid: Optional[str], *,
+                             mood: Optional[float] = None,
+                             emotion: Optional[str] = None) -> str:
+        """Assemble the system prompt from the seeded RobotNode + retrieved memory,
+        in three labelled blocks. Used when PAD is disabled (no PAD system_prompt).
+
+        `mood`/`emotion` are the person's current valence + emotion label; the mood
+        line lives in the context block (the per-turn emotion is tagged on the user
+        message by the caller)."""
         from modules.graph_relationship.topics import robot_capability
         personas = [n.descriptor for _e, n in
                     self.store.query_neighbors(self.robot_id, "has_persona")
@@ -889,32 +945,42 @@ class WebcamKGLoop:
         cap = robot_capability(self.store, self.robot_id)
         caps = cap.items if cap else []
 
-        lines = [f"You are {self._robot_display}, a friendly companion robot "
-                 f"talking with a person through a webcam."]
+        role_word = roles[0] if roles else "friendly companion"
+
+        blocks: list[str] = []
+        # ── IDENTITY ──
+        ident = ["━━━ IDENTITY ━━━",
+                 f"You are {self._robot_display}, a {role_word} robot chatting "
+                 f"with someone through a webcam."]
         if personas:
-            lines.append(f"Your personality: {', '.join(personas)}.")
-        if roles:
-            lines.append(f"Your role: {', '.join(roles)}.")
+            ident.append(f"Personality: {', '.join(personas)}.")
         if caps:
-            lines.append(f"You can: {', '.join(caps)}.")
-        lines.append(
-            "Keep replies short, warm and natural for a spoken conversation. "
-            "Begin every reply with an emotion tag in square brackets, e.g. "
-            "[HAPPY] or [CURIOUS].")
+            ident.append(f"You can: {', '.join(caps)}.")
+        blocks.append("\n".join(ident))
+
+        # ── HOW TO REPLY ──
+        blocks.append(
+            "━━━ HOW TO REPLY ━━━\n"
+            "• Keep it short, warm and spoken — one or two sentences.\n"
+            "• Begin every reply with an emotion tag in square brackets, e.g. "
+            "[HAPPY], [CURIOUS].\n"
+            "• Weave in what you know about them naturally — never list it back.\n"
+            "• Match their mood: if they seem low or upset, be gentle and reassuring.")
+
+        # ── WHO YOU'RE TALKING TO ──
         if pid:
+            who = [f"━━━ WHO YOU'RE TALKING TO: {pid} ━━━"]
             mem = self._person_memory(pid)
-            if mem:
-                lines.append(
-                    f"\nYou recognise this person as {pid}. "
-                    f"What you remember about them:\n{mem}\n"
-                    "Bring these memories up naturally when relevant — do not "
-                    "recite them mechanically.")
-            else:
-                lines.append(f"\nYou recognise this person as {pid}, but you do "
-                             "not remember much about them yet.")
+            who.append(mem if mem else "You don't remember much about them yet.")
+            mood_line = self._mood_phrase(mood, emotion)
+            if mood_line:
+                who.append(mood_line)
+            blocks.append("\n".join(who))
         else:
-            lines.append("\nYou do not recognise this person yet.")
-        return "\n".join(lines)
+            blocks.append("━━━ WHO YOU'RE TALKING TO ━━━\n"
+                          "You don't recognise this person yet.")
+
+        return "\n\n".join(blocks)
 
     def _extract_session(self) -> None:
         """End-of-session knowledge extraction: distill each session's transcript
@@ -1231,14 +1297,29 @@ class WebcamKGLoop:
                                     hist = list(self._chat_history.get(
                                         last_person_id or "", []
                                     ))
+                                    # Current mood (valence) + instantaneous emotion
+                                    # label. Both feed the LLM: the mood line sits in
+                                    # the prompt context (stable), the emotion label is
+                                    # tagged on this user turn (per-moment) — so a wrong
+                                    # single-frame read can be balanced by the mood.
+                                    cur_emotion = (last_emotion
+                                                   if self._emotion_enabled else None)
+                                    cur_mood = self._last_mood.get(
+                                        last_person_id or "", (None, None))[0]
                                     # PAD off → build the system prompt from the KG
-                                    # (persona + retrieved person memory).
+                                    # (persona + retrieved person memory + mood).
                                     if self._pad_enabled and self._last_pad_result:
                                         sys_prompt = self._last_pad_result["system_prompt"]
                                     else:
-                                        sys_prompt = self._build_system_prompt(last_person_id)
+                                        sys_prompt = self._build_system_prompt(
+                                            last_person_id, mood=cur_mood,
+                                            emotion=cur_emotion)
+                                    # Tag the emotion onto THIS turn only (history +
+                                    # transcript keep the plain message).
+                                    llm_msg = msg + (f"  (they appear: {cur_emotion})"
+                                                     if cur_emotion else "")
                                     raw_reply = self.llm.respond(
-                                        sys_prompt, msg, history=hist,
+                                        sys_prompt, llm_msg, history=hist,
                                     )
                                     tag, verbal = _parse_llm_response(raw_reply)
                                     last_verbal = verbal
@@ -1273,17 +1354,24 @@ class WebcamKGLoop:
                                         )
                                         sync_interaction_count(
                                             self.store, last_person_id, self.robot_id)
-                                        # Track the FAST current_topic edge live so
-                                        # the viz shows what's being discussed now.
+                                        # Update the live conversation-status node
+                                        # (rolling recent topics + mood) so the viz
+                                        # shows what's being discussed now.
                                         topic = self._detect_topic(msg, verbal)
+                                        from modules.graph_relationship.topics import (
+                                            update_conversation,
+                                        )
+                                        conv = update_conversation(
+                                            self.store, last_person_id, self.robot_id,
+                                            topic=topic,
+                                            mood=self._last_mood.get(
+                                                last_person_id, (None,))[0],
+                                            emotion=(last_emotion
+                                                     if self._emotion_enabled else None),
+                                            create=True, source="live-topic")
                                         if topic:
-                                            from modules.graph_relationship.topics import (
-                                                set_current_topic,
-                                            )
-                                            set_current_topic(
-                                                self.store, last_person_id, topic,
-                                                source="live-topic")
-                                            print(f"  [topic]  current → {topic}")
+                                            print(f"  [topic]  recent → "
+                                                  f"{', '.join(conv.topics)}")
                                         if self.kg_path:
                                             self.store.save(self.kg_path)
                                 else:
@@ -1428,8 +1516,9 @@ def main() -> None:
                         "topic↔capability linking during extraction")
     p.add_argument("--embed-model", default="nomic-embed-text",
                    help="Ollama embedding model (default: nomic-embed-text)")
-    p.add_argument("--embed-floor", type=float, default=0.5,
-                   help="Min cosine similarity to link topic↔capability (default: 0.5)")
+    p.add_argument("--embed-floor", type=float, default=0.62,
+                   help="Min cosine similarity to link topic↔capability (default: 0.62). "
+                        "Higher = fewer, stricter links (avoids e.g. tennis↔'good at math')")
     p.add_argument("--enable-pad", action="store_true",
                    help="Enable the PAD persona engine (disabled by default this pass)")
     p.add_argument("--enable-emotion", action="store_true",

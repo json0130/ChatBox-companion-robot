@@ -174,6 +174,7 @@ def transform(raw: dict) -> dict:
         elif node_type == "topic":
             notes = n.get("notes", []) or []
             obj["notes"] = notes
+            obj["category"] = n.get("category", "other")   # fine-grained topic type
             if notes:
                 obj["label"] = f"{obj['label']} ({len(notes)})"
         nodes.append(obj)

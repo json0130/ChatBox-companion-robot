@@ -60,6 +60,7 @@
                   letter-spacing: .5px; margin-bottom: 6px; }
   .legend-row { display: flex; align-items: center; gap: 8px; line-height: 1.9; }
   .swatch-line { width: 22px; height: 0; border-top: 3px solid; border-radius: 2px; }
+  .swatch-dot  { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
   svg.shape { overflow: visible; }
 
   /* node + link visuals */
@@ -158,6 +159,10 @@
     <div class="legend-row"><span class="swatch-line" style="border-color:#4fc3f7"></span>ChatBox (robot)</div>
     <div class="legend-row muted" style="font-size:11px; margin-top:4px">lighter = FAST · darker = SLOW</div>
   </div>
+  <div class="legend-section">
+    <div class="legend-title">Topic category → fill</div>
+    <div id="legend-categories"></div>
+  </div>
   <div class="legend-section muted" style="font-size:11px">line thickness = weight · hover for value</div>
   <div class="legend-section muted" style="font-size:11px">click a node → details, connections & delete</div>
 </div>
@@ -172,6 +177,22 @@
 
 <script>
 const COLOR = { FAST: "#ff8c42", SLOW: "#4fc3f7", RELATIONSHIP: "#a678de" };
+
+// ---- topic category -> fill colour (Feature-2d) --------------------------
+const CATEGORY_COLOR = {
+  music:    "#ff8fab",  science:  "#59c1e8",  animals: "#f4a259",
+  food:     "#f6c445",  activity: "#9b8cff",  place:   "#7fd98b",
+  person:   "#ff7a6b",  media:    "#c792ea",  sport:   "#4db6ac",
+  other:    "#9aa0b5",
+};
+const categoryColor = (c) => CATEGORY_COLOR[c] || CATEGORY_COLOR.other;
+(function renderCategoryLegend() {
+  const el = document.getElementById("legend-categories");
+  if (!el) return;
+  el.innerHTML = Object.entries(CATEGORY_COLOR).map(([cat, col]) =>
+    `<div class="legend-row"><span class="swatch-dot" style="background:${col}"></span>${cat}</div>`
+  ).join("");
+})();
 
 // ---- per-person edge colours ---------------------------------------------
 // Each person gets a distinct base hue; the edge's timescale shades it
@@ -330,9 +351,11 @@ function update(graph) {
       cur.type = n.type; cur.label = n.label;   // refresh mutable fields
       cur.turns = n.turns;                       // session transcript (if any)
       cur.notes = n.notes;                       // topic conversation summaries (if any)
+      cur.category = n.category;                 // topic category (Feature-2d)
     } else {
       nodeById.set(n.id, {
         id: n.id, type: n.type, label: n.label, turns: n.turns, notes: n.notes,
+        category: n.category,
         x: width/2 + (Math.random()-0.5)*80,
         y: height/2 + (Math.random()-0.5)*80,
       });
@@ -421,6 +444,10 @@ function render(nodes) {
       for (const [k,v] of Object.entries(s.attrs)) el.setAttribute(k, v);
       el.setAttribute("class", "node-shape" + (d.type === "Conversation" ? " conversation" : ""));
       this.insertBefore(el, this.firstChild);
+    }
+    // Feature-2d: tint Topic nodes by their category (updates live on category change).
+    if (d.type === "Topic") {
+      g.select(".node-shape").style("fill", categoryColor(d.category));
     }
   });
 

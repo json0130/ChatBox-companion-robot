@@ -6,6 +6,25 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## feat: auto-consolidate every 3 conversations + Feature-2d category colours  *(branch `KG-knowledge-extraction`)*
+
+**Tried:** (1) auto-run topic consolidation every 3 conversations at end-of-session; (2) Feature-2d — colour
+topic nodes in the viz by their category.
+**Worked:**
+- `_maybe_auto_consolidate()` runs inside `_extract_session` after extraction: counts total SessionNodes in
+  the graph (persists across runs) and, when `count % 3 == 0`, applies `consolidate_topics` (merges). Verified
+  it fires only at 3, 6, … and is a no-op without embeddings. **Design change (user-approved):** consolidation
+  is no longer strictly manual — it auto-applies every 3rd conversation; the standalone `--mode consolidate`
+  and `C` preview still exist.
+- 2d: viz server now emits `category` on topic nodes; `index.html` tints each Topic diamond by a 10-colour
+  category palette (`CATEGORY_COLOR`) and adds a "Topic category → fill" legend. Live-updates when a topic's
+  category changes. HTML well-formed; transform emits category (existing topics show `other` until re-typed).
+**Note:** old topics created before Feature-1 are all `category=other` (grey) until a new extraction types
+them — expected.
+**Didn't / deferred:** 2c topic↔topic relations; rapport/trust (still parked).
+
+---
+
 ## feat(kg): Feature-2 semantic topic consolidation (2a + 2b)  *(branch `KG-knowledge-extraction`)*
 
 **Tried:** merge near-duplicate topics that exact-label reuse can't catch ("hiphop"/"hip hop",

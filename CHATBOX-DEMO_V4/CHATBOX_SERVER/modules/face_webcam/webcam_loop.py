@@ -861,6 +861,8 @@ class WebcamKGLoop:
     _MAX_INTERESTS = 4
     _MAX_TOPICS_PER_INTEREST = 3
     _MAX_NOTES = 3
+    # Auto-run topic consolidation once every N conversations (SessionNodes).
+    _CONSOLIDATE_EVERY = 3
 
     def _person_memory(self, pid: Optional[str]) -> str:
         """The 'WHO YOU'RE TALKING TO' body: key interests (capped), common
@@ -1037,8 +1039,31 @@ class WebcamKGLoop:
                   + (f"   dropped: {len(ts.get('dropped', []))}" if ts.get('dropped') else ""))
             if not ts.get("applied"):
                 print("      (topic extraction skipped — LLM JSON parse failed)")
+        # Auto-consolidate near-duplicate topics every N conversations.
+        self._maybe_auto_consolidate()
         if self.kg_path:
             self.store.save(self.kg_path)
+
+    def _maybe_auto_consolidate(self) -> None:
+        """Run topic consolidation automatically once every _CONSOLIDATE_EVERY
+        conversations (total SessionNodes in the graph — persists across runs).
+        Applies merges (not a dry-run). No-op without embeddings."""
+        if self._embed_fn is None:
+            return
+        total = sum(1 for n in self.store._nodes.values()
+                    if n.node_type == "session")
+        if total == 0 or total % self._CONSOLIDATE_EVERY != 0:
+            return
+        from modules.kg_extraction import consolidate_topics
+        report = consolidate_topics(self.store, self._embed_fn, source="auto-consolidate")
+        if report["merges"]:
+            print(f"[WebcamLoop] auto-consolidate (every {self._CONSOLIDATE_EVERY} "
+                  f"conversations; {total} total) — merged {len(report['merges'])}:")
+            for canon, dup in report["merges"]:
+                print(f"    '{dup}'  →  '{canon}'")
+        else:
+            print(f"[WebcamLoop] auto-consolidate ({total} conversations): "
+                  "no near-duplicate topics")
 
     def _consolidate_preview(self) -> None:
         """Dry-run: print near-duplicate topics that WOULD merge (non-destructive).

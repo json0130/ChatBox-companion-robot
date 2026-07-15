@@ -243,6 +243,27 @@ class InMemoryGraphStore(GraphStore):
         self._node_edge_index[edge.target_id].discard(edge_id)
         return True
 
+    def delete_node(self, node_id: str) -> bool:
+        """Remove a node and every edge touching it. Returns True if it existed.
+
+        Indexes are kept consistent. Used by pure graph surgery (e.g. topic merge)
+        — no LLM/embedding logic here.
+        """
+        if node_id not in self._nodes:
+            return False
+        # Remove all incident edges via the node index (O(neighbors)).
+        for edge_id in list(self._node_edge_index.get(node_id, set())):
+            edge = self._edges.pop(edge_id, None)
+            if edge is None:
+                continue
+            self._endpoint_type_index.pop(
+                (edge.source_id, edge.target_id, edge.edge_type), None)
+            self._node_edge_index[edge.source_id].discard(edge_id)
+            self._node_edge_index[edge.target_id].discard(edge_id)
+        self._node_edge_index.pop(node_id, None)
+        self._nodes.pop(node_id, None)
+        return True
+
     def query_neighbors(
         self, node_id: str, edge_type: Optional[str] = None
     ) -> List[Tuple[AnyEdge, AnyNode]]:

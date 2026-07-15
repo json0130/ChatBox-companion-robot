@@ -23,12 +23,16 @@ from __future__ import annotations
 import json
 from typing import Callable, List, Optional, Tuple
 
+import math
+
 from modules.graph_relationship.schema import TOPIC_CATEGORIES
 from modules.graph_relationship.topics import (
     add_person_topic,
+    merge_topics,
     normalize_label,
     person_topics,
     reinforce_person_topic,
+    topic_degree,
 )
 from modules.graph_relationship.extraction import format_transcript  # pure transcript renderer
 
@@ -172,3 +176,125 @@ def extract_and_apply_topics(
             added.append((label, cat, conf))
 
     return {"applied": True, "reinforced": reinforced, "added": added, "dropped": dropped}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Feature 2 — semantic topic consolidation (app layer; injected embed_fn)
+# ─────────────────────────────────────────────────────────────────────────────
+# Merges near-duplicate topic nodes (e.g. "hiphop" / "hip hop") that Feature-1's
+# exact-label reuse cannot catch. Embedding + pairing decisions live HERE; the
+# graph surgery is the pure topics.merge_topics(). NOT run during live extraction
+# — invoked on demand (dry-run first), so merges are deterministic and reviewable.
+
+EmbedFn = Callable[[str], List[float]]
+
+CONSOLIDATE_FLOOR = 0.86        # cosine >= this → merge candidate (conservative)
+
+
+def _cosine(a: List[float], b: List[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return dot / (na * nb)
+
+
+def _topic_nodes(store) -> List[tuple]:
+    """[(id, label, category_str), ...] for every TopicNode (app-layer read)."""
+    out = []
+    for n in getattr(store, "_nodes", {}).values():
+        if getattr(n, "node_type", None) == "topic":
+            cat = n.category.value if hasattr(n.category, "value") else str(n.category)
+            out.append((n.id, n.label, cat))
+    return out
+
+
+class _UnionFind:
+    def __init__(self, ids):
+        self.parent = {i: i for i in ids}
+
+    def find(self, x):
+        while self.parent[x] != x:
+            self.parent[x] = self.parent[self.parent[x]]
+            x = self.parent[x]
+        return x
+
+    def union(self, a, b):
+        ra, rb = self.find(a), self.find(b)
+        if ra != rb:
+            self.parent[ra] = rb
+
+
+def consolidate_topics(
+    store, embed_fn: EmbedFn, *,
+    floor: float = CONSOLIDATE_FLOOR, same_category_only: bool = True,
+    dry_run: bool = False, source: str = "consolidate",
+) -> dict:
+    """Find near-duplicate topics by embedding cosine and merge each group into a
+    single canonical node (highest-degree; ties → shortest, then lexicographic).
+
+    same_category_only: never merge across categories (jazz[music] vs jaguar[animals]).
+    dry_run: compute + return the proposed merges but write NOTHING.
+
+    Returns {"pairs":[(a_label,b_label,sim)], "merges":[(canon_label,dup_label)],
+             "groups": n, "dry_run": bool}.
+    """
+    topics = _topic_nodes(store)
+    report = {"pairs": [], "merges": [], "groups": 0, "dry_run": dry_run}
+    if len(topics) < 2:
+        return report
+
+    # Embed each label once (cache); skip topics whose embedding fails.
+    vecs: dict = {}
+    for tid, label, _cat in topics:
+        try:
+            v = embed_fn(label)
+        except Exception:  # noqa: BLE001 — embedding backend down → skip
+            v = None
+        if v:
+            vecs[tid] = v
+
+    # Candidate pairs by cosine (optionally same-category only).
+    cat_of = {tid: cat for tid, _l, cat in topics}
+    label_of = {tid: lbl for tid, lbl, _c in topics}
+    uf = _UnionFind([t[0] for t in topics])
+    n = len(topics)
+    for i in range(n):
+        ai = topics[i][0]
+        if ai not in vecs:
+            continue
+        for j in range(i + 1, n):
+            bj = topics[j][0]
+            if bj not in vecs:
+                continue
+            if same_category_only and cat_of[ai] != cat_of[bj]:
+                continue
+            sim = _cosine(vecs[ai], vecs[bj])
+            if sim >= floor:
+                report["pairs"].append((label_of[ai], label_of[bj], round(sim, 3)))
+                uf.union(ai, bj)
+
+    # Group members; canonical = highest degree, tie → shortest then lexicographic.
+    groups: dict = {}
+    for tid, _l, _c in topics:
+        groups.setdefault(uf.find(tid), []).append(tid)
+    merge_ops = []  # (canonical_id, duplicate_id)
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        report["groups"] += 1
+        canonical = min(
+            members,
+            key=lambda t: (-topic_degree(store, t), len(label_of[t]), label_of[t]))
+        for tid in members:
+            if tid != canonical:
+                merge_ops.append((canonical, tid))
+                report["merges"].append((label_of[canonical], label_of[tid]))
+
+    if not dry_run:
+        for canonical, dup in merge_ops:
+            merge_topics(store, canonical, dup, source=source)
+    return report

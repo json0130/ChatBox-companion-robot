@@ -199,6 +199,62 @@ def get_conversation(store: GraphStore, person_id: str, robot_id: str) -> Option
     return node if node is not None and node.node_type == "conversation" else None
 
 
+def topic_degree(store: GraphStore, topic_id_: str) -> int:
+    """Number of edges incident to a topic node — its 'establishedness'. Used to
+    pick the canonical node when consolidating duplicates. Pure O(neighbors)."""
+    return len(store.query_neighbors(topic_id_))
+
+
+def merge_topics(
+    store: GraphStore, canonical_id: str, duplicate_id: str, *,
+    source: Optional[str] = None,
+) -> Optional[TopicNode]:
+    """PURE graph surgery: fold `duplicate` topic into `canonical`.
+
+    Redirects every edge touching the duplicate onto the canonical (preserving
+    edge type / label / provenance; collisions merge under the store's normal
+    rule), unions the two nodes' notes (deduped) plus a `merged_from` marker,
+    upgrades the canonical category only if it was still 'other', then deletes the
+    duplicate node. No embeddings, no LLM. Idempotent; `canonical==duplicate` is a
+    no-op. Returns the canonical TopicNode, or None if either id is not a topic.
+    """
+    if canonical_id == duplicate_id:
+        return store.get_node(canonical_id)
+    canon = store.get_node(canonical_id)
+    dup = store.get_node(duplicate_id)
+    if (canon is None or canon.node_type != "topic"
+            or dup is None or dup.node_type != "topic"):
+        return None
+
+    # Redirect every edge incident to the duplicate onto the canonical.
+    for edge, _nbr in list(store.query_neighbors(duplicate_id)):
+        new_src = canonical_id if edge.source_id == duplicate_id else edge.source_id
+        new_dst = canonical_id if edge.target_id == duplicate_id else edge.target_id
+        store.delete_edge(edge.source_id, edge.target_id, edge.edge_type)
+        if new_src == new_dst:
+            continue  # never create a self-loop on the canonical
+        store.upsert_edge(edge.model_copy(update={
+            "source_id": new_src, "target_id": new_dst}))
+
+    # Union notes (dedup by person+text) + record the merge for provenance.
+    notes = list(canon.notes)
+    seen = {(n.get("person"), n.get("text")) for n in notes}
+    for n in dup.notes:
+        key = (n.get("person"), n.get("text"))
+        if key not in seen:
+            seen.add(key)
+            notes.append(n)
+    notes.append({"person": None, "text": f"merged_from: {dup.label}",
+                  "ts": datetime.now(timezone.utc).isoformat()})
+    update: dict = {"notes": notes}
+    if _cat_value(canon.category) == "other" and _cat_value(dup.category) != "other":
+        update["category"] = _cat_value(dup.category)
+    store.upsert_node(canon.model_copy(update=update))
+
+    store.delete_node(duplicate_id)
+    return store.get_node(canonical_id)
+
+
 def _neighbors_of_type(store: GraphStore, node_id: str, edge_type: str, node_type: str):
     return [
         n for _e, n in store.query_neighbors(node_id, edge_type)

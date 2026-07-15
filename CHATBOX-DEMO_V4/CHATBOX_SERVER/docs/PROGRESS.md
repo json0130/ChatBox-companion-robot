@@ -6,6 +6,29 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## feat(kg): Feature-2 semantic topic consolidation (2a + 2b)  *(branch `KG-knowledge-extraction`)*
+
+**Tried:** merge near-duplicate topics that exact-label reuse can't catch ("hiphop"/"hip hop",
+"football"/"soccer"). **2a (pure, graph_relationship):** `merge_topics(canonical, duplicate)` — redirect all
+incident edges onto the canonical, union notes (+ `merged_from` marker), upgrade category only if canonical
+was `other`, delete the duplicate; plus `topic_degree()` and a new pure `store.delete_node()`.
+**2b (app layer, kg_extraction):** `consolidate_topics(store, embed_fn, floor=0.86, same_category_only=True,
+dry_run=False)` — embed each label, pair by cosine ≥ floor, union-find groups, canonical = highest degree
+(tie → shortest, then lexicographic), call the pure merge. Triggers: standalone `--mode consolidate`
+(+`--dry-run`, `--merge-floor`) and an in-window `C` hotkey (dry-run preview only). **Approved scope: 2a+2b
+only** — topic↔topic relations (2c) and category viz grouping (2d) deferred.
+**Worked (verified, fake embed_fn):** dry-run proposes merges and writes nothing; apply merges the two
+near-dup pairs, keeps distinct "jazz", 5→3 topics; canonical picks the shorter label; notes unioned with
+`merged_from`; **idempotent** re-run (no further merges); **cross-category never merges** even at high
+similarity; save/load round-trips; `graph_relationship/` stays free of LLM/PAD/app imports.
+**Decisions:** hard-merge (redirect + delete) not alias; consolidation is **manual/reviewable**, never
+auto-run during live extraction; merge floor 0.86 (stricter than the 0.62 capability floor); `C` is
+preview-only (apply via `--mode consolidate`).
+**Didn't / deferred:** topic↔topic relations, clustering, category-based viz grouping (revisit after this),
+and any change to rapport/trust (still deferred).
+
+---
+
 ## feat(kg): fine-grained topic typing + graph-aware extraction  *(branch `KG-knowledge-extraction`)*
 
 **Tried:** two improvements to LLM knowledge extraction. **Step 1** — `TopicNode` gains a `category` from a

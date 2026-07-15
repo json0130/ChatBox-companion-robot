@@ -675,6 +675,7 @@ class WebcamKGLoop:
         spec_dir:        Optional[str] = None,
         seed:            bool  = True,
         matcher                = None,
+        embed_fn               = None,
         pad_enabled:     bool  = False,
         emotion_enabled: bool  = False,
     ):
@@ -723,6 +724,7 @@ class WebcamKGLoop:
         self._pad_enabled      = pad_enabled
         self._emotion_enabled  = emotion_enabled
         self._matcher          = matcher
+        self._embed_fn         = embed_fn   # for on-demand topic consolidation (Feature 2)
         # person_id -> current session node id for this run (like KGBridge._session).
         self._sessions: dict[str, str] = {}
         # person_id -> (valence, emotion_label) last persisted — dirty-check so the
@@ -1038,6 +1040,22 @@ class WebcamKGLoop:
         if self.kg_path:
             self.store.save(self.kg_path)
 
+    def _consolidate_preview(self) -> None:
+        """Dry-run: print near-duplicate topics that WOULD merge (non-destructive).
+        Applying is a separate, reviewable step: --mode consolidate."""
+        if self._embed_fn is None:
+            print("[WebcamLoop] consolidation needs embeddings (run without --no-embed)")
+            return
+        from modules.kg_extraction import consolidate_topics
+        report = consolidate_topics(self.store, self._embed_fn, dry_run=True)
+        if not report["merges"]:
+            print("[WebcamLoop] consolidation preview: no near-duplicate topics found")
+            return
+        print(f"[WebcamLoop] consolidation preview — {report['groups']} group(s), DRY RUN:")
+        for canon, dup in report["merges"]:
+            print(f"    '{dup}'  →  '{canon}'")
+        print("    apply with:  python3 -m modules.face_webcam.webcam_loop --mode consolidate")
+
     def run(self, camera_index: int = _DEFAULT_CAMERA) -> None:  # noqa: C901
         cap = cv2.VideoCapture(camera_index)
         if not cap.isOpened():
@@ -1054,8 +1072,8 @@ class WebcamKGLoop:
                (" (emotion on)" if self._emotion_enabled else " (no emotion)")
         print(f"\n[WebcamLoop] robot={self._robot_display}  tick={self.tick_interval}s  "
               f"cam={camera_index}  {llm_status}  mode={mode}")
-        print("  T=chat  E=enroll  B=boost  K=dump KG  X=extract  S=save  Q=quit"
-              "  (all in the OpenCV window)\n")
+        print("  T=chat  E=enroll  B=boost  K=dump KG  X=extract  C=consolidate?  "
+              "S=save  Q=quit  (all in the OpenCV window)\n")
 
         # ── Background detection worker ───────────────────────────────────────
         worker = _DetectionWorker(
@@ -1436,6 +1454,8 @@ class WebcamKGLoop:
                         _dump_kg(self.store, self.robot_id)
                     elif key in (ord("x"), ord("X")):
                         self._extract_session()   # run extraction mid-session (testing)
+                    elif key in (ord("c"), ord("C")):
+                        self._consolidate_preview()   # dry-run: preview topic merges
                     elif key in (ord("b"), ord("B")) and last_person_id:
                         _update_rapport_trust(
                             self.store, last_person_id, self.robot_id,
@@ -1482,6 +1502,40 @@ def run_enroll_mode(name: str, faces_path: str,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Standalone topic consolidation (--mode consolidate) — Feature 2
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run_consolidate_mode(kg_path: str, embed_model: str,
+                         merge_floor: float, dry_run: bool) -> None:
+    """Merge near-duplicate topics in an existing KG by embedding similarity.
+    Reviewable + deterministic; run with --dry-run first to preview."""
+    store = InMemoryGraphStore()
+    if not (os.path.exists(kg_path) and store.load(kg_path)):
+        print(f"[consolidate] no KG at '{kg_path}'")
+        return
+    try:
+        from modules.graph_relationship.embedding import ollama_embed_fn
+        embed_fn = ollama_embed_fn(model=embed_model)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[consolidate] embeddings unavailable ({exc}) — cannot consolidate")
+        return
+    from modules.kg_extraction import consolidate_topics
+    report = consolidate_topics(store, embed_fn, floor=merge_floor, dry_run=dry_run)
+    if not report["merges"]:
+        print(f"[consolidate] no near-duplicate topics (floor {merge_floor}, "
+              "same-category only)")
+        return
+    tag = "DRY RUN — no changes written" if dry_run else "APPLIED"
+    print(f"[consolidate] {report['groups']} group(s), "
+          f"{len(report['merges'])} merge(s) — {tag}:")
+    for canon, dup in report["merges"]:
+        print(f"    '{dup}'  →  '{canon}'")
+    if not dry_run:
+        store.save(kg_path)
+        print(f"[consolidate] saved → {kg_path}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # CLI
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1489,7 +1543,8 @@ def main() -> None:
     p = argparse.ArgumentParser(
         description="Live webcam → KG relationship engine → PAD persona loop"
     )
-    p.add_argument("--mode",       choices=["run", "enroll"], default="run")
+    p.add_argument("--mode",       choices=["run", "enroll", "consolidate"], default="run",
+                   help="run | enroll | consolidate (merge near-duplicate topics)")
     p.add_argument("--name",       default=None,
                    help="Person name for enroll mode")
     p.add_argument("--faces",      default=_DEFAULT_FACES,
@@ -1536,6 +1591,12 @@ def main() -> None:
                    help="Enable the PAD persona engine (disabled by default this pass)")
     p.add_argument("--enable-emotion", action="store_true",
                    help="Enable emotion detection (disabled by default this pass)")
+    # ── Feature 2: topic consolidation (--mode consolidate) ────────────────────
+    p.add_argument("--merge-floor", type=float, default=0.86,
+                   help="Min cosine similarity to MERGE two near-duplicate topics "
+                        "(default: 0.86; same-category only)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="consolidate mode: preview merges without writing")
     args = p.parse_args()
 
     if args.mode == "enroll":
@@ -1545,26 +1606,33 @@ def main() -> None:
                         args.n_captures, args.threshold)
         return
 
+    if args.mode == "consolidate":
+        run_consolidate_mode(args.kg, args.embed_model, args.merge_floor, args.dry_run)
+        return
+
     llm = None
     if args.llm:
         llm = LLMClient(model=args.model)
         llm.connect()
 
     # Embedding matcher (default when --llm); degrades gracefully on failure.
+    # embed_fn is also handed to the loop for the on-demand topic-merge preview (C).
     matcher = None
+    embed_fn = None
     if not args.no_embed:
         try:
             from modules.graph_relationship.embedding import (
                 make_embedding_matcher, ollama_embed_fn,
             )
-            matcher = make_embedding_matcher(
-                ollama_embed_fn(model=args.embed_model), floor=args.embed_floor)
+            embed_fn = ollama_embed_fn(model=args.embed_model)
+            matcher = make_embedding_matcher(embed_fn, floor=args.embed_floor)
             print(f"[WebcamLoop] topic matching via embeddings "
                   f"({args.embed_model}, floor {args.embed_floor})")
         except Exception as exc:  # noqa: BLE001
             print(f"[WebcamLoop] embedding matcher unavailable ({exc}) — "
                   "using keyword matcher")
             matcher = None
+            embed_fn = None
 
     loop = WebcamKGLoop(
         robot_id         = args.robot,
@@ -1580,6 +1648,7 @@ def main() -> None:
         spec_dir         = args.spec_dir,
         seed             = not args.no_seed,
         matcher          = matcher,
+        embed_fn         = embed_fn,
         pad_enabled      = args.enable_pad,
         emotion_enabled  = args.enable_emotion,
     )

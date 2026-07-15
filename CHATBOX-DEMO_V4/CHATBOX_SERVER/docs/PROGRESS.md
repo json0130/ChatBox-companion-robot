@@ -6,7 +6,38 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
-## docs: R&D system report + progress log  *(this commit)*
+## feat(kg): fine-grained topic typing + graph-aware extraction  *(branch `KG-knowledge-extraction`)*
+
+**Tried:** two improvements to LLM knowledge extraction. **Step 1** — `TopicNode` gains a `category` from a
+CLOSED taxonomy (`TopicCategory`: music/science/animals/food/activity/place/person/media/sport/other).
+**Step 2** — condition the extraction prompt on the person's *existing* topics so the LLM reuses established
+nodes; output splits into `existing_topics_discussed` vs `new_topics`. Kept decoupling: all LLM/prompt/guard
+logic in the new APP module `modules/kg_extraction.py`; `graph_relationship/` gained only pure helpers.
+**Worked (all verification points):**
+- category enum defined once; **TopicNode id stays label-only** (category is an attribute, not identity —
+  two extractions disagreeing on category resolve to the SAME node).
+- backward-compat: old `kg_state.json` untyped topics load and default to `other` (real file: 14 topics).
+- graph-aware reuse: with "jazz" known, a transcript saying "jazz music" lands in
+  `existing_topics_discussed` and creates **no** second node (before==after counts).
+- new topic ("dinosaurs") → one typed `TopicNode(animals)` wired via the Interest layer (category→interest).
+- guards write **nothing** on: malformed JSON (whole extraction discarded), invalid category (dropped),
+  hallucinated "existing" not in the provided list (dropped), confidence < 0.6 (dropped).
+- idempotent: re-running identical extraction gives identical node/edge counts.
+- category round-trips through save→load→save; `graph_relationship/` has **zero** LLM/PAD imports.
+**Decisions / deviations (flagged):**
+- Invalid category → **drop** the item (not coerce), so "nothing written" holds for bad output.
+- Closeness (rapport/trust) kept working by reusing the existing pure `extract()` for **deltas only** +
+  the untouched `adjust_closeness` (its interest logic is not used). Closeness logic itself untouched.
+- New/existing topics wire under an Interest named after the **category** (`person→Interest(category)→Topic`).
+- `resolve_topic(category)` only fills a category when the node is still `other` (first non-other wins;
+  TopicNode has no provenance field, so a conflict is not persisted — kept, not merged).
+- Capability↔topic auto-linking (old embedding matcher path) is **not** run in the new topic extraction —
+  embeddings/merge are explicitly out of scope for this step.
+**Didn't / deferred:** embeddings, fuzzy/semantic merge, topic↔topic relations, clustering (Feature-2).
+
+---
+
+## docs: R&D system report + progress log
 
 **Tried:** wrote a detailed R&D report (`RND_KG_Companion_System.md`) covering face-reco, emotion, the
 FAST/SLOW/RELATIONSHIP graph, extraction, prompt structure, and pipeline; started this progress log.

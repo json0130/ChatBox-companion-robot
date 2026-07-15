@@ -42,6 +42,26 @@ class Embodiment(str, Enum):
     ELEPHANT = "ELEPHANT"
 
 
+class TopicCategory(str, Enum):
+    """CLOSED taxonomy for TopicNode.category. 'other' is the explicit fallback —
+    never invent a category outside this set. Defined ONCE here; the app-layer
+    extractor validates LLM output against TOPIC_CATEGORIES (its value set)."""
+    MUSIC = "music"
+    SCIENCE = "science"
+    ANIMALS = "animals"
+    FOOD = "food"
+    ACTIVITY = "activity"
+    PLACE = "place"
+    PERSON = "person"
+    MEDIA = "media"
+    SPORT = "sport"
+    OTHER = "other"
+
+
+# Value set for O(1) membership checks / enum-constrained validation.
+TOPIC_CATEGORIES: frozenset = frozenset(c.value for c in TopicCategory)
+
+
 class Timescale(str, Enum):
     """Decay cadence hint consumed by the update-policy module."""
     FAST = "FAST"   # mood, attention, current_topic — decay within a session
@@ -93,6 +113,12 @@ class TopicNode(BaseModel):
     """
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     label: str
+    # Fine-grained type from the CLOSED TopicCategory taxonomy. Defaults to
+    # "other" so pre-existing kg_state.json topics (no category field) still load.
+    # NOTE: `category` is an ATTRIBUTE, not part of identity — the topic id is
+    # derived from the normalized LABEL only (see topics.topic_id), so two
+    # extractions disagreeing on category still resolve to the SAME node.
+    category: TopicCategory = TopicCategory.OTHER
     notes: List[Dict[str, Any]] = Field(default_factory=list)
     node_type: Literal["topic"] = "topic"
 

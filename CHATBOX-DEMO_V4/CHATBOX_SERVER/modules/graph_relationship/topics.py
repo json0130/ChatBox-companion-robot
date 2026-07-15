@@ -29,8 +29,9 @@ from .store import GraphStore
 Matcher = Callable[[List[str], str], Optional[str]]
 
 
-def _prov(source: Optional[str]) -> Provenance:
-    return Provenance(source=source or "topics", confidence=1.0,
+def _prov(source: Optional[str], confidence: float = 1.0) -> Provenance:
+    return Provenance(source=source or "topics",
+                      confidence=max(0.0, min(1.0, float(confidence))),
                       timestamp=datetime.now(timezone.utc))
 
 
@@ -77,18 +78,35 @@ def add_person_interest(
     return inode
 
 
-def resolve_topic(store: GraphStore, label: str) -> TopicNode:
+def _cat_value(category) -> str:
+    """Category as a plain string ('music'), tolerant of enum or str input."""
+    if category is None:
+        return "other"
+    return category.value if hasattr(category, "value") else str(category)
+
+
+def resolve_topic(store: GraphStore, label: str, category=None) -> TopicNode:
     """Get-or-create the shared TopicNode for `label` (deterministic id).
 
-    Re-resolving the same label returns the SAME existing node — so both the
-    robot and a human interest land on ONE Topic node, and existing topic notes
-    are preserved (not overwritten).
+    The id is derived from the NORMALIZED LABEL only (topic_id) — `category` is an
+    attribute, never part of identity — so re-resolving the same label returns the
+    SAME node even if a later extraction disagrees on category, and existing topic
+    notes are preserved.
+
+    Category update rule (conservative, no embeddings/merge): only fill in a real
+    category when the node is still the "other" fallback. If the node already has a
+    non-"other" category, keep it (first non-other wins); a conflicting new category
+    is ignored. TopicNode has no provenance field, so the conflict is not persisted.
     """
     tid = topic_id(label)
     existing = store.get_node(tid)
     if existing is not None and existing.node_type == "topic":
+        new_cat = _cat_value(category)
+        if new_cat != "other" and _cat_value(existing.category) == "other":
+            existing = existing.model_copy(update={"category": new_cat})
+            store.upsert_node(existing)
         return existing
-    node = TopicNode(id=tid, label=str(label))
+    node = TopicNode(id=tid, label=str(label), category=_cat_value(category))
     store.upsert_node(node)
     return node
 
@@ -195,6 +213,74 @@ def person_interests(store: GraphStore, person_id: str) -> List[Tuple[InterestNo
         topics = _neighbors_of_type(store, interest.id, "about", "topic")
         out.append((interest, topics))
     return out
+
+
+def person_topics(store: GraphStore, person_id: str) -> List[Tuple[str, str]]:
+    """[(topic_label, category), ...] for one person — the distinct topics they
+    reach via any interest. Pure store read (no LLM); used to condition the
+    graph-aware extraction prompt so the LLM reuses established topics."""
+    out: List[Tuple[str, str]] = []
+    seen: set = set()
+    for _interest, topics in person_interests(store, person_id):
+        for t in topics:
+            if t.id in seen:
+                continue
+            seen.add(t.id)
+            out.append((t.label, _cat_value(t.category)))
+    return out
+
+
+def add_person_topic(
+    store: GraphStore, person_id: str, label: str, category=None, *,
+    source: Optional[str] = None, confidence: float = 1.0,
+    summary: Optional[str] = None,
+) -> Optional[TopicNode]:
+    """Wire a NEW typed topic into the person's Interest layer:
+        person --has_interest--> Interest(category) --about--> Topic(label, category)
+    The interest node is the topic's category (e.g. 'music'), so typed topics group
+    under their category. Idempotent (deterministic ids + upsert). Optional `summary`
+    is attached as a per-person topic note."""
+    label = str(label).strip()
+    if not label:
+        return None
+    conf = max(0.0, min(1.0, float(confidence)))
+    topic = resolve_topic(store, label, category=category)
+    interest_label = _cat_value(category)
+    inode = InterestNode(id=interest_id(person_id, interest_label), label=interest_label)
+    store.upsert_node(inode)
+    store.upsert_edge(HasInterestEdge(
+        source_id=person_id, target_id=inode.id, provenance=_prov(source, conf)))
+    store.upsert_edge(AboutEdge(
+        source_id=inode.id, target_id=topic.id, provenance=_prov(source, conf)))
+    if summary:
+        add_topic_note(store, topic, person_id, summary)
+    return topic
+
+
+def reinforce_person_topic(
+    store: GraphStore, person_id: str, label: str, *,
+    source: Optional[str] = None, confidence: float = 1.0,
+    summary: Optional[str] = None,
+) -> Optional[TopicNode]:
+    """Refresh an EXISTING person→interest→topic path (re-stamp provenance) without
+    creating any new node. Returns the topic if a path was found, else None. Used
+    for topics the LLM reports as already-known (existing_topics_discussed)."""
+    tid = topic_id(label)
+    topic = store.get_node(tid)
+    if topic is None or topic.node_type != "topic":
+        return None
+    conf = max(0.0, min(1.0, float(confidence)))
+    refreshed = False
+    for interest, topics in person_interests(store, person_id):
+        if any(t.id == tid for t in topics):
+            store.upsert_edge(HasInterestEdge(
+                source_id=person_id, target_id=interest.id, provenance=_prov(source, conf)))
+            store.upsert_edge(AboutEdge(
+                source_id=interest.id, target_id=tid, provenance=_prov(source, conf)))
+            refreshed = True
+    if summary:
+        add_topic_note(store, topic, person_id, summary)
+    return topic if refreshed else None
 
 
 def _person_topic_ids(store: GraphStore, person_id: str) -> set:

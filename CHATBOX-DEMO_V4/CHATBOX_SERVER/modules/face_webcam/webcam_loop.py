@@ -988,9 +988,13 @@ class WebcamKGLoop:
         if not (self.llm and self.llm.available):
             print("[WebcamLoop] extraction skipped — LLM not connected")
             return
-        from modules.graph_relationship.extraction import extract_and_apply
+        # Graph-aware typed TOPIC extraction lives in the app layer (kg_extraction);
+        # closeness (rapport/trust) reuses the existing pure extractor for deltas
+        # ONLY and the untouched adjust_closeness — its interest logic is not used.
+        from modules.kg_extraction import extract_and_apply_topics
+        from modules.graph_relationship.extraction import extract as _extract_closeness
         from modules.graph_relationship.interactions import (
-            unextracted_turns, mark_session_extracted,
+            unextracted_turns, mark_session_extracted, adjust_closeness,
         )
         # Respect external edits (e.g. viz deletions) before extracting.
         if self.kg_path and os.path.exists(self.kg_path):
@@ -1010,18 +1014,27 @@ class WebcamKGLoop:
             if not turns:
                 print(f"  {pid}: no conversation turns to extract")
                 continue
-            _update, s = extract_and_apply(
-                self.store, pid, self.robot_id, turns, self.llm.respond,
-                matcher=self._matcher, source="extraction")
+
+            # (a) Graph-aware typed topics (reuse existing / add genuinely new).
+            ts = extract_and_apply_topics(
+                self.store, pid, self.robot_id, turns, self.llm.respond, session_id=sid)
+
+            # (b) Closeness deltas — existing logic, untouched (deltas applied only).
+            cu = _extract_closeness(turns, self.llm.respond)
+            if cu.rapport_delta or cu.trust_delta:
+                adjust_closeness(self.store, pid, self.robot_id,
+                                 d_rapport=cu.rapport_delta, d_trust=cu.trust_delta,
+                                 source=f"extraction:{sid}")
+
             mark_session_extracted(self.store, sid)
-            ints = s.get("interests_added", [])
-            int_str = ("  interests: " + ", ".join(
-                f"{lab}→{'/'.join(ts)}" if ts else lab for lab, ts, _sm in ints)
-            ) if ints else "  (no new interests)"
-            print(f"  {pid}: Δrapport {s['rapport_delta']:+.2f}"
-                  f"  Δtrust {s['trust_delta']:+.2f}{int_str}")
-            for item, tl in s.get("capability_links", []):
-                print(f"      ↳ shared topic '{tl}' — {self.robot_id} [{item}]")
+
+            reinf = ", ".join(lab for lab, _c in ts.get("reinforced", []))
+            newt = ", ".join(f"{lab}[{cat}]" for lab, cat, _c in ts.get("added", []))
+            print(f"  {pid}: Δrapport {cu.rapport_delta:+.2f}  Δtrust {cu.trust_delta:+.2f}")
+            print(f"      reused: {reinf or '—'}   new: {newt or '—'}"
+                  + (f"   dropped: {len(ts.get('dropped', []))}" if ts.get('dropped') else ""))
+            if not ts.get("applied"):
+                print("      (topic extraction skipped — LLM JSON parse failed)")
         if self.kg_path:
             self.store.save(self.kg_path)
 

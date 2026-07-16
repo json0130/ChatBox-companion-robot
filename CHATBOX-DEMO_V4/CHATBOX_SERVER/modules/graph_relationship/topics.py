@@ -493,3 +493,55 @@ def shared_topics(store: GraphStore, person_id: str, robot_id: str) -> List[str]
     person_ids = _person_topic_ids(store, person_id)
     shared_ids = person_ids & set(robot_by_id)
     return sorted(robot_by_id[tid].label for tid in shared_ids)
+
+
+def topic_related(store: GraphStore, topic_id_: str) -> List[TopicNode]:
+    """TopicNodes linked to this one by a `related_topic` edge (one hop)."""
+    return _neighbors_of_type(store, topic_id_, "related_topic", "topic")
+
+
+def _person_topics_by_id(store: GraphStore, person_id: str) -> dict:
+    out: dict = {}
+    for _interest, topics in person_interests(store, person_id):
+        for t in topics:
+            out[t.id] = t.label
+    return out
+
+
+def related_common_ground(store: GraphStore, person_id: str, robot_id: str) -> dict:
+    """Common ground including RELATED bridges (Feature-2c).
+
+    Returns {"direct": [labels both sides reach], "bridges": [(person_topic_label,
+    robot_topic_label), ...]} where a bridge is a person topic that is
+    `related_topic`-linked to a robot capability topic (indirect common ground,
+    e.g. person 'multiplication' ~ robot 'math problems')."""
+    robot_by_id = {t.id: t.label for t in robot_topics(store, robot_id)}
+    person_by_id = _person_topics_by_id(store, person_id)
+    direct_ids = set(person_by_id) & set(robot_by_id)
+    direct = sorted(robot_by_id[i] for i in direct_ids)
+    bridges: List[Tuple[str, str]] = []
+    seen: set = set()
+    for pid, plabel in person_by_id.items():
+        if pid in robot_by_id:
+            continue                      # already direct common ground
+        for r in topic_related(store, pid):
+            if r.id in robot_by_id and (pid, r.id) not in seen:
+                seen.add((pid, r.id))
+                bridges.append((plabel, robot_by_id[r.id]))
+    return {"direct": direct, "bridges": bridges}
+
+
+def person_related_pairs(store: GraphStore, person_id: str) -> List[Tuple[str, str]]:
+    """[(label_a, label_b), ...] related-topic pairs among the person's own topics —
+    so the robot knows which of their interests connect (rap ~ hiphop)."""
+    person_by_id = _person_topics_by_id(store, person_id)
+    out: List[Tuple[str, str]] = []
+    seen: set = set()
+    for pid, plabel in person_by_id.items():
+        for r in topic_related(store, pid):
+            if r.id in person_by_id:
+                key = tuple(sorted((pid, r.id)))
+                if key not in seen:
+                    seen.add(key)
+                    out.append((plabel, person_by_id[r.id]))
+    return out

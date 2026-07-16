@@ -6,6 +6,28 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## feat: use topic↔topic relations in retrieval + common ground (2c points 1&2)  *(branch `KG-knowledge-extraction`)*
+
+**Goal:** actually *use* the `related_topic` edges (they were structure-only). Wired points 1 (retrieval /
+recall) and 2 (common ground); left 3–5 (recommendations / transitions / cold-start) for later.
+**Implemented (pure helpers in topics.py):**
+- `topic_related(topic_id)` — one-hop related topics.
+- `related_common_ground(person, robot)` → `{direct, bridges}`: a bridge = a person topic `related_topic`-
+  linked to a robot capability topic (indirect common ground, e.g. their *multiplication* ~ your *math
+  problems*).
+- `person_related_pairs(person)` — related pairs among the person's own topics (rap ~ hiphop).
+**Prompt (`_person_memory`):**
+- Point 2: "Common ground" now adds bridges — "You can also connect via related topics: their multiplication
+  ~ your math problems".
+- Point 1: note-gathering expands one hop across `related_topic`, so related memories surface; plus a
+  "Related interests: hiphop ~ rap" line so the robot can bridge/recall across them.
+**Verified (real LLM):** "do we have anything in common?" → "We both enjoy jazz and math problems…" (the
+math-problems bridge now surfaces); "i love rap, can we talk about it?" → engages naturally. Pure modules
+stay LLM-free.
+**Deferred:** 2c points 3–5 (recommendations, smoother transitions, cold-start generalization); rapport/trust.
+
+---
+
 ## feat: topic↔topic relations (Feature-2c) — link related-but-distinct topics  *(branch `KG-knowledge-extraction`)*
 
 **User observation:** "rap" and "hiphop" didn't merge. **Finding:** cos(rap,hiphop)=0.678 — below the 0.86

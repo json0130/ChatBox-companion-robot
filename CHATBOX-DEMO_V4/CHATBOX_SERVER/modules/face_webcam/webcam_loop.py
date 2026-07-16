@@ -898,7 +898,8 @@ class WebcamKGLoop:
         if not pid:
             return ""
         from modules.graph_relationship.topics import (
-            person_interests, shared_topics,
+            person_interests, related_common_ground, person_related_pairs,
+            topic_related,
         )
         interests = person_interests(self.store, pid)
         lines: list[str] = []
@@ -915,9 +916,19 @@ class WebcamKGLoop:
                     parts.append(interest.label)
             lines.append("Interests: " + " · ".join(parts))
 
-        shared = shared_topics(self.store, pid, self.robot_id)
-        if shared:
-            lines.append("Common ground: " + ", ".join(shared))
+        # Common ground — direct + RELATED bridges (Feature-2c, point 2): a topic
+        # they like that relates to something the robot knows counts as connection.
+        cg = related_common_ground(self.store, pid, self.robot_id)
+        if cg["direct"]:
+            lines.append("Common ground: " + ", ".join(cg["direct"]))
+        if cg["bridges"]:
+            bl = ", ".join(f"their {p} ~ your {r}" for p, r in cg["bridges"])
+            lines.append("You can also connect via related topics: " + bl)
+        # Their own related topics, so the robot can bridge/recall across them.
+        rp = person_related_pairs(self.store, pid)
+        if rp:
+            lines.append("Related interests: "
+                         + ", ".join(f"{a} ~ {b}" for a, b in rp))
 
         # Collect notes, then surface the ones with SPECIFIC facts first (proper
         # nouns / quoted titles like "Rafael Nadal", "SZA 'Open Arms'"), then by
@@ -927,13 +938,22 @@ class WebcamKGLoop:
             words = str(text).split()
             score += sum(1 for w in words[1:] if w[:1].isupper())  # mid-sentence caps
             return score
-        collected: list = []
+        # Point 1: gather notes from the person's topics AND one hop across
+        # related_topic edges, so related memories surface (e.g. a note on 'hiphop'
+        # when they mention 'rap'). Deduped by topic id.
+        note_topics: dict = {}
         for _interest, topics in interests:
             for t in topics:
-                for n in getattr(t, "notes", []) or []:
-                    if n.get("person") == pid and n.get("text"):
-                        collected.append((_specificity(n["text"]), n.get("ts", ""),
-                                          t.label, n["text"]))
+                note_topics[t.id] = t
+        for tid in list(note_topics):
+            for r in topic_related(self.store, tid):
+                note_topics.setdefault(r.id, r)
+        collected: list = []
+        for t in note_topics.values():
+            for n in getattr(t, "notes", []) or []:
+                if n.get("person") == pid and n.get("text"):
+                    collected.append((_specificity(n["text"]), n.get("ts", ""),
+                                      t.label, n["text"]))
         collected.sort(key=lambda x: (x[0], x[1]), reverse=True)  # specific + recent first
         collected = [(ts, label, text) for _s, ts, label, text in collected]
         per_topic: dict = {}

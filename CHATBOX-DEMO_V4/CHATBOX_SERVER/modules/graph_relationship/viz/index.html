@@ -125,17 +125,17 @@
 <div id="controls" class="panel">
   <div class="legend-title">Forces</div>
   <div class="ctrl-row"><label>Repel</label>
-    <input id="f-charge" type="range" min="20" max="1000" step="10" value="320">
-    <span class="val" id="v-charge">320</span></div>
+    <input id="f-charge" type="range" min="20" max="1200" step="10" value="700">
+    <span class="val" id="v-charge">700</span></div>
   <div class="ctrl-row"><label>Link length</label>
-    <input id="f-dist" type="range" min="20" max="320" step="5" value="90">
-    <span class="val" id="v-dist">90</span></div>
+    <input id="f-dist" type="range" min="20" max="360" step="5" value="130">
+    <span class="val" id="v-dist">130</span></div>
   <div class="ctrl-row"><label>Link force</label>
-    <input id="f-lstr" type="range" min="0" max="1" step="0.05" value="0.4">
-    <span class="val" id="v-lstr">0.40</span></div>
+    <input id="f-lstr" type="range" min="0" max="1" step="0.05" value="0.35">
+    <span class="val" id="v-lstr">0.35</span></div>
   <div class="ctrl-row"><label>Center</label>
-    <input id="f-center" type="range" min="0" max="0.4" step="0.02" value="0">
-    <span class="val" id="v-center">0.00</span></div>
+    <input id="f-center" type="range" min="0" max="0.4" step="0.02" value="0.04">
+    <span class="val" id="v-center">0.04</span></div>
   <button id="ctrl-reset">reset</button>
 </div>
 
@@ -305,18 +305,20 @@ const nodeById = new Map();   // id -> node datum (keeps x/y across ticks)
 let links = [];
 
 const sim = d3.forceSimulation([])
-  .force("link", d3.forceLink([]).id(d => d.id).distance(90).strength(0.4))
-  .force("charge", d3.forceManyBody().strength(-320))
+  // Spread-out defaults: strong repulsion + long links + gentle centre-gravity so
+  // the graph untangles itself and stays on-screen without manual dragging.
+  .force("link", d3.forceLink([]).id(d => d.id).distance(130).strength(0.35))
+  .force("charge", d3.forceManyBody().strength(-700).distanceMax(600))
   .force("center", d3.forceCenter(width/2, height/2))
-  .force("collide", d3.forceCollide(28))
-  // Center-gravity (per-node pull to middle) — off by default, driven by slider.
-  .force("x", d3.forceX(width/2).strength(0))
-  .force("y", d3.forceY(height/2).strength(0))
-  .alphaDecay(0.05)
+  .force("collide", d3.forceCollide(34))
+  // Center-gravity (per-node pull to middle) — keeps components from drifting off.
+  .force("x", d3.forceX(width/2).strength(0.04))
+  .force("y", d3.forceY(height/2).strength(0.04))
+  .alphaDecay(0.045)
   .on("tick", ticked);
 
 // ---- force sliders (Obsidian-style) --------------------------------------
-const FORCE_DEFAULTS = { "f-charge": 320, "f-dist": 90, "f-lstr": 0.4, "f-center": 0 };
+const FORCE_DEFAULTS = { "f-charge": 700, "f-dist": 130, "f-lstr": 0.35, "f-center": 0.04 };
 function bindForceSlider(id, valId, fmt, apply) {
   const el = document.getElementById(id), out = document.getElementById(valId);
   const run = () => { const v = +el.value; out.textContent = fmt(v); apply(v);

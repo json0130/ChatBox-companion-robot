@@ -6,6 +6,23 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## fix(kg): category enum coercion + viz spread-out force defaults  *(branch `KG-knowledge-extraction`)*
+
+**Tried:** (1) retype the 15 pre-existing `other` topics; (2) make the graph self-spread so no manual
+dragging is needed.
+**Worked:**
+- **Bug found + fixed:** `resolve_topic`/`merge_topics` upgraded category via `model_copy(update=...)`, which
+  in Pydantic v2 does NOT re-validate — so the category was left as a plain `str` in memory (only fixed itself
+  after a save/load). Now coerced to `TopicCategory(...)` explicitly. Verified in-memory type is the enum.
+- Retyped all 15 existing topics (data op on `kg_state.json`, backup `.pre-retype.bak`): science
+  (math/space/mars), music (jazz/r&b/hiphop/favorite songs), sport (tennis), food (baking/pasta),
+  activity (hiking/camping), place (landscapes), animals (dogs). None left `other`.
+- Viz force defaults tuned to spread out: charge −320→−700 (distanceMax 600), link length 90→130, link
+  force 0.4→0.35, collide 28→34, centre-gravity 0→0.04. Sliders + FORCE_DEFAULTS updated to match.
+**Didn't / deferred:** LLM-based retyping (used a deterministic map for the known set); 2c; rapport/trust.
+
+---
+
 ## feat: auto-consolidate every 3 conversations + Feature-2d category colours  *(branch `KG-knowledge-extraction`)*
 
 **Tried:** (1) auto-run topic consolidation every 3 conversations at end-of-session; (2) Feature-2d — colour

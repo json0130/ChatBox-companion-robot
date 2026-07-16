@@ -19,7 +19,7 @@ from typing import Callable, List, Optional, Tuple
 
 from .schema import (
     AboutEdge, ConversationNode, HasConversationEdge, HasInterestEdge,
-    InterestNode, Provenance, TopicNode,
+    InterestNode, Provenance, TopicCategory, TopicNode,
 )
 from .store import GraphStore
 
@@ -103,7 +103,8 @@ def resolve_topic(store: GraphStore, label: str, category=None) -> TopicNode:
     if existing is not None and existing.node_type == "topic":
         new_cat = _cat_value(category)
         if new_cat != "other" and _cat_value(existing.category) == "other":
-            existing = existing.model_copy(update={"category": new_cat})
+            # model_copy does NOT re-validate → coerce to the enum explicitly.
+            existing = existing.model_copy(update={"category": TopicCategory(new_cat)})
             store.upsert_node(existing)
         return existing
     node = TopicNode(id=tid, label=str(label), category=_cat_value(category))
@@ -248,7 +249,7 @@ def merge_topics(
                   "ts": datetime.now(timezone.utc).isoformat()})
     update: dict = {"notes": notes}
     if _cat_value(canon.category) == "other" and _cat_value(dup.category) != "other":
-        update["category"] = _cat_value(dup.category)
+        update["category"] = TopicCategory(_cat_value(dup.category))  # coerce to enum
     store.upsert_node(canon.model_copy(update=update))
 
     store.delete_node(duplicate_id)

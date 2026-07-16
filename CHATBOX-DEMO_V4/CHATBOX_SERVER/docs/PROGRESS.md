@@ -6,6 +6,27 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## fix: thread-safe session DB + drop mood from the prompt entirely  *(branch `KG-knowledge-extraction`)*
+
+**Two issues from a live run:**
+1. **Viz `/history` crashed** — `ThreadingHTTPServer` touched the one `sqlite3` connection from multiple
+   threads ("SQLite objects created in a thread can only be used in that same thread").
+2. **Replies were unnatural** — even down-weighted, the mood made the robot say two contradictory things in
+   one reply (e.g. "Messi is amazing! [CONCERNED] It's okay to feel sad sometimes."). User asked to stop
+   injecting mood/emotion into the prompt for now.
+**Fixes:**
+- `SessionStore`: open with `check_same_thread=False` + guard every DB op with a `threading.RLock` — verified
+  6 threads × concurrent reads, no errors.
+- Prompt: **remove the mood line and the per-turn emotion tag** from the LLM prompt entirely. Mood/emotion is
+  still written to the graph/conversation node (viz unaffected). HOW-TO-REPLY simplified to "reply to what
+  they said; don't comment on feelings or offer support unless they raise it." `_mood_phrase`/`_MOOD_WEIGHT`
+  kept (unused) for easy re-enable later.
+**Verified (real LLM):** "fav football player" → "Lionel Messi"; "what do you think about him?" → a natural
+football answer — no emotional-support bolt-ons, no contradictions.
+**Deferred:** improving the emotion model / re-introducing mood with better weighting; 2c; rapport/trust.
+
+---
+
 ## fix: down-weight mood/emotion by a quarter (content over emotional support)  *(branch `KG-knowledge-extraction`)*
 
 **Problem (user report):** even after the last fix the robot still led with emotional support and deflected

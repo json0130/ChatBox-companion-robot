@@ -998,20 +998,19 @@ class WebcamKGLoop:
             "is NOT in the memory below, say you don't remember it — NEVER invent or "
             "guess a name.\n"
             "• Weave memories in naturally — don't list them back.\n"
-            "• CONTENT FIRST: reply to what they actually said/asked. Their detected "
-            "mood is a faint, unreliable hint — usually IGNORE it. Do not open with "
-            "or redirect to how they feel, and do not offer emotional support unless "
-            "they explicitly bring up their feelings.")
+            "• Reply to what they actually said or asked. Do not comment on how they "
+            "seem to feel or offer emotional support unless they bring up their "
+            "feelings themselves.")
 
         # ── WHO YOU'RE TALKING TO ──
         if pid:
             who = [f"━━━ WHO YOU'RE TALKING TO: {pid} ━━━"]
             mem = self._person_memory(pid)
             who.append(mem if mem else "You don't remember much about them yet.")
-            damped = (mood * self._MOOD_WEIGHT) if mood is not None else None
-            mood_line = self._mood_phrase(damped, emotion)
-            if mood_line:
-                who.append(mood_line)
+            # NOTE: the detected mood/emotion is intentionally NOT injected into the
+            # prompt for now — it pulled replies into unsolicited emotional support.
+            # It's still tracked on the graph/conversation node for the viz. Revisit
+            # once the emotion model / weighting is improved.
             # RAG: what THEY said before that's relevant now (their own words only —
             # we don't feed the robot's past replies back, to avoid reinforcing any
             # earlier "I forgot" deflections).
@@ -1421,11 +1420,9 @@ class WebcamKGLoop:
                                         sys_prompt = self._build_system_prompt(
                                             last_person_id, mood=cur_mood,
                                             emotion=cur_emotion, rag_hits=rag_hits)
-                                    # Tag the emotion onto THIS turn only (history +
-                                    # transcript keep the plain message). Framed as a
-                                    # weak hint so it doesn't dominate the reply.
-                                    llm_msg = msg + (f"  (weak camera hint: {cur_emotion.lower()})"
-                                                     if cur_emotion else "")
+                                    # Mood/emotion is intentionally NOT added to the
+                                    # message for now (kept for the graph/viz only).
+                                    llm_msg = msg
                                     raw_reply = self.llm.respond(
                                         sys_prompt, llm_msg, history=hist,
                                     )

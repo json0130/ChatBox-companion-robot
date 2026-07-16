@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -32,8 +33,12 @@ class SessionStore:
 
     def __init__(self, path: str = DEFAULT_DB) -> None:
         self.path = path
-        self._conn = sqlite3.connect(path)
+        # check_same_thread=False + a lock: the viz server is a ThreadingHTTPServer,
+        # so requests touch this connection from different threads. The lock
+        # serializes all access (execute + fetch) so it stays consistent.
+        self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self._lock = threading.RLock()
         self._init()
 
     def _init(self) -> None:
@@ -69,30 +74,32 @@ class SessionStore:
         embedding: Optional[List[float]] = None,
     ) -> int:
         """Append one turn; turn_idx auto-increments within the session. Returns row id."""
-        cur = self._conn.execute(
-            "SELECT COALESCE(MAX(turn_idx), 0) FROM turns WHERE session_id = ?",
-            (session_id,),
-        )
-        next_idx = int(cur.fetchone()[0]) + 1
-        cur = self._conn.execute(
-            "INSERT INTO turns(session_id, person_id, robot_id, turn_idx, ts, "
-            "emotion, child, reply, topics, embedding) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?)",
-            (session_id, person_id, robot_id, next_idx, _now(), emotion, child, reply,
-             json.dumps(topics) if topics else None,
-             json.dumps(embedding) if embedding else None),
-        )
-        self._conn.commit()
-        return int(cur.lastrowid)
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT COALESCE(MAX(turn_idx), 0) FROM turns WHERE session_id = ?",
+                (session_id,),
+            )
+            next_idx = int(cur.fetchone()[0]) + 1
+            cur = self._conn.execute(
+                "INSERT INTO turns(session_id, person_id, robot_id, turn_idx, ts, "
+                "emotion, child, reply, topics, embedding) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (session_id, person_id, robot_id, next_idx, _now(), emotion, child, reply,
+                 json.dumps(topics) if topics else None,
+                 json.dumps(embedding) if embedding else None),
+            )
+            self._conn.commit()
+            return int(cur.lastrowid)
 
     def mark_extracted(self, person_id: str) -> int:
         """Mark all of a person's un-extracted turns as extracted. Returns count."""
-        cur = self._conn.execute(
-            "UPDATE turns SET extracted = 1 WHERE person_id = ? AND extracted = 0",
-            (person_id,),
-        )
-        self._conn.commit()
-        return cur.rowcount
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE turns SET extracted = 1 WHERE person_id = ? AND extracted = 0",
+                (person_id,),
+            )
+            self._conn.commit()
+            return cur.rowcount
 
     # ── reads ─────────────────────────────────────────────────────────────────
 
@@ -103,17 +110,19 @@ class SessionStore:
 
     def unextracted_turns(self, person_id: str) -> List[dict]:
         """A person's turns not yet fed to extraction, oldest first."""
-        rows = self._conn.execute(
-            "SELECT * FROM turns WHERE person_id = ? AND extracted = 0 "
-            "ORDER BY id ASC", (person_id,),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM turns WHERE person_id = ? AND extracted = 0 "
+                "ORDER BY id ASC", (person_id,),
+            ).fetchall()
         return [self._turn_row(r) for r in rows]
 
     def person_turns(self, person_id: str) -> List[dict]:
         """All of a person's turns, oldest first (for history / viz)."""
-        rows = self._conn.execute(
-            "SELECT * FROM turns WHERE person_id = ? ORDER BY id ASC", (person_id,),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM turns WHERE person_id = ? ORDER BY id ASC", (person_id,),
+            ).fetchall()
         return [self._turn_row(r) for r in rows]
 
     def turns_for_topic(self, topic_label: str, person_id: Optional[str] = None,
@@ -126,8 +135,10 @@ class SessionStore:
             q += " AND person_id = ?"
             params.append(person_id)
         q += " ORDER BY id ASC"
+        with self._lock:
+            rows = self._conn.execute(q, params).fetchall()
         out = []
-        for r in self._conn.execute(q, params).fetchall():
+        for r in rows:
             try:
                 tops = json.loads(r["topics"]) or []
             except (TypeError, ValueError):
@@ -137,32 +148,36 @@ class SessionStore:
         return out[-limit:]
 
     def person_turn_count(self, person_id: str, robot_id: Optional[str] = None) -> int:
-        if robot_id:
-            r = self._conn.execute(
-                "SELECT COUNT(*) FROM turns WHERE person_id = ? AND robot_id = ?",
-                (person_id, robot_id)).fetchone()
-        else:
-            r = self._conn.execute(
-                "SELECT COUNT(*) FROM turns WHERE person_id = ?", (person_id,)).fetchone()
+        with self._lock:
+            if robot_id:
+                r = self._conn.execute(
+                    "SELECT COUNT(*) FROM turns WHERE person_id = ? AND robot_id = ?",
+                    (person_id, robot_id)).fetchone()
+            else:
+                r = self._conn.execute(
+                    "SELECT COUNT(*) FROM turns WHERE person_id = ?", (person_id,)).fetchone()
         return int(r[0])
 
     def session_count(self) -> int:
         """Distinct sessions (conversations) recorded — drives the consolidation cadence."""
-        r = self._conn.execute("SELECT COUNT(DISTINCT session_id) FROM turns").fetchone()
+        with self._lock:
+            r = self._conn.execute("SELECT COUNT(DISTINCT session_id) FROM turns").fetchone()
         return int(r[0])
 
     def people(self) -> List[str]:
-        rows = self._conn.execute("SELECT DISTINCT person_id FROM turns").fetchall()
+        with self._lock:
+            rows = self._conn.execute("SELECT DISTINCT person_id FROM turns").fetchall()
         return [r[0] for r in rows]
 
     # ── embeddings (Phase-2 RAG) ──────────────────────────────────────────────
 
     def turns_needing_embedding(self) -> List[tuple]:
         """[(turn_id, text), ...] for turns that have text but no embedding yet."""
-        rows = self._conn.execute(
-            "SELECT id, child, reply FROM turns "
-            "WHERE embedding IS NULL AND (child IS NOT NULL OR reply IS NOT NULL)"
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, child, reply FROM turns "
+                "WHERE embedding IS NULL AND (child IS NOT NULL OR reply IS NOT NULL)"
+            ).fetchall()
         out = []
         for r in rows:
             text = f"{r['child'] or ''} {r['reply'] or ''}".strip()
@@ -171,9 +186,10 @@ class SessionStore:
         return out
 
     def set_embedding(self, turn_id: int, vec: List[float]) -> None:
-        self._conn.execute("UPDATE turns SET embedding = ? WHERE id = ?",
-                           (json.dumps(list(vec)), turn_id))
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute("UPDATE turns SET embedding = ? WHERE id = ?",
+                               (json.dumps(list(vec)), turn_id))
+            self._conn.commit()
 
     def embedded_turns(self, person_id: Optional[str] = None) -> List[dict]:
         """Turns that have an embedding, with the vector, for RAG search."""
@@ -184,8 +200,10 @@ class SessionStore:
             q += " AND person_id = ?"
             params.append(person_id)
         q += " ORDER BY id ASC"
+        with self._lock:
+            rows = self._conn.execute(q, params).fetchall()
         out = []
-        for r in self._conn.execute(q, params).fetchall():
+        for r in rows:
             try:
                 vec = json.loads(r["embedding"])
             except (TypeError, ValueError):

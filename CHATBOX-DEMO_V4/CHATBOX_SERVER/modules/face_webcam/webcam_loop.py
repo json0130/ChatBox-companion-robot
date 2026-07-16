@@ -1103,7 +1103,9 @@ class WebcamKGLoop:
         Applies merges (not a dry-run). No-op without embeddings."""
         if self._embed_fn is None:
             return
-        from modules.kg_extraction import consolidate_topics, consolidate_interests
+        from modules.kg_extraction import (
+            consolidate_topics, consolidate_interests, link_related_topics,
+        )
         merges = (consolidate_topics(self.store, self._embed_fn, source="auto-consolidate")["merges"]
                   + consolidate_interests(self.store, self._embed_fn, source="auto-consolidate")["merges"])
         if merges:
@@ -1112,6 +1114,12 @@ class WebcamKGLoop:
                 print(f"    '{dup}'  →  '{canon}'")
         else:
             print("[WebcamLoop] auto-consolidate: no near-duplicate topics/interests")
+        # Link related-but-distinct topics (rap ~ hiphop) rather than merging them.
+        links = link_related_topics(self.store, self._embed_fn, source="auto-related")["links"]
+        if links:
+            print(f"[WebcamLoop] related-topic links (+{len(links)}):")
+            for a, b, sim in links:
+                print(f"    '{a}' ~ '{b}'  ({sim})")
 
     def _consolidate_preview(self) -> None:
         """Dry-run: print near-duplicate topics that WOULD merge (non-destructive).
@@ -1611,16 +1619,21 @@ def run_consolidate_mode(kg_path: str, embed_model: str,
     except Exception as exc:  # noqa: BLE001
         print(f"[consolidate] embeddings unavailable ({exc}) — cannot consolidate")
         return
-    from modules.kg_extraction import consolidate_topics, consolidate_interests
+    from modules.kg_extraction import (
+        consolidate_topics, consolidate_interests, link_related_topics,
+    )
     merges = (consolidate_topics(store, embed_fn, floor=merge_floor, dry_run=dry_run)["merges"]
               + consolidate_interests(store, embed_fn, floor=merge_floor, dry_run=dry_run)["merges"])
-    if not merges:
-        print(f"[consolidate] no near-duplicate topics/interests (floor {merge_floor})")
+    links = link_related_topics(store, embed_fn, merge_floor=merge_floor, dry_run=dry_run)["links"]
+    if not merges and not links:
+        print(f"[consolidate] no near-duplicate or related topics/interests (floor {merge_floor})")
         return
     tag = "DRY RUN — no changes written" if dry_run else "APPLIED"
-    print(f"[consolidate] {len(merges)} merge(s) — {tag}:")
+    print(f"[consolidate] {len(merges)} merge(s), {len(links)} related-link(s) — {tag}:")
     for canon, dup in merges:
-        print(f"    '{dup}'  →  '{canon}'")
+        print(f"    merge  '{dup}'  →  '{canon}'")
+    for a, b, sim in links:
+        print(f"    link   '{a}' ~ '{b}'  ({sim})")
     if not dry_run:
         store.save(kg_path)
         print(f"[consolidate] saved → {kg_path}")

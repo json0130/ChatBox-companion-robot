@@ -64,6 +64,8 @@ _TIMESCALE_BY_EDGE_TYPE = {
     # Shared-topic layer (seed.py) — SLOW.
     "has_interest": "SLOW",
     "about": "SLOW",
+    # Topic <-> Topic semantic relation (Feature-2c) — SLOW.
+    "related_topic": "SLOW",
 }
 
 # node_type -> display type (frontend maps this to a shape)

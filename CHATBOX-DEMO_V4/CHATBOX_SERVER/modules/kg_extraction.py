@@ -188,7 +188,8 @@ def extract_and_apply_topics(
 
 EmbedFn = Callable[[str], List[float]]
 
-CONSOLIDATE_FLOOR = 0.86        # cosine >= this → merge candidate (conservative)
+CONSOLIDATE_FLOOR = 0.86        # cosine >= this → MERGE (near-identical labels)
+RELATED_FLOOR = 0.60           # [RELATED_FLOOR, CONSOLIDATE_FLOOR) → LINK (related, distinct)
 
 
 def _cosine(a: List[float], b: List[float]) -> float:
@@ -297,6 +298,52 @@ def consolidate_topics(
     if not dry_run:
         for canonical, dup in merge_ops:
             merge_topics(store, canonical, dup, source=source)
+    return report
+
+
+def link_related_topics(
+    store, embed_fn: EmbedFn, *,
+    related_floor: float = RELATED_FLOOR, merge_floor: float = CONSOLIDATE_FLOOR,
+    same_category_only: bool = True, dry_run: bool = False,
+    source: str = "related",
+) -> dict:
+    """Add Topic↔Topic `related_topic` links for pairs that are related but NOT
+    near-duplicates: cosine in [related_floor, merge_floor). Same-category only by
+    default (rap~hiphop, tennis~basketball). Returns {"links":[(a,b,sim)], ...}."""
+    from modules.graph_relationship.topics import link_related_topic
+    topics = _topic_nodes(store)                    # [(id, label, category)]
+    report = {"links": [], "existing": 0, "dry_run": dry_run}
+    if len(topics) < 2:
+        return report
+    vecs: dict = {}
+    for tid, label, _cat in topics:
+        try:
+            v = embed_fn(label)
+        except Exception:  # noqa: BLE001
+            v = None
+        if v:
+            vecs[tid] = v
+    cat_of = {tid: cat for tid, _l, cat in topics}
+    label_of = {tid: lbl for tid, lbl, _c in topics}
+    n = len(topics)
+    for i in range(n):
+        ai = topics[i][0]
+        if ai not in vecs:
+            continue
+        for j in range(i + 1, n):
+            bj = topics[j][0]
+            if bj not in vecs:
+                continue
+            if same_category_only and cat_of[ai] != cat_of[bj]:
+                continue
+            sim = _cosine(vecs[ai], vecs[bj])
+            if related_floor <= sim < merge_floor:
+                if store.get_edge(*sorted((ai, bj)), "related_topic") is not None:
+                    report["existing"] += 1
+                    continue
+                report["links"].append((label_of[ai], label_of[bj], round(sim, 3)))
+                if not dry_run:
+                    link_related_topic(store, ai, bj, sim, source=source)
     return report
 
 

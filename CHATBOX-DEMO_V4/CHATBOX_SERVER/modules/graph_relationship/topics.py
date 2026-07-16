@@ -19,7 +19,7 @@ from typing import Callable, List, Optional, Tuple
 
 from .schema import (
     AboutEdge, ConversationNode, HasConversationEdge, HasInterestEdge,
-    InterestNode, Provenance, TopicCategory, TopicNode,
+    InterestNode, Provenance, RelatedTopicEdge, TopicCategory, TopicNode,
 )
 from .store import GraphStore
 
@@ -254,6 +254,27 @@ def merge_topics(
 
     store.delete_node(duplicate_id)
     return store.get_node(canonical_id)
+
+
+def link_related_topic(
+    store: GraphStore, topic_a_id: str, topic_b_id: str, weight: float, *,
+    source: Optional[str] = None,
+) -> bool:
+    """Add an undirected Topic↔Topic `related_topic` edge (stored once, endpoints
+    sorted). Idempotent: returns False if it already exists or either id isn't a
+    topic; True if a new edge was written. Pure — no embeddings/LLM."""
+    if topic_a_id == topic_b_id:
+        return False
+    a, b = sorted((topic_a_id, topic_b_id))
+    na, nb = store.get_node(a), store.get_node(b)
+    if na is None or na.node_type != "topic" or nb is None or nb.node_type != "topic":
+        return False
+    if store.get_edge(a, b, "related_topic") is not None:
+        return False
+    store.upsert_edge(RelatedTopicEdge(
+        source_id=a, target_id=b, weight=max(0.0, min(1.0, float(weight))),
+        provenance=_prov(source)))
+    return True
 
 
 def merge_interests(

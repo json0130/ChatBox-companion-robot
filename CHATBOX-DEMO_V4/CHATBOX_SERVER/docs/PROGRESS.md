@@ -6,6 +6,28 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## feat: topic↔topic relations (Feature-2c) — link related-but-distinct topics  *(branch `KG-knowledge-extraction`)*
+
+**User observation:** "rap" and "hiphop" didn't merge. **Finding:** cos(rap,hiphop)=0.678 — below the 0.86
+merge floor, and there's NO safe merge threshold (tennis/basketball=0.654, dogs/cats=0.639 sit right below
+rap/hiphop). **User's call:** don't merge them — **link** them instead (they're distinct but related).
+**Implemented Feature-2c:**
+- schema: `RelatedTopicEdge` (topic↔topic, SLOW, `weight`=similarity; conceptually undirected, stored with
+  sorted endpoints).
+- pure `topics.link_related_topic(a, b, weight)` — idempotent, only between topic nodes.
+- app `kg_extraction.link_related_topics(store, embed_fn, related_floor=0.60, merge_floor=0.86,
+  same_category_only=True)` — links same-category pairs whose cosine is in the "related" band
+  [0.60, 0.86) (related but not near-duplicate). Embedding-only (no LLM), non-destructive.
+- runs in `_auto_consolidate` (every extraction) and `--mode consolidate`; viz maps `related_topic` → SLOW.
+- **merge stays for ≥0.86 only** (near-identical labels); the earlier gray-zone LLM-merge idea was dropped
+  in favour of links.
+**Verified + applied on real data:** links `hiphop ~ rap (0.678)` and `multiplication ~ math problems
+(0.642)` — 2 clean links, no noise; new edge round-trips save/load.
+**Note:** related links are non-destructive (both nodes kept), so a looser band is safe; lower
+`related_floor` if you want more relations (e.g. jazz~r&b at 0.55).
+
+---
+
 ## fix: consolidate every extraction + stop qwen Chinese/ChatML leak  *(branch `KG-knowledge-extraction`)*
 
 **Two requests from a live run:**

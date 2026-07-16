@@ -374,7 +374,16 @@ class AboutEdge(EdgeBase):
     timescale: Timescale = Timescale.SLOW
 
 
-TopicEdge = Union[HasInterestEdge, AboutEdge]
+class RelatedTopicEdge(EdgeBase):
+    """Topic ↔ Topic semantic relation — distinct but related (e.g. rap ~ hiphop,
+    tennis ~ basketball). SLOW; conceptually undirected, stored once with the two
+    endpoints sorted. `weight` is the embedding similarity."""
+    edge_type: Literal["related_topic"] = "related_topic"
+    weight: float = Field(..., ge=0.0, le=1.0)
+    timescale: Timescale = Timescale.SLOW
+
+
+TopicEdge = Union[HasInterestEdge, AboutEdge, RelatedTopicEdge]
 
 
 # ---------------------------------------------------------------------------

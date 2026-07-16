@@ -867,7 +867,8 @@ class WebcamKGLoop:
     # Memory caps — keep the prompt bounded as the graph grows.
     _MAX_INTERESTS = 4
     _MAX_TOPICS_PER_INTEREST = 3
-    _MAX_NOTES = 3
+    _MAX_NOTES = 8
+    _MAX_NOTES_PER_TOPIC = 2
     # Auto-run topic consolidation once every N conversations (SessionNodes).
     _CONSOLIDATE_EVERY = 3
 
@@ -898,25 +899,36 @@ class WebcamKGLoop:
         if shared:
             lines.append("Common ground: " + ", ".join(shared))
 
-        # Most-recent note PER TOPIC (for variety), capped.
+        # Collect notes, then surface the ones with SPECIFIC facts first (proper
+        # nouns / quoted titles like "Rafael Nadal", "SZA 'Open Arms'"), then by
+        # recency — so concrete memories aren't crowded out by generic ones.
+        def _specificity(text: str) -> int:
+            score = 2 if ("'" in text or '"' in text) else 0
+            words = str(text).split()
+            score += sum(1 for w in words[1:] if w[:1].isupper())  # mid-sentence caps
+            return score
         collected: list = []
         for _interest, topics in interests:
             for t in topics:
                 for n in getattr(t, "notes", []) or []:
                     if n.get("person") == pid and n.get("text"):
-                        collected.append((n.get("ts", ""), t.label, n["text"]))
-        collected.sort(key=lambda x: x[0], reverse=True)   # most recent first
-        seen_topics: set = set()
+                        collected.append((_specificity(n["text"]), n.get("ts", ""),
+                                          t.label, n["text"]))
+        collected.sort(key=lambda x: (x[0], x[1]), reverse=True)  # specific + recent first
+        collected = [(ts, label, text) for _s, ts, label, text in collected]
+        per_topic: dict = {}
         note_lines: list[str] = []
         for _ts, label, text in collected:
-            if label in seen_topics:
+            # Up to _MAX_NOTES_PER_TOPIC per topic so specific facts (e.g. a
+            # favourite player/song) aren't hidden behind a generic note.
+            if per_topic.get(label, 0) >= self._MAX_NOTES_PER_TOPIC:
                 continue
-            seen_topics.add(label)
+            per_topic[label] = per_topic.get(label, 0) + 1
             note_lines.append(f"  – {label}: {text}")
             if len(note_lines) >= self._MAX_NOTES:
                 break
         if note_lines:
-            lines.append("Recently about them:\n" + "\n".join(note_lines))
+            lines.append("What you remember about them:\n" + "\n".join(note_lines))
 
         return "\n".join(lines)
 
@@ -976,8 +988,14 @@ class WebcamKGLoop:
             "• Keep it short, warm and spoken — one or two sentences.\n"
             "• Begin every reply with an emotion tag in square brackets, e.g. "
             "[HAPPY], [CURIOUS].\n"
-            "• Weave in what you know about them naturally — never list it back.\n"
-            "• Match their mood: if they seem low or upset, be gentle and reassuring.")
+            "• ANSWER what they actually ask. If they ask about something they told "
+            "you before (a favourite player, song, etc.) and it IS in the memory "
+            "below, answer DIRECTLY and state the name — don't say you forgot. If it "
+            "is NOT in the memory below, say you don't remember it — NEVER invent or "
+            "guess a name.\n"
+            "• Weave memories in naturally — don't list them back.\n"
+            "• You may gently note their mood, but do NOT keep dwelling on it or "
+            "redirect every reply to how they feel — stay on their topic.")
 
         # ── WHO YOU'RE TALKING TO ──
         if pid:
@@ -987,11 +1005,13 @@ class WebcamKGLoop:
             mood_line = self._mood_phrase(mood, emotion)
             if mood_line:
                 who.append(mood_line)
-            # RAG: relevant things they've said in past conversations (timeline).
+            # RAG: what THEY said before that's relevant now (their own words only —
+            # we don't feed the robot's past replies back, to avoid reinforcing any
+            # earlier "I forgot" deflections).
             hit_lines = [f'  – ({h["ts"][:10]}) "{h["child"]}"'
                          for h in (rag_hits or []) if h.get("child")]
             if hit_lines:
-                who.append("Relevant things they've said before:\n"
+                who.append("Relevant things they've told you before:\n"
                            + "\n".join(hit_lines))
             blocks.append("\n".join(who))
         else:
@@ -1383,7 +1403,7 @@ class WebcamKGLoop:
                                     if self._session_rag and last_person_id:
                                         try:
                                             rag_hits = self._session_rag.search(
-                                                msg, top_k=3, person_id=last_person_id)
+                                                msg, top_k=5, person_id=last_person_id)
                                         except Exception:  # noqa: BLE001
                                             rag_hits = []
                                     # PAD off → build the system prompt from the KG

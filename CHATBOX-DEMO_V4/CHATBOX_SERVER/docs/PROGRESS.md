@@ -6,6 +6,27 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## fix: memory actually gets used in replies (retrieval + prompt tuning)  *(branch `KG-knowledge-extraction`)*
+
+**Problem (user report):** the robot didn't use past info — asked "who's my favourite tennis player?" it
+said "I'm fuzzy"; and it deflected every message into "you seem sad, let's listen to music". Data was all
+present (69 embedded turns; notes with "Rafael Nadal", "SZA 'Open Arms'").
+**Root causes found (by rebuilding the real prompt):** (a) the mood rule *"if they seem low, be gentle and
+reassuring"* + a stuck-negative mood made the robot **console instead of answer**; (b) the notes cap (3, one
+per topic, recency-sorted) **hid the specific facts** behind generic notes; (c) RAG on a meta-question
+("do you remember X") retrieved other **questions**, and the block showed the robot's past replies (which
+included "I don't have the name") — reinforcing forgetting.
+**Fixes:**
+- Prompt HOW-TO-REPLY: answer the actual question directly from memory and **state the name**; if it's NOT
+  in memory, say so — **never invent a name**; only *note* mood, don't dwell/redirect.
+- `_person_memory`: surface **specific** notes first (proper nouns / quoted titles score higher), then
+  recency; caps raised to 8 notes / 2-per-topic. So "Rafael Nadal" and "SZA 'Open Arms'" lead.
+- RAG block shows only **the person's own words** (not the robot's past replies), top_k 3→5.
+**Verified with the REAL LLM + data:** "favourite tennis player?" → *Rafael Nadal*; "favourite r&b artist?"
+→ *SZA*; "favourite colour?" (unknown) → *"I don't remember"* (no hallucination, no deflection).
+
+---
+
 ## feat: RAG over transcripts + topic-click history (Phase 2)  *(branch `KG-knowledge-extraction`)*
 
 **Tried:** use the SQLite transcripts for (a) RAG retrieval into the live prompt and (b) a viz "click a topic

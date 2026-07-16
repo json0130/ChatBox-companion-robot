@@ -869,6 +869,9 @@ class WebcamKGLoop:
     _MAX_TOPICS_PER_INTEREST = 3
     _MAX_NOTES = 8
     _MAX_NOTES_PER_TOPIC = 2
+    # Down-weight the mood/emotion signal so replies follow the person's content,
+    # not their (often noisy) detected affect. 0.75 = a quarter less weight.
+    _MOOD_WEIGHT = 0.25
     # Auto-run topic consolidation once every N conversations (SessionNodes).
     _CONSOLIDATE_EVERY = 3
 
@@ -941,13 +944,14 @@ class WebcamKGLoop:
             return ""
         v = valence or 0.0
         if v > 0.15:
-            word, face = "positive", "🙂"
+            word = "a bit upbeat"
         elif v < -0.15:
-            word, face = "low", "🙁"
+            word = "a bit low"
         else:
-            word, face = "neutral", "😐"
-        tail = f" (mood {v:+.2f})" if valence is not None else ""
-        return f"Right now they seem {word} {face}{tail}."
+            word = "neutral"
+        # Framed as a weak, optional background hint — NOT a directive.
+        return (f"(Weak background hint — the camera reads their mood as {word}; "
+                "this is unreliable, so don't steer the conversation to it.)")
 
     def _build_system_prompt(self, pid: Optional[str], *,
                              mood: Optional[float] = None,
@@ -994,15 +998,18 @@ class WebcamKGLoop:
             "is NOT in the memory below, say you don't remember it — NEVER invent or "
             "guess a name.\n"
             "• Weave memories in naturally — don't list them back.\n"
-            "• You may gently note their mood, but do NOT keep dwelling on it or "
-            "redirect every reply to how they feel — stay on their topic.")
+            "• CONTENT FIRST: reply to what they actually said/asked. Their detected "
+            "mood is a faint, unreliable hint — usually IGNORE it. Do not open with "
+            "or redirect to how they feel, and do not offer emotional support unless "
+            "they explicitly bring up their feelings.")
 
         # ── WHO YOU'RE TALKING TO ──
         if pid:
             who = [f"━━━ WHO YOU'RE TALKING TO: {pid} ━━━"]
             mem = self._person_memory(pid)
             who.append(mem if mem else "You don't remember much about them yet.")
-            mood_line = self._mood_phrase(mood, emotion)
+            damped = (mood * self._MOOD_WEIGHT) if mood is not None else None
+            mood_line = self._mood_phrase(damped, emotion)
             if mood_line:
                 who.append(mood_line)
             # RAG: what THEY said before that's relevant now (their own words only —
@@ -1415,8 +1422,9 @@ class WebcamKGLoop:
                                             last_person_id, mood=cur_mood,
                                             emotion=cur_emotion, rag_hits=rag_hits)
                                     # Tag the emotion onto THIS turn only (history +
-                                    # transcript keep the plain message).
-                                    llm_msg = msg + (f"  (they appear: {cur_emotion})"
+                                    # transcript keep the plain message). Framed as a
+                                    # weak hint so it doesn't dominate the reply.
+                                    llm_msg = msg + (f"  (weak camera hint: {cur_emotion.lower()})"
                                                      if cur_emotion else "")
                                     raw_reply = self.llm.respond(
                                         sys_prompt, llm_msg, history=hist,

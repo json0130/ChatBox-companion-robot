@@ -6,6 +6,26 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## fix: down-weight mood/emotion by a quarter (content over emotional support)  *(branch `KG-knowledge-extraction`)*
+
+**Problem (user report):** even after the last fix the robot still led with emotional support and deflected
+questions ("who is my fav sports player" → "I noticed you're feeling down…"), because the emotion detector
+kept reading the user as sad and the prompt over-weighted it.
+**Fix (reduce mood/emotion weight ~25%, per request):**
+- `_MOOD_WEIGHT = 0.75`: the mood valence used in the prompt is damped ×0.75, so mild negatives fall under
+  the ±0.15 threshold and read as "neutral".
+- Mood line reframed from a directive ("Right now they seem low 🙁") to a weak, explicitly-unreliable
+  background hint; the per-turn emotion tag likewise softened to "(weak camera hint: …)".
+- HOW TO REPLY: "CONTENT FIRST — reply to what they said; mood is a faint hint, usually IGNORE it; don't
+  open with or redirect to feelings, and don't offer emotional support unless they raise their feelings."
+**Verified (real LLM, negative mood + Sadness):** "fav colour?" → honest "I don't remember" (on-topic);
+"you should answer my questions" → "Of course, what's on your mind?"; "do you like jazz?" → jazz answer;
+"fav sports player" → answers "Lionel Messi" (brief mood aside remains — expected at a quarter reduction,
+no longer a deflection).
+**Didn't / deferred:** fixing the upstream emotion detector reading neutral faces as sad; 2c; rapport/trust.
+
+---
+
 ## fix: memory actually gets used in replies (retrieval + prompt tuning)  *(branch `KG-knowledge-extraction`)*
 
 **Problem (user report):** the robot didn't use past info — asked "who's my favourite tennis player?" it

@@ -6,6 +6,32 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## feat: externalize session transcripts to SQLite (Phase 1)  *(branch `KG-knowledge-extraction`)*
+
+**Tried:** move conversation transcripts OUT of the knowledge graph into a dedicated SQLite store so the KG
+focuses on relationships/topics/interests and the viz is no longer cluttered with per-session nodes
+(user approved: SQLite backend; sessions removed from graph; topic-click history via RAG comes in Phase 2).
+**Worked:**
+- New app-layer `modules/session_store.py` (pure stdlib sqlite3, no graph/LLM/PAD imports): one row per turn
+  (session_id, person, robot, turn_idx, ts, emotion, child, reply, topics, embedding-reserved, extracted);
+  `append_turn / unextracted_turns / mark_extracted / person_turn_count / session_count / turns_for_topic`.
+- Pure `interactions.set_interaction_count()` so the Interaction node's count comes from the transcript DB
+  instead of graph SessionNodes.
+- webcam rewired: chat turns write to SQLite (not the graph); no more SessionNode/`start_session`/graph
+  `append_turn`; `_extract_session` reads un-extracted turns from SQLite and `mark_extracted`s them; auto-
+  consolidate cadence counts `session_store.session_count()`. `_ensure_interaction` + a per-run uuid session id
+  replace the old `_ensure_session`.
+- `--mode migrate-sessions`: moved the real graph's **17 sessions / 62 turns** into `sessions.db` and removed
+  all SessionNodes; graph node types now: person/robot/interaction/topic/interest/conversation/persona/role/
+  capability. Migrated turns are marked extracted; interaction_count preserved.
+**Verified (headless, fake LLM):** store ops; extraction reads SQLite + adds typed topic + Δrapport; zero
+session nodes created in the graph; re-extract idempotent; tier unaffected; migration moves turns + strips
+nodes + preserves counts.
+**Didn't / deferred (Phase 2):** FAISS RAG retrieval into the prompt; topic-node click → conversation history
+in the viz; removing the now-unused "Session" legend row. Rapport/trust still parked.
+
+---
+
 ## fix(kg): category enum coercion + viz spread-out force defaults  *(branch `KG-knowledge-extraction`)*
 
 **Tried:** (1) retype the 15 pre-existing `other` topics; (2) make the graph self-spread so no manual

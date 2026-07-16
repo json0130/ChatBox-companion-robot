@@ -76,6 +76,7 @@ from modules.graph_relationship.store import InMemoryGraphStore
 from modules.pad_persona.pipeline_adapter import PADPipelineAdapter
 from modules.face_webcam.face_id import FaceIdentifier
 from modules.face_webcam.emotion_detector import EmotionDetector
+from modules.session_store import SessionStore, DEFAULT_DB as _DEFAULT_SESSIONS_DB
 
 # ── LLM ───────────────────────────────────────────────────────────────────────
 
@@ -676,6 +677,7 @@ class WebcamKGLoop:
         seed:            bool  = True,
         matcher                = None,
         embed_fn               = None,
+        sessions_db:     str   = _DEFAULT_SESSIONS_DB,
         pad_enabled:     bool  = False,
         emotion_enabled: bool  = False,
     ):
@@ -725,8 +727,11 @@ class WebcamKGLoop:
         self._emotion_enabled  = emotion_enabled
         self._matcher          = matcher
         self._embed_fn         = embed_fn   # for on-demand topic consolidation (Feature 2)
-        # person_id -> current session node id for this run (like KGBridge._session).
-        self._sessions: dict[str, str] = {}
+        # Conversation transcripts live in SQLite (not the graph). The graph keeps
+        # only Interaction (rapport/trust/count) + topics/interests.
+        self._session_store    = SessionStore(sessions_db)
+        # person_id -> this run's session id (uuid). Populated on the first turn.
+        self._run_sessions: dict[str, str] = {}
         # person_id -> (valence, emotion_label) last persisted — dirty-check so the
         # per-tick mood write only hits disk when it actually changes.
         self._last_mood: dict[str, tuple] = {}
@@ -763,18 +768,13 @@ class WebcamKGLoop:
 
     # ── KG-only path (PAD/emotion disabled) ────────────────────────────────────
 
-    def _ensure_session(self, pid: str) -> str:
-        """Return the current session id for `pid`, creating person/interaction/
-        session as needed. One session per person for this run's lifetime."""
+    def _ensure_interaction(self, pid: str) -> None:
+        """Ensure the person, robot and their InteractionNode exist in the graph.
+        No SessionNode — transcripts live in SQLite now."""
         from modules.graph_relationship.schema import (
             PersonNode, RobotNode, Embodiment,
         )
-        from modules.graph_relationship.interactions import (
-            get_or_create_interaction, start_session, count_person_sessions,
-        )
-        sid = self._sessions.get(pid)
-        if sid is not None and self.store.get_node(sid) is not None:
-            return sid
+        from modules.graph_relationship.interactions import get_or_create_interaction
         if self.store.get_node(pid) is None:
             self.store.upsert_node(PersonNode(id=pid, display_name=pid))
         if self.store.get_node(self.robot_id) is None:
@@ -782,24 +782,26 @@ class WebcamKGLoop:
                    else Embodiment.ELEPHANT)
             self.store.upsert_node(
                 RobotNode(id=self.robot_id, name=self.robot_id, embodiment=emb))
-        interaction = get_or_create_interaction(
-            self.store, pid, self.robot_id, source=self.robot_id)
-        label = f"session {count_person_sessions(self.store, pid) + 1}"
-        session = start_session(
-            self.store, interaction_id_=interaction.id, label=label,
-            source=self.robot_id)
-        self._sessions[pid] = session.id
-        # Persist once on session creation (not every tick) so the viz can pick
-        # up the new person without flooding the disk with identical snapshots.
-        if self.kg_path:
-            self.store.save(self.kg_path)
-        return session.id
+        get_or_create_interaction(self.store, pid, self.robot_id, source=self.robot_id)
+
+    def _run_session_id(self, pid: str) -> str:
+        """This run's session id for `pid` (uuid), created on the first turn.
+        Ensures the interaction exists. Groups the run's turns in the SQLite store."""
+        import uuid
+        self._ensure_interaction(pid)
+        sid = self._run_sessions.get(pid)
+        if sid is None:
+            sid = str(uuid.uuid4())
+            self._run_sessions[pid] = sid
+            if self.kg_path:
+                self.store.save(self.kg_path)   # persist the new interaction once
+        return sid
 
     def _kg_tick(self, pid: str) -> tuple[str, float, float]:
-        """Ensure the person's session exists and return (tier, rapport, trust)
-        for the overlay. No PAD, no per-tick transcript writes."""
+        """Ensure the person's interaction exists and return (tier, rapport, trust)
+        for the overlay. No PAD, no per-tick transcript writes, no SessionNode."""
         from modules.graph_relationship.kg_bridge import derive_tier
-        self._ensure_session(pid)
+        self._ensure_interaction(pid)
         tier = derive_tier(pid, self.robot_id, self.store)
         r, t = _read_rapport_trust(self.store, pid, self.robot_id)
         return tier, r, t
@@ -997,23 +999,19 @@ class WebcamKGLoop:
         # ONLY and the untouched adjust_closeness — its interest logic is not used.
         from modules.kg_extraction import extract_and_apply_topics
         from modules.graph_relationship.extraction import extract as _extract_closeness
-        from modules.graph_relationship.interactions import (
-            unextracted_turns, mark_session_extracted, adjust_closeness,
-        )
+        from modules.graph_relationship.interactions import adjust_closeness
         # Respect external edits (e.g. viz deletions) before extracting.
         if self.kg_path and os.path.exists(self.kg_path):
             self.store.reload(self.kg_path)
-        sessions = dict(self._sessions)
-        if not sessions:
-            print("[WebcamLoop] no session this run — nothing to extract")
+        people = list(self._run_sessions.keys())   # people talked to this run
+        if not people:
+            print("[WebcamLoop] no conversation this run — nothing to extract")
             return
         print("[WebcamLoop] extracting knowledge from this session …")
-        for pid, sid in sessions.items():
-            sess = self.store.get_node(sid)
-            if sess is None or sess.node_type != "session":
-                continue
-            # Only real conversation turns (with child/reply text).
-            turns = [t for t in unextracted_turns(sess)
+        for pid in people:
+            sid = self._run_sessions.get(pid)
+            # Un-extracted transcript turns come from the SQLite store now.
+            turns = [t for t in self._session_store.unextracted_turns(pid)
                      if t.get("child") or t.get("reply")]
             if not turns:
                 print(f"  {pid}: no conversation turns to extract")
@@ -1030,7 +1028,7 @@ class WebcamKGLoop:
                                  d_rapport=cu.rapport_delta, d_trust=cu.trust_delta,
                                  source=f"extraction:{sid}")
 
-            mark_session_extracted(self.store, sid)
+            self._session_store.mark_extracted(pid)
 
             reinf = ", ".join(lab for lab, _c in ts.get("reinforced", []))
             newt = ", ".join(f"{lab}[{cat}]" for lab, cat, _c in ts.get("added", []))
@@ -1050,8 +1048,7 @@ class WebcamKGLoop:
         Applies merges (not a dry-run). No-op without embeddings."""
         if self._embed_fn is None:
             return
-        total = sum(1 for n in self.store._nodes.values()
-                    if n.node_type == "session")
+        total = self._session_store.session_count()   # conversations in the transcript DB
         if total == 0 or total % self._CONSOLIDATE_EVERY != 0:
             return
         from modules.kg_extraction import consolidate_topics
@@ -1394,29 +1391,32 @@ class WebcamKGLoop:
                                     if pid_key not in self._chat_history:
                                         self._chat_history[pid_key] = deque(maxlen=5)
                                     self._chat_history[pid_key].append((msg, verbal))
-                                    # Record the turn into the KG session transcript
-                                    # (recognized persons only) so end-of-session
-                                    # extraction has real conversation to distill.
+                                    # Record the turn (recognized persons only). The
+                                    # transcript goes to the SQLite session store, NOT
+                                    # the graph; the graph keeps only Interaction count.
                                     if last_person_id:
                                         from modules.graph_relationship.interactions import (
-                                            append_turn, sync_interaction_count,
+                                            set_interaction_count,
                                         )
-                                        sid = self._ensure_session(last_person_id)
-                                        append_turn(
-                                            self.store, session_id=sid,
-                                            emotion=(last_emotion
-                                                     if self._emotion_enabled else None),
-                                            child_message=msg, reply=verbal,
-                                        )
-                                        sync_interaction_count(
-                                            self.store, last_person_id, self.robot_id)
-                                        # Update the live conversation-status node
-                                        # (rolling recent topics + mood) so the viz
-                                        # shows what's being discussed now.
-                                        topic = self._detect_topic(msg, verbal)
                                         from modules.graph_relationship.topics import (
                                             update_conversation,
                                         )
+                                        sid = self._run_session_id(last_person_id)
+                                        topic = self._detect_topic(msg, verbal)
+                                        self._session_store.append_turn(
+                                            session_id=sid, person_id=last_person_id,
+                                            robot_id=self.robot_id,
+                                            emotion=(last_emotion
+                                                     if self._emotion_enabled else None),
+                                            child=msg, reply=verbal,
+                                            topics=[topic] if topic else None)
+                                        # interaction_count now comes from the store.
+                                        set_interaction_count(
+                                            self.store, last_person_id, self.robot_id,
+                                            self._session_store.person_turn_count(
+                                                last_person_id, self.robot_id),
+                                            source="session-store")
+                                        # Live conversation-status node (rolling topics + mood).
                                         conv = update_conversation(
                                             self.store, last_person_id, self.robot_id,
                                             topic=topic,
@@ -1504,6 +1504,7 @@ class WebcamKGLoop:
             except Exception as exc:  # noqa: BLE001 — never fail on shutdown
                 print(f"[WebcamLoop] extraction failed: {exc}")
             self.store.save(self.kg_path)
+            self._session_store.close()
             cap.release()
             if self.show_window:
                 cv2.destroyAllWindows()
@@ -1560,6 +1561,57 @@ def run_consolidate_mode(kg_path: str, embed_model: str,
         print(f"[consolidate] saved → {kg_path}")
 
 
+def run_migrate_sessions(kg_path: str, sessions_db: str) -> None:
+    """One-off: move existing graph SessionNodes' transcripts into the SQLite store,
+    then remove the SessionNodes (+ has_session edges) from the graph. Migrated turns
+    are marked extracted (they already shaped the graph). interaction_count is
+    refreshed from the store."""
+    store = InMemoryGraphStore()
+    if not (os.path.exists(kg_path) and store.load(kg_path)):
+        print(f"[migrate] no KG at '{kg_path}'")
+        return
+    from modules.graph_relationship.interactions import set_interaction_count
+    ss = SessionStore(sessions_db)
+    sessions = [n for n in list(store._nodes.values()) if n.node_type == "session"]
+    if not sessions:
+        print("[migrate] no SessionNodes in the graph — nothing to move")
+        ss.close()
+        return
+    moved_turns = 0
+    pairs: set = set()
+    for sess in sessions:
+        # The interaction is the source of the has_session edge into this session.
+        inter_id = None
+        for edge, _nbr in store.query_neighbors(sess.id, "has_session"):
+            if edge.target_id == sess.id:
+                inter_id = edge.source_id
+                break
+        person = robot = None
+        if inter_id and inter_id.startswith("interaction:"):
+            parts = inter_id.split(":", 2)   # ['interaction', person, robot]
+            if len(parts) == 3:
+                person, robot = parts[1], parts[2]
+        for t in (sess.turns or []):
+            ss.append_turn(session_id=sess.id, person_id=person or "unknown",
+                           robot_id=robot or "chatbox",
+                           emotion=t.get("emotion"), child=t.get("child"),
+                           reply=t.get("reply"))
+            moved_turns += 1
+        if person and robot:
+            pairs.add((person, robot))
+        store.delete_node(sess.id)   # also drops the has_session edge
+    # Old history already shaped the graph → don't re-extract it.
+    for person, _robot in pairs:
+        ss.mark_extracted(person)
+    for person, robot in pairs:
+        set_interaction_count(store, person, robot,
+                              ss.person_turn_count(person, robot), source="migrate")
+    store.save(kg_path)
+    ss.close()
+    print(f"[migrate] moved {moved_turns} turn(s) from {len(sessions)} session(s) → "
+          f"{sessions_db}; removed SessionNodes from the graph → {kg_path}")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # CLI
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1568,8 +1620,13 @@ def main() -> None:
     p = argparse.ArgumentParser(
         description="Live webcam → KG relationship engine → PAD persona loop"
     )
-    p.add_argument("--mode",       choices=["run", "enroll", "consolidate"], default="run",
-                   help="run | enroll | consolidate (merge near-duplicate topics)")
+    p.add_argument("--mode",
+                   choices=["run", "enroll", "consolidate", "migrate-sessions"],
+                   default="run",
+                   help="run | enroll | consolidate (merge near-dup topics) | "
+                        "migrate-sessions (move graph SessionNodes → SQLite)")
+    p.add_argument("--sessions-db", default=_DEFAULT_SESSIONS_DB,
+                   help=f"SQLite transcript DB path (default: {_DEFAULT_SESSIONS_DB})")
     p.add_argument("--name",       default=None,
                    help="Person name for enroll mode")
     p.add_argument("--faces",      default=_DEFAULT_FACES,
@@ -1635,6 +1692,10 @@ def main() -> None:
         run_consolidate_mode(args.kg, args.embed_model, args.merge_floor, args.dry_run)
         return
 
+    if args.mode == "migrate-sessions":
+        run_migrate_sessions(args.kg, args.sessions_db)
+        return
+
     llm = None
     if args.llm:
         llm = LLMClient(model=args.model)
@@ -1674,6 +1735,7 @@ def main() -> None:
         seed             = not args.no_seed,
         matcher          = matcher,
         embed_fn         = embed_fn,
+        sessions_db      = args.sessions_db,
         pad_enabled      = args.enable_pad,
         emotion_enabled  = args.enable_emotion,
     )

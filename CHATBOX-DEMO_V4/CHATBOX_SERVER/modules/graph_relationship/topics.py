@@ -256,6 +256,36 @@ def merge_topics(
     return store.get_node(canonical_id)
 
 
+def merge_interests(
+    store: GraphStore, canonical_id: str, duplicate_id: str, *,
+    source: Optional[str] = None,
+) -> Optional[InterestNode]:
+    """PURE graph surgery: fold a duplicate Interest into the canonical one.
+
+    Redirects every edge touching the duplicate (person --has_interest--> and
+    --about--> Topic) onto the canonical, then deletes the duplicate. Used to
+    merge near-duplicate interests (e.g. "sports" vs "sport" from old LLM labels
+    vs the new category-named interests). No embeddings. Idempotent.
+    """
+    if canonical_id == duplicate_id:
+        return store.get_node(canonical_id)
+    canon = store.get_node(canonical_id)
+    dup = store.get_node(duplicate_id)
+    if (canon is None or canon.node_type != "interest"
+            or dup is None or dup.node_type != "interest"):
+        return None
+    for edge, _nbr in list(store.query_neighbors(duplicate_id)):
+        new_src = canonical_id if edge.source_id == duplicate_id else edge.source_id
+        new_dst = canonical_id if edge.target_id == duplicate_id else edge.target_id
+        store.delete_edge(edge.source_id, edge.target_id, edge.edge_type)
+        if new_src == new_dst:
+            continue
+        store.upsert_edge(edge.model_copy(update={
+            "source_id": new_src, "target_id": new_dst}))
+    store.delete_node(duplicate_id)
+    return store.get_node(canonical_id)
+
+
 def _neighbors_of_type(store: GraphStore, node_id: str, edge_type: str, node_type: str):
     return [
         n for _e, n in store.query_neighbors(node_id, edge_type)

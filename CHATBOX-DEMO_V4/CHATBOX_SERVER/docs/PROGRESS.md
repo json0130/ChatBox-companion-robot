@@ -6,6 +6,28 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## feat: consolidation also merges near-duplicate INTERESTS  *(branch `KG-knowledge-extraction`)*
+
+**User report:** two nodes "sports" and "sport" never merged despite auto-consolidate running every 3
+conversations.
+**Root cause:** they're **Interest** nodes, not Topics — `interest:jay:sports` (old LLM-chosen label) vs
+`interest:jay:sport` (new: topics wire under an interest named after their category, and the enum value is
+"sport"). Consolidation only merged *topics*, so the interest-level dup was never touched.
+**Fix:** extend consolidation to interests.
+- Pure `topics.merge_interests(canonical, duplicate)`: redirect has_interest (person→) and about (→topic)
+  edges onto the canonical, delete the duplicate.
+- App `kg_extraction.consolidate_interests(store, embed_fn, floor, dry_run)`: per person, embed interest
+  labels, merge cosine ≥ floor groups (canonical = highest degree → shortest → lexicographic).
+- webcam runs BOTH topic + interest consolidation everywhere (auto every 3 convos, `C` preview,
+  `--mode consolidate`).
+**Verified:** "sports"↔"sport" cosine **0.957 ≥ 0.86**; applied on real data → one "sport" interest holding
+both tennis + football_player; unit test of merge_interests redirects edges and deletes the dup.
+**Known limitation (deferred):** interests whose *labels* differ but mean the same (old "math" interest vs
+the new "science" interest that now holds math topics) won't merge by label similarity — that's the old
+LLM-label vs category-name scheme mismatch, a separate normalization task.
+
+---
+
 ## fix: thread-safe session DB + drop mood from the prompt entirely  *(branch `KG-knowledge-extraction`)*
 
 **Two issues from a live run:**

@@ -298,3 +298,75 @@ def consolidate_topics(
         for canonical, dup in merge_ops:
             merge_topics(store, canonical, dup, source=source)
     return report
+
+
+def _interest_nodes(store) -> List[tuple]:
+    """[(id, person_id, label), ...] for every InterestNode (id = interest:person:slug)."""
+    out = []
+    for n in getattr(store, "_nodes", {}).values():
+        if getattr(n, "node_type", None) == "interest":
+            parts = n.id.split(":", 2)            # ['interest', person, slug]
+            person = parts[1] if len(parts) == 3 else n.id
+            out.append((n.id, person, n.label))
+    return out
+
+
+def consolidate_interests(
+    store, embed_fn: EmbedFn, *,
+    floor: float = CONSOLIDATE_FLOOR, dry_run: bool = False,
+    source: str = "consolidate",
+) -> dict:
+    """Merge near-duplicate Interest nodes PER PERSON by embedding cosine — e.g.
+    "sports" (old LLM label) vs "sport" (new category-named interest). Canonical =
+    highest degree, ties → shortest then lexicographic. Same report shape as
+    consolidate_topics."""
+    from modules.graph_relationship.topics import merge_interests
+    report = {"pairs": [], "merges": [], "groups": 0, "dry_run": dry_run}
+    by_person: dict = {}
+    for iid, person, label in _interest_nodes(store):
+        by_person.setdefault(person, []).append((iid, label))
+
+    for _person, items in by_person.items():
+        if len(items) < 2:
+            continue
+        label_of = {iid: lbl for iid, lbl in items}
+        vecs: dict = {}
+        for iid, label in items:
+            try:
+                v = embed_fn(label)
+            except Exception:  # noqa: BLE001
+                v = None
+            if v:
+                vecs[iid] = v
+        uf = _UnionFind([i[0] for i in items])
+        for a in range(len(items)):
+            ai = items[a][0]
+            if ai not in vecs:
+                continue
+            for b in range(a + 1, len(items)):
+                bj = items[b][0]
+                if bj not in vecs:
+                    continue
+                sim = _cosine(vecs[ai], vecs[bj])
+                if sim >= floor:
+                    report["pairs"].append((label_of[ai], label_of[bj], round(sim, 3)))
+                    uf.union(ai, bj)
+        groups: dict = {}
+        for iid, _l in items:
+            groups.setdefault(uf.find(iid), []).append(iid)
+        merge_ops = []
+        for members in groups.values():
+            if len(members) < 2:
+                continue
+            report["groups"] += 1
+            canonical = min(
+                members,
+                key=lambda i: (-topic_degree(store, i), len(label_of[i]), label_of[i]))
+            for iid in members:
+                if iid != canonical:
+                    merge_ops.append((canonical, iid))
+                    report["merges"].append((label_of[canonical], label_of[iid]))
+        if not dry_run:
+            for canonical, dup in merge_ops:
+                merge_interests(store, canonical, dup, source=source)
+    return report

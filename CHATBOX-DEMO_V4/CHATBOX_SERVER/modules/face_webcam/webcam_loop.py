@@ -1089,16 +1089,17 @@ class WebcamKGLoop:
         total = self._session_store.session_count()   # conversations in the transcript DB
         if total == 0 or total % self._CONSOLIDATE_EVERY != 0:
             return
-        from modules.kg_extraction import consolidate_topics
-        report = consolidate_topics(self.store, self._embed_fn, source="auto-consolidate")
-        if report["merges"]:
+        from modules.kg_extraction import consolidate_topics, consolidate_interests
+        merges = (consolidate_topics(self.store, self._embed_fn, source="auto-consolidate")["merges"]
+                  + consolidate_interests(self.store, self._embed_fn, source="auto-consolidate")["merges"])
+        if merges:
             print(f"[WebcamLoop] auto-consolidate (every {self._CONSOLIDATE_EVERY} "
-                  f"conversations; {total} total) — merged {len(report['merges'])}:")
-            for canon, dup in report["merges"]:
+                  f"conversations; {total} total) — merged {len(merges)}:")
+            for canon, dup in merges:
                 print(f"    '{dup}'  →  '{canon}'")
         else:
             print(f"[WebcamLoop] auto-consolidate ({total} conversations): "
-                  "no near-duplicate topics")
+                  "no near-duplicate topics/interests")
 
     def _consolidate_preview(self) -> None:
         """Dry-run: print near-duplicate topics that WOULD merge (non-destructive).
@@ -1106,13 +1107,14 @@ class WebcamKGLoop:
         if self._embed_fn is None:
             print("[WebcamLoop] consolidation needs embeddings (run without --no-embed)")
             return
-        from modules.kg_extraction import consolidate_topics
-        report = consolidate_topics(self.store, self._embed_fn, dry_run=True)
-        if not report["merges"]:
-            print("[WebcamLoop] consolidation preview: no near-duplicate topics found")
+        from modules.kg_extraction import consolidate_topics, consolidate_interests
+        merges = (consolidate_topics(self.store, self._embed_fn, dry_run=True)["merges"]
+                  + consolidate_interests(self.store, self._embed_fn, dry_run=True)["merges"])
+        if not merges:
+            print("[WebcamLoop] consolidation preview: no near-duplicate topics/interests")
             return
-        print(f"[WebcamLoop] consolidation preview — {report['groups']} group(s), DRY RUN:")
-        for canon, dup in report["merges"]:
+        print(f"[WebcamLoop] consolidation preview — {len(merges)} merge(s), DRY RUN:")
+        for canon, dup in merges:
             print(f"    '{dup}'  →  '{canon}'")
         print("    apply with:  python3 -m modules.face_webcam.webcam_loop --mode consolidate")
 
@@ -1597,16 +1599,15 @@ def run_consolidate_mode(kg_path: str, embed_model: str,
     except Exception as exc:  # noqa: BLE001
         print(f"[consolidate] embeddings unavailable ({exc}) — cannot consolidate")
         return
-    from modules.kg_extraction import consolidate_topics
-    report = consolidate_topics(store, embed_fn, floor=merge_floor, dry_run=dry_run)
-    if not report["merges"]:
-        print(f"[consolidate] no near-duplicate topics (floor {merge_floor}, "
-              "same-category only)")
+    from modules.kg_extraction import consolidate_topics, consolidate_interests
+    merges = (consolidate_topics(store, embed_fn, floor=merge_floor, dry_run=dry_run)["merges"]
+              + consolidate_interests(store, embed_fn, floor=merge_floor, dry_run=dry_run)["merges"])
+    if not merges:
+        print(f"[consolidate] no near-duplicate topics/interests (floor {merge_floor})")
         return
     tag = "DRY RUN — no changes written" if dry_run else "APPLIED"
-    print(f"[consolidate] {report['groups']} group(s), "
-          f"{len(report['merges'])} merge(s) — {tag}:")
-    for canon, dup in report["merges"]:
+    print(f"[consolidate] {len(merges)} merge(s) — {tag}:")
+    for canon, dup in merges:
         print(f"    '{dup}'  →  '{canon}'")
     if not dry_run:
         store.save(kg_path)

@@ -151,6 +151,22 @@ _TAG_TO_ESP32: dict[str, str] = {
 }
 
 
+_LEAK_MARKERS = ("<|im_start|>", "<|im_end|>", "<|endoftext|>",
+                 "\nuser", "\nUser", "\nassistant", "\nAssistant")
+
+
+def _clean_reply(text: Optional[str]) -> str:
+    """Trim a model reply at any leaked ChatML / next-turn marker (qwen sometimes
+    keeps generating past its turn — Chinese text + a fake 'user:' turn)."""
+    s = (text or "").strip()
+    cut = len(s)
+    for mark in _LEAK_MARKERS:
+        i = s.find(mark)
+        if i != -1:
+            cut = min(cut, i)
+    return s[:cut].strip()
+
+
 def _parse_llm_response(text: str) -> tuple[str, str]:
     """Split '[TAG] body text' into ('TAG', 'body text'). Returns ('', text) if no tag."""
     m = _TAG_RE.match(text.strip())
@@ -215,9 +231,12 @@ class LLMClient:
                 model=self.model,
                 messages=messages,
                 max_tokens=140,
-                temperature=0.8,
+                temperature=0.7,
+                # Stop if the model tries to continue past its turn / open a new one
+                # (qwen sometimes leaks ChatML tokens or a fake "user:" turn).
+                stop=["<|im_start|>", "<|im_end|>", "\nuser", "\nUser", "\nassistant"],
             )
-            return resp.choices[0].message.content.strip()
+            return _clean_reply(resp.choices[0].message.content)
         except Exception as exc:
             return f"[LLM error: {exc}]"
 
@@ -872,8 +891,6 @@ class WebcamKGLoop:
     # Down-weight the mood/emotion signal so replies follow the person's content,
     # not their (often noisy) detected affect. 0.75 = a quarter less weight.
     _MOOD_WEIGHT = 0.25
-    # Auto-run topic consolidation once every N conversations (SessionNodes).
-    _CONSOLIDATE_EVERY = 3
 
     def _person_memory(self, pid: Optional[str]) -> str:
         """The 'WHO YOU'RE TALKING TO' body: key interests (capped), common
@@ -989,7 +1006,8 @@ class WebcamKGLoop:
         # ── HOW TO REPLY ──
         blocks.append(
             "━━━ HOW TO REPLY ━━━\n"
-            "• Keep it short, warm and spoken — one or two sentences.\n"
+            "• Reply in ENGLISH, in one or two short, warm, spoken sentences. Output "
+            "ONLY your single reply — never write the user's next turn.\n"
             "• Begin every reply with an emotion tag in square brackets, e.g. "
             "[HAPPY], [CURIOUS].\n"
             "• ANSWER what they actually ask. If they ask about something they told "
@@ -1075,31 +1093,25 @@ class WebcamKGLoop:
                   + (f"   dropped: {len(ts.get('dropped', []))}" if ts.get('dropped') else ""))
             if not ts.get("applied"):
                 print("      (topic extraction skipped — LLM JSON parse failed)")
-        # Auto-consolidate near-duplicate topics every N conversations.
-        self._maybe_auto_consolidate()
+        # Consolidate near-duplicate topics + interests after EVERY extraction.
+        self._auto_consolidate()
         if self.kg_path:
             self.store.save(self.kg_path)
 
-    def _maybe_auto_consolidate(self) -> None:
-        """Run topic consolidation automatically once every _CONSOLIDATE_EVERY
-        conversations (total SessionNodes in the graph — persists across runs).
+    def _auto_consolidate(self) -> None:
+        """Merge near-duplicate topics + interests after every extraction session.
         Applies merges (not a dry-run). No-op without embeddings."""
         if self._embed_fn is None:
-            return
-        total = self._session_store.session_count()   # conversations in the transcript DB
-        if total == 0 or total % self._CONSOLIDATE_EVERY != 0:
             return
         from modules.kg_extraction import consolidate_topics, consolidate_interests
         merges = (consolidate_topics(self.store, self._embed_fn, source="auto-consolidate")["merges"]
                   + consolidate_interests(self.store, self._embed_fn, source="auto-consolidate")["merges"])
         if merges:
-            print(f"[WebcamLoop] auto-consolidate (every {self._CONSOLIDATE_EVERY} "
-                  f"conversations; {total} total) — merged {len(merges)}:")
+            print(f"[WebcamLoop] auto-consolidate — merged {len(merges)}:")
             for canon, dup in merges:
                 print(f"    '{dup}'  →  '{canon}'")
         else:
-            print(f"[WebcamLoop] auto-consolidate ({total} conversations): "
-                  "no near-duplicate topics/interests")
+            print("[WebcamLoop] auto-consolidate: no near-duplicate topics/interests")
 
     def _consolidate_preview(self) -> None:
         """Dry-run: print near-duplicate topics that WOULD merge (non-destructive).

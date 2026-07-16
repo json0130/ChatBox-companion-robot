@@ -6,6 +6,25 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## fix: consolidate every extraction + stop qwen Chinese/ChatML leak  *(branch `KG-knowledge-extraction`)*
+
+**Two requests from a live run:**
+1. Run consolidation **every extraction session** (was every 3 conversations).
+2. A reply came out in **Chinese** and leaked ChatML tokens + a fake user turn
+   (`…你在想什么新专辑？[CURIOUS]\n<|im_start|><|im_start|>user\nI don't really like it…`).
+**Fixes:**
+- `_maybe_auto_consolidate` (every-3 gate) → `_auto_consolidate`: runs topic + interest consolidation after
+  **every** `_extract_session`. Dropped `_CONSOLIDATE_EVERY`.
+- `LLMClient.respond`: added `stop=["<|im_start|>","<|im_end|>","\nuser",…]`, temperature 0.8→0.7, and a
+  `_clean_reply()` that truncates at any leaked ChatML / next-turn marker. Prompt: "Reply in ENGLISH … output
+  ONLY your single reply — never write the user's next turn."
+**Verified:** `_clean_reply` cuts the exact leaked fake-turn; real-LLM replies now English + no leak, and
+still use memory ("SZA's 'Open Arms'", previous-album preference).
+**Note:** the qwen mid-sentence language switch is a model quirk — the stop tokens + English instruction +
+lower temp make it far less likely, and the trailing fake-turn leak is always trimmed.
+
+---
+
 ## feat: consolidation also merges near-duplicate INTERESTS  *(branch `KG-knowledge-extraction`)*
 
 **User report:** two nodes "sports" and "sport" never merged despite auto-consolidate running every 3

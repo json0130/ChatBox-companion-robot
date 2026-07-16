@@ -304,13 +304,22 @@ svg.call(d3.zoom().scaleExtent([0.15, 4]).on("zoom", (e) => root.attr("transform
 const nodeById = new Map();   // id -> node datum (keeps x/y across ticks)
 let links = [];
 
+// Per-node collision radius so nodes never overlap (hubs + labelled nodes get
+// more room). iterations(2) makes the non-overlap constraint hold firmly.
+function collideRadius(d) {
+  if (d.type === "Robot" || d.type === "Interaction") return 54;
+  if (d.type === "Conversation") return 48;
+  if (d.type === "Person") return 44;
+  return 38;
+}
+
 const sim = d3.forceSimulation([])
   // Spread-out defaults: strong repulsion + long links + gentle centre-gravity so
   // the graph untangles itself and stays on-screen without manual dragging.
   .force("link", d3.forceLink([]).id(d => d.id).distance(130).strength(0.35))
   .force("charge", d3.forceManyBody().strength(-700).distanceMax(600))
   .force("center", d3.forceCenter(width/2, height/2))
-  .force("collide", d3.forceCollide(34))
+  .force("collide", d3.forceCollide().radius(collideRadius).iterations(2))
   // Center-gravity (per-node pull to middle) — keeps components from drifting off.
   .force("x", d3.forceX(width/2).strength(0.04))
   .force("y", d3.forceY(height/2).strength(0.04))

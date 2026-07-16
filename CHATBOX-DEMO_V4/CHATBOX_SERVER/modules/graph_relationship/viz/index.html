@@ -363,10 +363,11 @@ function update(graph) {
       cur.turns = n.turns;                       // session transcript (if any)
       cur.notes = n.notes;                       // topic conversation summaries (if any)
       cur.category = n.category;                 // topic category (Feature-2d)
+      cur.topicLabel = n.topicLabel;
     } else {
       nodeById.set(n.id, {
         id: n.id, type: n.type, label: n.label, turns: n.turns, notes: n.notes,
-        category: n.category,
+        category: n.category, topicLabel: n.topicLabel,
         x: width/2 + (Math.random()-0.5)*80,
         y: height/2 + (Math.random()-0.5)*80,
       });
@@ -538,6 +539,9 @@ function renderConvo() {
           return `<div class="turn"><div class="meta">${esc(n.person||"")} · ${when}</div>`
                + `<div class="bubble child">${esc(n.text||"")}</div></div>`;
         }).join("");
+    // Conversation history for this topic — fetched from the transcript DB (RAG).
+    html += `<div class="sec-title">conversation history</div>`;
+    html += `<div id="topic-history" class="convo-empty">loading…</div>`;
   }
 
   // Connections — each deletable
@@ -563,6 +567,36 @@ function renderConvo() {
     el.onclick = () => deleteEdge(es[+el.dataset.i]);
   });
   convoEl.style.display = "flex";
+
+  // Async: pull this topic's conversation history from the transcript DB (RAG).
+  if (node.type === "Topic") loadTopicHistory(node);
+}
+
+async function loadTopicHistory(node) {
+  const el = () => document.getElementById("topic-history");
+  const topic = node.topicLabel || node.label || "";
+  try {
+    const r = await fetch("/history?topic=" + encodeURIComponent(topic), { cache: "no-store" });
+    const j = await r.json();
+    if (selectedId !== node.id) return;           // panel changed while loading
+    const box = el(); if (!box) return;
+    const turns = j.turns || [];
+    if (turns.length === 0) {
+      box.className = "convo-empty";
+      box.textContent = "No conversation history for this topic yet.";
+      return;
+    }
+    box.className = "";
+    box.innerHTML = turns.map(t => {
+      const when = t.ts ? new Date(t.ts).toLocaleString() : "";
+      const who = t.person_id ? esc(t.person_id) : "child";
+      const child = t.child ? `<div class="bubble child"><span class="who">${who}</span>${esc(t.child)}</div>` : "";
+      const reply = t.reply ? `<div class="bubble reply"><span class="who">robot</span>${esc(t.reply)}</div>` : "";
+      return `<div class="turn"><div class="meta">${esc(t.emotion||"")} · ${when}</div>${child}${reply}</div>`;
+    }).join("");
+  } catch (e) {
+    const box = el(); if (box) { box.className = "convo-empty"; box.textContent = "History unavailable."; }
+  }
 }
 
 // ---- delete (writes back to kg_state.json via the server) -----------------

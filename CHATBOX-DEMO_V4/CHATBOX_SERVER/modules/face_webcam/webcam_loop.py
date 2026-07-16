@@ -730,6 +730,11 @@ class WebcamKGLoop:
         # Conversation transcripts live in SQLite (not the graph). The graph keeps
         # only Interaction (rapport/trust/count) + topics/interests.
         self._session_store    = SessionStore(sessions_db)
+        # RAG over the transcript store (needs embeddings); None when --no-embed.
+        self._session_rag = None
+        if embed_fn is not None:
+            from modules.session_rag import SessionRAG
+            self._session_rag = SessionRAG(self._session_store, embed_fn)
         # person_id -> this run's session id (uuid). Populated on the first turn.
         self._run_sessions: dict[str, str] = {}
         # person_id -> (valence, emotion_label) last persisted — dirty-check so the
@@ -934,7 +939,8 @@ class WebcamKGLoop:
 
     def _build_system_prompt(self, pid: Optional[str], *,
                              mood: Optional[float] = None,
-                             emotion: Optional[str] = None) -> str:
+                             emotion: Optional[str] = None,
+                             rag_hits: Optional[list] = None) -> str:
         """Assemble the system prompt from the seeded RobotNode + retrieved memory,
         in three labelled blocks. Used when PAD is disabled (no PAD system_prompt).
 
@@ -981,6 +987,12 @@ class WebcamKGLoop:
             mood_line = self._mood_phrase(mood, emotion)
             if mood_line:
                 who.append(mood_line)
+            # RAG: relevant things they've said in past conversations (timeline).
+            hit_lines = [f'  – ({h["ts"][:10]}) "{h["child"]}"'
+                         for h in (rag_hits or []) if h.get("child")]
+            if hit_lines:
+                who.append("Relevant things they've said before:\n"
+                           + "\n".join(hit_lines))
             blocks.append("\n".join(who))
         else:
             blocks.append("━━━ WHO YOU'RE TALKING TO ━━━\n"
@@ -1096,6 +1108,13 @@ class WebcamKGLoop:
               f"cam={camera_index}  {llm_status}  mode={mode}")
         print("  T=chat  E=enroll  B=boost  K=dump KG  X=extract  C=consolidate?  "
               "S=save  Q=quit  (all in the OpenCV window)\n")
+
+        # Embed any un-embedded transcript turns once up front so the first chat
+        # doesn't stall building the RAG index.
+        if self._session_rag is not None:
+            added = self._session_rag.reindex()
+            if added:
+                print(f"[WebcamLoop] RAG: embedded {added} past turn(s)")
 
         # ── Background detection worker ───────────────────────────────────────
         worker = _DetectionWorker(
@@ -1359,14 +1378,22 @@ class WebcamKGLoop:
                                                    if self._emotion_enabled else None)
                                     cur_mood = self._last_mood.get(
                                         last_person_id or "", (None, None))[0]
+                                    # RAG: relevant past turns for this message.
+                                    rag_hits = []
+                                    if self._session_rag and last_person_id:
+                                        try:
+                                            rag_hits = self._session_rag.search(
+                                                msg, top_k=3, person_id=last_person_id)
+                                        except Exception:  # noqa: BLE001
+                                            rag_hits = []
                                     # PAD off → build the system prompt from the KG
-                                    # (persona + retrieved person memory + mood).
+                                    # (persona + retrieved person memory + mood + RAG).
                                     if self._pad_enabled and self._last_pad_result:
                                         sys_prompt = self._last_pad_result["system_prompt"]
                                     else:
                                         sys_prompt = self._build_system_prompt(
                                             last_person_id, mood=cur_mood,
-                                            emotion=cur_emotion)
+                                            emotion=cur_emotion, rag_hits=rag_hits)
                                     # Tag the emotion onto THIS turn only (history +
                                     # transcript keep the plain message).
                                     llm_msg = msg + (f"  (they appear: {cur_emotion})"

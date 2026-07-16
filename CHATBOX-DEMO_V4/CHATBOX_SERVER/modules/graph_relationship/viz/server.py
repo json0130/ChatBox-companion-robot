@@ -28,7 +28,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Optional
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _INDEX_HTML = os.path.join(_HERE, "index.html")
@@ -175,6 +177,7 @@ def transform(raw: dict) -> dict:
             notes = n.get("notes", []) or []
             obj["notes"] = notes
             obj["category"] = n.get("category", "other")   # fine-grained topic type
+            obj["topicLabel"] = n.get("label", "")          # clean label for /history
             if notes:
                 obj["label"] = f"{obj['label']} ({len(notes)})"
         nodes.append(obj)
@@ -261,7 +264,44 @@ class GraphState:
         return {"nodes": 0, "edges": removed}
 
 
-def make_handler(state: GraphState):
+class HistoryProvider:
+    """Serves conversation history for a clicked topic from the SQLite transcript
+    store (Phase 1) — semantically via RAG when an embedding model is reachable,
+    otherwise by keyword (turns tagged with that topic). Read-only; if the DB is
+    absent the viz simply shows no history.
+    """
+
+    def __init__(self, sessions_db: str, embed_model: Optional[str] = None):
+        self.store = None
+        self.rag = None
+        try:
+            from modules.session_store import SessionStore
+            if sessions_db and os.path.exists(sessions_db):
+                self.store = SessionStore(sessions_db)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[viz] session store unavailable ({exc}) — history disabled")
+        if self.store is not None and embed_model:
+            try:
+                from modules.graph_relationship.embedding import ollama_embed_fn
+                from modules.session_rag import SessionRAG
+                self.rag = SessionRAG(self.store, ollama_embed_fn(model=embed_model))
+            except Exception as exc:  # noqa: BLE001
+                print(f"[viz] RAG unavailable ({exc}) — history falls back to keyword")
+
+    def history(self, topic: str, person: Optional[str] = None, limit: int = 12) -> list:
+        if self.store is None or not topic:
+            return []
+        if self.rag is not None:
+            try:
+                hits = self.rag.search(topic, top_k=limit, person_id=person)
+                if hits:
+                    return hits
+            except Exception:  # noqa: BLE001
+                pass
+        return self.store.turns_for_topic(topic, person, limit=limit)
+
+
+def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):  # keep console clean
             pass
@@ -286,6 +326,14 @@ def make_handler(state: GraphState):
             elif path == "/graph.json":
                 body = json.dumps(state.read()).encode("utf-8")
                 self._send(200, body, "application/json")
+            elif path == "/history":
+                qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]
+                                           if "?" in self.path else "")
+                topic = (qs.get("topic") or [""])[0]
+                person = (qs.get("person") or [None])[0]
+                turns = history.history(topic, person) if history else []
+                self._send(200, json.dumps({"topic": topic, "turns": turns}).encode(),
+                           "application/json")
             else:
                 self._send(404, b"not found", "text/plain")
 
@@ -322,14 +370,23 @@ def main():
                          "(default: kg_state.json in the current directory)")
     ap.add_argument("--port", type=int, default=8765, help="HTTP port (default 8765)")
     ap.add_argument("--host", default="127.0.0.1", help="Bind host (default 127.0.0.1)")
+    ap.add_argument("--sessions-db", default="sessions.db",
+                    help="SQLite transcript DB for topic-click history (default: sessions.db)")
+    ap.add_argument("--embed-model", default="nomic-embed-text",
+                    help="Ollama embedding model for RAG history (blank to use keyword only)")
     args = ap.parse_args()
 
     kg_path = os.path.abspath(args.kg_path)
     state = GraphState(kg_path)
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(state))
+    history = HistoryProvider(os.path.abspath(args.sessions_db),
+                              embed_model=(args.embed_model or None))
+    server = ThreadingHTTPServer((args.host, args.port), make_handler(state, history))
 
     print(f"[viz] serving KG visualizer at  http://{args.host}:{args.port}/")
     print(f"[viz] polling KG file:          {state.kg_path}")
+    if history.store is not None:
+        kind = "RAG" if history.rag is not None else "keyword"
+        print(f"[viz] topic history ({kind}) from:  {os.path.abspath(args.sessions_db)}")
     if not os.path.exists(state.kg_path):
         print("[viz] (file not present yet — will show empty graph until it appears)")
     try:

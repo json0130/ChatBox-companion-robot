@@ -155,5 +155,47 @@ class SessionStore:
         rows = self._conn.execute("SELECT DISTINCT person_id FROM turns").fetchall()
         return [r[0] for r in rows]
 
+    # ── embeddings (Phase-2 RAG) ──────────────────────────────────────────────
+
+    def turns_needing_embedding(self) -> List[tuple]:
+        """[(turn_id, text), ...] for turns that have text but no embedding yet."""
+        rows = self._conn.execute(
+            "SELECT id, child, reply FROM turns "
+            "WHERE embedding IS NULL AND (child IS NOT NULL OR reply IS NOT NULL)"
+        ).fetchall()
+        out = []
+        for r in rows:
+            text = f"{r['child'] or ''} {r['reply'] or ''}".strip()
+            if text:
+                out.append((r["id"], text))
+        return out
+
+    def set_embedding(self, turn_id: int, vec: List[float]) -> None:
+        self._conn.execute("UPDATE turns SET embedding = ? WHERE id = ?",
+                           (json.dumps(list(vec)), turn_id))
+        self._conn.commit()
+
+    def embedded_turns(self, person_id: Optional[str] = None) -> List[dict]:
+        """Turns that have an embedding, with the vector, for RAG search."""
+        q = ("SELECT id, person_id, robot_id, ts, emotion, child, reply, embedding "
+             "FROM turns WHERE embedding IS NOT NULL")
+        params: list = []
+        if person_id:
+            q += " AND person_id = ?"
+            params.append(person_id)
+        q += " ORDER BY id ASC"
+        out = []
+        for r in self._conn.execute(q, params).fetchall():
+            try:
+                vec = json.loads(r["embedding"])
+            except (TypeError, ValueError):
+                vec = None
+            if vec:
+                out.append({"id": r["id"], "person_id": r["person_id"],
+                            "robot_id": r["robot_id"], "ts": r["ts"],
+                            "emotion": r["emotion"], "child": r["child"],
+                            "reply": r["reply"], "vec": vec})
+        return out
+
     def close(self) -> None:
         self._conn.close()

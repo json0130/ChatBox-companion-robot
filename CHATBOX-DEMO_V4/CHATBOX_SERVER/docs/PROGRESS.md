@@ -6,6 +6,31 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## feat: RAG over transcripts + topic-click history (Phase 2)  *(branch `KG-knowledge-extraction`)*
+
+**Tried:** use the SQLite transcripts for (a) RAG retrieval into the live prompt and (b) a viz "click a topic
+→ see the conversation history", per the approved plan.
+**Worked:**
+- `modules/session_rag.py` (`SessionRAG`): embeds each turn once (cached in the store's `embedding` column),
+  searches with FAISS `IndexFlatIP` (numpy fallback), blends similarity with **recency** and returns hits in
+  **timeline order**. Lazy `reindex()`; embedding failures skipped/retried. embed_fn injected — no Ollama
+  import inside the module beyond numpy/faiss.
+- SessionStore gained `turns_needing_embedding / set_embedding / embedded_turns`.
+- webcam: builds `SessionRAG` when embeddings are on, `reindex()`es at startup, and injects the top-3
+  relevant past turns for the current message into a new prompt block "Relevant things they've said before"
+  (timeline-dated).
+- viz server: `HistoryProvider` + `/history?topic=&person=` endpoint (RAG when an embed model is reachable,
+  else keyword `turns_for_topic`); `--sessions-db` / `--embed-model` args. Frontend: clicking a Topic node
+  fetches `/history` and renders the conversation turns (child/robot bubbles + timeline).
+**Verified (headless, fake embeddings):** RAG search returns the right turns; prompt gains the RAG block;
+keyword history works; FAISS present (1.13.2); HTML well-formed; graph_relationship pure modules import no
+session/LLM code.
+**Note:** the 62 migrated turns have no embeddings/topic-tags yet, so topic-click history needs one RAG run
+with Ollama up (webcam startup reindex, or the viz server with `--embed-model`) before it populates.
+**Didn't / deferred:** 2c topic↔topic relations; rapport/trust; removing the now-unused "Session" legend row.
+
+---
+
 ## feat: externalize session transcripts to SQLite (Phase 1)  *(branch `KG-knowledge-extraction`)*
 
 **Tried:** move conversation transcripts OUT of the knowledge graph into a dedicated SQLite store so the KG

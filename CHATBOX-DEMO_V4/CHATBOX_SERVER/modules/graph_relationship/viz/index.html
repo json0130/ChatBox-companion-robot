@@ -60,6 +60,7 @@
                   letter-spacing: .5px; margin-bottom: 6px; }
   .legend-row { display: flex; align-items: center; gap: 8px; line-height: 1.9; }
   .swatch-line { width: 22px; height: 0; border-top: 3px solid; border-radius: 2px; }
+  .swatch-dot  { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
   svg.shape { overflow: visible; }
 
   /* node + link visuals */
@@ -124,17 +125,17 @@
 <div id="controls" class="panel">
   <div class="legend-title">Forces</div>
   <div class="ctrl-row"><label>Repel</label>
-    <input id="f-charge" type="range" min="20" max="1000" step="10" value="320">
-    <span class="val" id="v-charge">320</span></div>
+    <input id="f-charge" type="range" min="20" max="1200" step="10" value="700">
+    <span class="val" id="v-charge">700</span></div>
   <div class="ctrl-row"><label>Link length</label>
-    <input id="f-dist" type="range" min="20" max="320" step="5" value="90">
-    <span class="val" id="v-dist">90</span></div>
+    <input id="f-dist" type="range" min="20" max="360" step="5" value="130">
+    <span class="val" id="v-dist">130</span></div>
   <div class="ctrl-row"><label>Link force</label>
-    <input id="f-lstr" type="range" min="0" max="1" step="0.05" value="0.4">
-    <span class="val" id="v-lstr">0.40</span></div>
+    <input id="f-lstr" type="range" min="0" max="1" step="0.05" value="0.35">
+    <span class="val" id="v-lstr">0.35</span></div>
   <div class="ctrl-row"><label>Center</label>
-    <input id="f-center" type="range" min="0" max="0.4" step="0.02" value="0">
-    <span class="val" id="v-center">0.00</span></div>
+    <input id="f-center" type="range" min="0" max="0.4" step="0.02" value="0.04">
+    <span class="val" id="v-center">0.04</span></div>
   <button id="ctrl-reset">reset</button>
 </div>
 
@@ -158,6 +159,10 @@
     <div class="legend-row"><span class="swatch-line" style="border-color:#4fc3f7"></span>ChatBox (robot)</div>
     <div class="legend-row muted" style="font-size:11px; margin-top:4px">lighter = FAST · darker = SLOW</div>
   </div>
+  <div class="legend-section">
+    <div class="legend-title">Topic category → fill</div>
+    <div id="legend-categories"></div>
+  </div>
   <div class="legend-section muted" style="font-size:11px">line thickness = weight · hover for value</div>
   <div class="legend-section muted" style="font-size:11px">click a node → details, connections & delete</div>
 </div>
@@ -172,6 +177,22 @@
 
 <script>
 const COLOR = { FAST: "#ff8c42", SLOW: "#4fc3f7", RELATIONSHIP: "#a678de" };
+
+// ---- topic category -> fill colour (Feature-2d) --------------------------
+const CATEGORY_COLOR = {
+  music:    "#ff8fab",  science:  "#59c1e8",  animals: "#f4a259",
+  food:     "#f6c445",  activity: "#9b8cff",  place:   "#7fd98b",
+  person:   "#ff7a6b",  media:    "#c792ea",  sport:   "#4db6ac",
+  other:    "#9aa0b5",
+};
+const categoryColor = (c) => CATEGORY_COLOR[c] || CATEGORY_COLOR.other;
+(function renderCategoryLegend() {
+  const el = document.getElementById("legend-categories");
+  if (!el) return;
+  el.innerHTML = Object.entries(CATEGORY_COLOR).map(([cat, col]) =>
+    `<div class="legend-row"><span class="swatch-dot" style="background:${col}"></span>${cat}</div>`
+  ).join("");
+})();
 
 // ---- per-person edge colours ---------------------------------------------
 // Each person gets a distinct base hue; the edge's timescale shades it
@@ -283,19 +304,30 @@ svg.call(d3.zoom().scaleExtent([0.15, 4]).on("zoom", (e) => root.attr("transform
 const nodeById = new Map();   // id -> node datum (keeps x/y across ticks)
 let links = [];
 
+// Per-node collision radius so nodes never overlap (hubs + labelled nodes get
+// more room). iterations(2) makes the non-overlap constraint hold firmly.
+function collideRadius(d) {
+  if (d.type === "Robot" || d.type === "Interaction") return 54;
+  if (d.type === "Conversation") return 48;
+  if (d.type === "Person") return 44;
+  return 38;
+}
+
 const sim = d3.forceSimulation([])
-  .force("link", d3.forceLink([]).id(d => d.id).distance(90).strength(0.4))
-  .force("charge", d3.forceManyBody().strength(-320))
+  // Spread-out defaults: strong repulsion + long links + gentle centre-gravity so
+  // the graph untangles itself and stays on-screen without manual dragging.
+  .force("link", d3.forceLink([]).id(d => d.id).distance(130).strength(0.35))
+  .force("charge", d3.forceManyBody().strength(-700).distanceMax(600))
   .force("center", d3.forceCenter(width/2, height/2))
-  .force("collide", d3.forceCollide(28))
-  // Center-gravity (per-node pull to middle) — off by default, driven by slider.
-  .force("x", d3.forceX(width/2).strength(0))
-  .force("y", d3.forceY(height/2).strength(0))
-  .alphaDecay(0.05)
+  .force("collide", d3.forceCollide().radius(collideRadius).iterations(2))
+  // Center-gravity (per-node pull to middle) — keeps components from drifting off.
+  .force("x", d3.forceX(width/2).strength(0.04))
+  .force("y", d3.forceY(height/2).strength(0.04))
+  .alphaDecay(0.045)
   .on("tick", ticked);
 
 // ---- force sliders (Obsidian-style) --------------------------------------
-const FORCE_DEFAULTS = { "f-charge": 320, "f-dist": 90, "f-lstr": 0.4, "f-center": 0 };
+const FORCE_DEFAULTS = { "f-charge": 700, "f-dist": 130, "f-lstr": 0.35, "f-center": 0.04 };
 function bindForceSlider(id, valId, fmt, apply) {
   const el = document.getElementById(id), out = document.getElementById(valId);
   const run = () => { const v = +el.value; out.textContent = fmt(v); apply(v);
@@ -330,9 +362,12 @@ function update(graph) {
       cur.type = n.type; cur.label = n.label;   // refresh mutable fields
       cur.turns = n.turns;                       // session transcript (if any)
       cur.notes = n.notes;                       // topic conversation summaries (if any)
+      cur.category = n.category;                 // topic category (Feature-2d)
+      cur.topicLabel = n.topicLabel;
     } else {
       nodeById.set(n.id, {
         id: n.id, type: n.type, label: n.label, turns: n.turns, notes: n.notes,
+        category: n.category, topicLabel: n.topicLabel,
         x: width/2 + (Math.random()-0.5)*80,
         y: height/2 + (Math.random()-0.5)*80,
       });
@@ -422,6 +457,10 @@ function render(nodes) {
       el.setAttribute("class", "node-shape" + (d.type === "Conversation" ? " conversation" : ""));
       this.insertBefore(el, this.firstChild);
     }
+    // Feature-2d: tint Topic nodes by their category (updates live on category change).
+    if (d.type === "Topic") {
+      g.select(".node-shape").style("fill", categoryColor(d.category));
+    }
   });
 
   document.getElementById("n-count").textContent = nodes.length;
@@ -500,6 +539,9 @@ function renderConvo() {
           return `<div class="turn"><div class="meta">${esc(n.person||"")} · ${when}</div>`
                + `<div class="bubble child">${esc(n.text||"")}</div></div>`;
         }).join("");
+    // Conversation history for this topic — fetched from the transcript DB (RAG).
+    html += `<div class="sec-title">conversation history</div>`;
+    html += `<div id="topic-history" class="convo-empty">loading…</div>`;
   }
 
   // Connections — each deletable
@@ -525,6 +567,36 @@ function renderConvo() {
     el.onclick = () => deleteEdge(es[+el.dataset.i]);
   });
   convoEl.style.display = "flex";
+
+  // Async: pull this topic's conversation history from the transcript DB (RAG).
+  if (node.type === "Topic") loadTopicHistory(node);
+}
+
+async function loadTopicHistory(node) {
+  const el = () => document.getElementById("topic-history");
+  const topic = node.topicLabel || node.label || "";
+  try {
+    const r = await fetch("/history?topic=" + encodeURIComponent(topic), { cache: "no-store" });
+    const j = await r.json();
+    if (selectedId !== node.id) return;           // panel changed while loading
+    const box = el(); if (!box) return;
+    const turns = j.turns || [];
+    if (turns.length === 0) {
+      box.className = "convo-empty";
+      box.textContent = "No conversation history for this topic yet.";
+      return;
+    }
+    box.className = "";
+    box.innerHTML = turns.map(t => {
+      const when = t.ts ? new Date(t.ts).toLocaleString() : "";
+      const who = t.person_id ? esc(t.person_id) : "child";
+      const child = t.child ? `<div class="bubble child"><span class="who">${who}</span>${esc(t.child)}</div>` : "";
+      const reply = t.reply ? `<div class="bubble reply"><span class="who">robot</span>${esc(t.reply)}</div>` : "";
+      return `<div class="turn"><div class="meta">${esc(t.emotion||"")} · ${when}</div>${child}${reply}</div>`;
+    }).join("");
+  } catch (e) {
+    const box = el(); if (box) { box.className = "convo-empty"; box.textContent = "History unavailable."; }
+  }
 }
 
 // ---- delete (writes back to kg_state.json via the server) -----------------

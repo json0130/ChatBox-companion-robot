@@ -190,3 +190,15 @@ def sync_interaction_count(store: GraphStore, person_id: str, robot_id: str) -> 
         node = node.model_copy(update={"interaction_count": total})
         store.upsert_node(node)
     return node
+
+
+def set_interaction_count(store: GraphStore, person_id: str, robot_id: str,
+                          count: int, *, source: Optional[str] = None) -> InteractionNode:
+    """Set interaction_count directly (e.g. from an external transcript store when
+    SessionNodes no longer live in the graph). Pure; no LLM/DB imports here."""
+    node = get_or_create_interaction(store, person_id, robot_id, source=source)
+    count = max(0, int(count))
+    if count != node.interaction_count:
+        node = node.model_copy(update={"interaction_count": count})
+        store.upsert_node(node)
+    return node

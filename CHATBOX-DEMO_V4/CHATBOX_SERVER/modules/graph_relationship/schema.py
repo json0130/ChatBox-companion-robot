@@ -42,9 +42,29 @@ class Embodiment(str, Enum):
     ELEPHANT = "ELEPHANT"
 
 
+class TopicCategory(str, Enum):
+    """CLOSED taxonomy for TopicNode.category. 'other' is the explicit fallback —
+    never invent a category outside this set. Defined ONCE here; the app-layer
+    extractor validates LLM output against TOPIC_CATEGORIES (its value set)."""
+    MUSIC = "music"
+    SCIENCE = "science"
+    ANIMALS = "animals"
+    FOOD = "food"
+    ACTIVITY = "activity"
+    PLACE = "place"
+    PERSON = "person"
+    MEDIA = "media"
+    SPORT = "sport"
+    OTHER = "other"
+
+
+# Value set for O(1) membership checks / enum-constrained validation.
+TOPIC_CATEGORIES: frozenset = frozenset(c.value for c in TopicCategory)
+
+
 class Timescale(str, Enum):
     """Decay cadence hint consumed by the update-policy module."""
-    FAST = "FAST"   # mood, attention, current_topic — decay within a session
+    FAST = "FAST"   # mood, attention — decay within a session
     SLOW = "SLOW"   # traits, preferences — stable across sessions
 
 
@@ -93,6 +113,12 @@ class TopicNode(BaseModel):
     """
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     label: str
+    # Fine-grained type from the CLOSED TopicCategory taxonomy. Defaults to
+    # "other" so pre-existing kg_state.json topics (no category field) still load.
+    # NOTE: `category` is an ATTRIBUTE, not part of identity — the topic id is
+    # derived from the normalized LABEL only (see topics.topic_id), so two
+    # extractions disagreeing on category still resolve to the SAME node.
+    category: TopicCategory = TopicCategory.OTHER
     notes: List[Dict[str, Any]] = Field(default_factory=list)
     node_type: Literal["topic"] = "topic"
 
@@ -264,17 +290,6 @@ class AttentionEdge(EdgeBase):
     timescale: Timescale = Timescale.FAST
 
 
-class CurrentTopicEdge(EdgeBase):
-    """Person → TopicNode currently being discussed — FAST, one at a time.
-
-    Written live during a conversation and replaced as the topic shifts (unlike
-    the SLOW interest/about edges distilled at session end). Lets the visualizer
-    show what the person and robot are talking about right now.
-    """
-    edge_type: Literal["current_topic"] = "current_topic"
-    timescale: Timescale = Timescale.FAST
-
-
 class TraitEdge(EdgeBase):
     """Stable personality/character attribute — SLOW."""
     edge_type: Literal["trait"] = "trait"
@@ -290,7 +305,7 @@ class PreferenceEdge(EdgeBase):
 
 
 PersonAttributeEdge = Union[
-    MoodEdge, AttentionEdge, CurrentTopicEdge, TraitEdge, PreferenceEdge
+    MoodEdge, AttentionEdge, TraitEdge, PreferenceEdge
 ]
 
 
@@ -348,7 +363,16 @@ class AboutEdge(EdgeBase):
     timescale: Timescale = Timescale.SLOW
 
 
-TopicEdge = Union[HasInterestEdge, AboutEdge]
+class RelatedTopicEdge(EdgeBase):
+    """Topic ↔ Topic semantic relation — distinct but related (e.g. rap ~ hiphop,
+    tennis ~ basketball). SLOW; conceptually undirected, stored once with the two
+    endpoints sorted. `weight` is the embedding similarity."""
+    edge_type: Literal["related_topic"] = "related_topic"
+    weight: float = Field(..., ge=0.0, le=1.0)
+    timescale: Timescale = Timescale.SLOW
+
+
+TopicEdge = Union[HasInterestEdge, AboutEdge, RelatedTopicEdge]
 
 
 # ---------------------------------------------------------------------------

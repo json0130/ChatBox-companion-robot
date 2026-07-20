@@ -76,6 +76,7 @@ from modules.graph_relationship.store import InMemoryGraphStore
 from modules.pad_persona.pipeline_adapter import PADPipelineAdapter
 from modules.face_webcam.face_id import FaceIdentifier
 from modules.face_webcam.emotion_detector import EmotionDetector
+from modules.session_store import SessionStore, DEFAULT_DB as _DEFAULT_SESSIONS_DB
 
 # ── LLM ───────────────────────────────────────────────────────────────────────
 
@@ -150,6 +151,22 @@ _TAG_TO_ESP32: dict[str, str] = {
 }
 
 
+_LEAK_MARKERS = ("<|im_start|>", "<|im_end|>", "<|endoftext|>",
+                 "\nuser", "\nUser", "\nassistant", "\nAssistant")
+
+
+def _clean_reply(text: Optional[str]) -> str:
+    """Trim a model reply at any leaked ChatML / next-turn marker (qwen sometimes
+    keeps generating past its turn — Chinese text + a fake 'user:' turn)."""
+    s = (text or "").strip()
+    cut = len(s)
+    for mark in _LEAK_MARKERS:
+        i = s.find(mark)
+        if i != -1:
+            cut = min(cut, i)
+    return s[:cut].strip()
+
+
 def _parse_llm_response(text: str) -> tuple[str, str]:
     """Split '[TAG] body text' into ('TAG', 'body text'). Returns ('', text) if no tag."""
     m = _TAG_RE.match(text.strip())
@@ -214,9 +231,12 @@ class LLMClient:
                 model=self.model,
                 messages=messages,
                 max_tokens=140,
-                temperature=0.8,
+                temperature=0.7,
+                # Stop if the model tries to continue past its turn / open a new one
+                # (qwen sometimes leaks ChatML tokens or a fake "user:" turn).
+                stop=["<|im_start|>", "<|im_end|>", "\nuser", "\nUser", "\nassistant"],
             )
-            return resp.choices[0].message.content.strip()
+            return _clean_reply(resp.choices[0].message.content)
         except Exception as exc:
             return f"[LLM error: {exc}]"
 
@@ -484,7 +504,6 @@ def _read_rapport_trust(
 
 def _dump_kg(store: InMemoryGraphStore, robot_id: str) -> None:
     """Print all KG nodes and edges to stdout for debugging."""
-    from modules.graph_relationship.store import _PERSON_ATTRIBUTE_TYPES, _RELATIONSHIP_TYPES
     nodes = list(store._nodes.values())
     edges = list(store._edges.values())
     print("\n" + "=" * 60)
@@ -675,6 +694,8 @@ class WebcamKGLoop:
         spec_dir:        Optional[str] = None,
         seed:            bool  = True,
         matcher                = None,
+        embed_fn               = None,
+        sessions_db:     str   = _DEFAULT_SESSIONS_DB,
         pad_enabled:     bool  = False,
         emotion_enabled: bool  = False,
     ):
@@ -723,8 +744,17 @@ class WebcamKGLoop:
         self._pad_enabled      = pad_enabled
         self._emotion_enabled  = emotion_enabled
         self._matcher          = matcher
-        # person_id -> current session node id for this run (like KGBridge._session).
-        self._sessions: dict[str, str] = {}
+        self._embed_fn         = embed_fn   # for on-demand topic consolidation (Feature 2)
+        # Conversation transcripts live in SQLite (not the graph). The graph keeps
+        # only Interaction (rapport/trust/count) + topics/interests.
+        self._session_store    = SessionStore(sessions_db)
+        # RAG over the transcript store (needs embeddings); None when --no-embed.
+        self._session_rag = None
+        if embed_fn is not None:
+            from modules.session_rag import SessionRAG
+            self._session_rag = SessionRAG(self._session_store, embed_fn)
+        # person_id -> this run's session id (uuid). Populated on the first turn.
+        self._run_sessions: dict[str, str] = {}
         # person_id -> (valence, emotion_label) last persisted — dirty-check so the
         # per-tick mood write only hits disk when it actually changes.
         self._last_mood: dict[str, tuple] = {}
@@ -761,18 +791,13 @@ class WebcamKGLoop:
 
     # ── KG-only path (PAD/emotion disabled) ────────────────────────────────────
 
-    def _ensure_session(self, pid: str) -> str:
-        """Return the current session id for `pid`, creating person/interaction/
-        session as needed. One session per person for this run's lifetime."""
+    def _ensure_interaction(self, pid: str) -> None:
+        """Ensure the person, robot and their InteractionNode exist in the graph.
+        No SessionNode — transcripts live in SQLite now."""
         from modules.graph_relationship.schema import (
             PersonNode, RobotNode, Embodiment,
         )
-        from modules.graph_relationship.interactions import (
-            get_or_create_interaction, start_session, count_person_sessions,
-        )
-        sid = self._sessions.get(pid)
-        if sid is not None and self.store.get_node(sid) is not None:
-            return sid
+        from modules.graph_relationship.interactions import get_or_create_interaction
         if self.store.get_node(pid) is None:
             self.store.upsert_node(PersonNode(id=pid, display_name=pid))
         if self.store.get_node(self.robot_id) is None:
@@ -780,24 +805,26 @@ class WebcamKGLoop:
                    else Embodiment.ELEPHANT)
             self.store.upsert_node(
                 RobotNode(id=self.robot_id, name=self.robot_id, embodiment=emb))
-        interaction = get_or_create_interaction(
-            self.store, pid, self.robot_id, source=self.robot_id)
-        label = f"session {count_person_sessions(self.store, pid) + 1}"
-        session = start_session(
-            self.store, interaction_id_=interaction.id, label=label,
-            source=self.robot_id)
-        self._sessions[pid] = session.id
-        # Persist once on session creation (not every tick) so the viz can pick
-        # up the new person without flooding the disk with identical snapshots.
-        if self.kg_path:
-            self.store.save(self.kg_path)
-        return session.id
+        get_or_create_interaction(self.store, pid, self.robot_id, source=self.robot_id)
+
+    def _run_session_id(self, pid: str) -> str:
+        """This run's session id for `pid` (uuid), created on the first turn.
+        Ensures the interaction exists. Groups the run's turns in the SQLite store."""
+        import uuid
+        self._ensure_interaction(pid)
+        sid = self._run_sessions.get(pid)
+        if sid is None:
+            sid = str(uuid.uuid4())
+            self._run_sessions[pid] = sid
+            if self.kg_path:
+                self.store.save(self.kg_path)   # persist the new interaction once
+        return sid
 
     def _kg_tick(self, pid: str) -> tuple[str, float, float]:
-        """Ensure the person's session exists and return (tier, rapport, trust)
-        for the overlay. No PAD, no per-tick transcript writes."""
+        """Ensure the person's interaction exists and return (tier, rapport, trust)
+        for the overlay. No PAD, no per-tick transcript writes, no SessionNode."""
         from modules.graph_relationship.kg_bridge import derive_tier
-        self._ensure_session(pid)
+        self._ensure_interaction(pid)
         tier = derive_tier(pid, self.robot_id, self.store)
         r, t = _read_rapport_trust(self.store, pid, self.robot_id)
         return tier, r, t
@@ -838,7 +865,7 @@ class WebcamKGLoop:
 
     def _detect_topic(self, user_msg: str, reply: str = "") -> Optional[str]:
         """Best-effort 1–3 word label of what's being discussed, via the LLM.
-        Used to set the FAST current_topic edge. Returns None on any failure."""
+        Used to update the live conversation node. Returns None on any failure."""
         if not (self.llm and self.llm.available):
             return None
         sys = ("You label the topic of a short conversation snippet. Reply with "
@@ -858,7 +885,8 @@ class WebcamKGLoop:
     # Memory caps — keep the prompt bounded as the graph grows.
     _MAX_INTERESTS = 4
     _MAX_TOPICS_PER_INTEREST = 3
-    _MAX_NOTES = 3
+    _MAX_NOTES = 8
+    _MAX_NOTES_PER_TOPIC = 2
 
     def _person_memory(self, pid: Optional[str]) -> str:
         """The 'WHO YOU'RE TALKING TO' body: key interests (capped), common
@@ -866,7 +894,8 @@ class WebcamKGLoop:
         if not pid:
             return ""
         from modules.graph_relationship.topics import (
-            person_interests, shared_topics,
+            person_interests, related_common_ground, person_related_pairs,
+            topic_related,
         )
         interests = person_interests(self.store, pid)
         lines: list[str] = []
@@ -883,58 +912,67 @@ class WebcamKGLoop:
                     parts.append(interest.label)
             lines.append("Interests: " + " · ".join(parts))
 
-        shared = shared_topics(self.store, pid, self.robot_id)
-        if shared:
-            lines.append("Common ground: " + ", ".join(shared))
+        # Common ground — direct + RELATED bridges (Feature-2c, point 2): a topic
+        # they like that relates to something the robot knows counts as connection.
+        cg = related_common_ground(self.store, pid, self.robot_id)
+        if cg["direct"]:
+            lines.append("Common ground: " + ", ".join(cg["direct"]))
+        if cg["bridges"]:
+            bl = ", ".join(f"their {p} ~ your {r}" for p, r in cg["bridges"])
+            lines.append("You can also connect via related topics: " + bl)
+        # Their own related topics, so the robot can bridge/recall across them.
+        rp = person_related_pairs(self.store, pid)
+        if rp:
+            lines.append("Related interests: "
+                         + ", ".join(f"{a} ~ {b}" for a, b in rp))
 
-        # Most-recent note PER TOPIC (for variety), capped.
-        collected: list = []
+        # Collect notes, then surface the ones with SPECIFIC facts first (proper
+        # nouns / quoted titles like "Rafael Nadal", "SZA 'Open Arms'"), then by
+        # recency — so concrete memories aren't crowded out by generic ones.
+        def _specificity(text: str) -> int:
+            score = 2 if ("'" in text or '"' in text) else 0
+            words = str(text).split()
+            score += sum(1 for w in words[1:] if w[:1].isupper())  # mid-sentence caps
+            return score
+        # Point 1: gather notes from the person's topics AND one hop across
+        # related_topic edges, so related memories surface (e.g. a note on 'hiphop'
+        # when they mention 'rap'). Deduped by topic id.
+        note_topics: dict = {}
         for _interest, topics in interests:
             for t in topics:
-                for n in getattr(t, "notes", []) or []:
-                    if n.get("person") == pid and n.get("text"):
-                        collected.append((n.get("ts", ""), t.label, n["text"]))
-        collected.sort(key=lambda x: x[0], reverse=True)   # most recent first
-        seen_topics: set = set()
+                note_topics[t.id] = t
+        for tid in list(note_topics):
+            for r in topic_related(self.store, tid):
+                note_topics.setdefault(r.id, r)
+        collected: list = []
+        for t in note_topics.values():
+            for n in getattr(t, "notes", []) or []:
+                if n.get("person") == pid and n.get("text"):
+                    collected.append((_specificity(n["text"]), n.get("ts", ""),
+                                      t.label, n["text"]))
+        collected.sort(key=lambda x: (x[0], x[1]), reverse=True)  # specific + recent first
+        collected = [(ts, label, text) for _s, ts, label, text in collected]
+        per_topic: dict = {}
         note_lines: list[str] = []
         for _ts, label, text in collected:
-            if label in seen_topics:
+            # Up to _MAX_NOTES_PER_TOPIC per topic so specific facts (e.g. a
+            # favourite player/song) aren't hidden behind a generic note.
+            if per_topic.get(label, 0) >= self._MAX_NOTES_PER_TOPIC:
                 continue
-            seen_topics.add(label)
+            per_topic[label] = per_topic.get(label, 0) + 1
             note_lines.append(f"  – {label}: {text}")
             if len(note_lines) >= self._MAX_NOTES:
                 break
         if note_lines:
-            lines.append("Recently about them:\n" + "\n".join(note_lines))
+            lines.append("What you remember about them:\n" + "\n".join(note_lines))
 
         return "\n".join(lines)
 
-    @staticmethod
-    def _mood_phrase(valence: Optional[float], emotion: Optional[str]) -> str:
-        """One-line mood read for the prompt context, from the (smoothed) valence.
-        Kept separate from the per-turn emotion label so a wrong single-frame read
-        can still be balanced by the mood trend."""
-        if valence is None and not emotion:
-            return ""
-        v = valence or 0.0
-        if v > 0.15:
-            word, face = "positive", "🙂"
-        elif v < -0.15:
-            word, face = "low", "🙁"
-        else:
-            word, face = "neutral", "😐"
-        tail = f" (mood {v:+.2f})" if valence is not None else ""
-        return f"Right now they seem {word} {face}{tail}."
-
     def _build_system_prompt(self, pid: Optional[str], *,
-                             mood: Optional[float] = None,
-                             emotion: Optional[str] = None) -> str:
+                             rag_hits: Optional[list] = None) -> str:
         """Assemble the system prompt from the seeded RobotNode + retrieved memory,
         in three labelled blocks. Used when PAD is disabled (no PAD system_prompt).
-
-        `mood`/`emotion` are the person's current valence + emotion label; the mood
-        line lives in the context block (the per-turn emotion is tagged on the user
-        message by the caller)."""
+        Mood/emotion is deliberately not injected (kept for the graph/viz only)."""
         from modules.graph_relationship.topics import robot_capability
         personas = [n.descriptor for _e, n in
                     self.store.query_neighbors(self.robot_id, "has_persona")
@@ -961,20 +999,37 @@ class WebcamKGLoop:
         # ── HOW TO REPLY ──
         blocks.append(
             "━━━ HOW TO REPLY ━━━\n"
-            "• Keep it short, warm and spoken — one or two sentences.\n"
+            "• Reply in ENGLISH, in one or two short, warm, spoken sentences. Output "
+            "ONLY your single reply — never write the user's next turn.\n"
             "• Begin every reply with an emotion tag in square brackets, e.g. "
             "[HAPPY], [CURIOUS].\n"
-            "• Weave in what you know about them naturally — never list it back.\n"
-            "• Match their mood: if they seem low or upset, be gentle and reassuring.")
+            "• ANSWER what they actually ask. If they ask about something they told "
+            "you before (a favourite player, song, etc.) and it IS in the memory "
+            "below, answer DIRECTLY and state the name — don't say you forgot. If it "
+            "is NOT in the memory below, say you don't remember it — NEVER invent or "
+            "guess a name.\n"
+            "• Weave memories in naturally — don't list them back.\n"
+            "• Reply to what they actually said or asked. Do not comment on how they "
+            "seem to feel or offer emotional support unless they bring up their "
+            "feelings themselves.")
 
         # ── WHO YOU'RE TALKING TO ──
         if pid:
             who = [f"━━━ WHO YOU'RE TALKING TO: {pid} ━━━"]
             mem = self._person_memory(pid)
             who.append(mem if mem else "You don't remember much about them yet.")
-            mood_line = self._mood_phrase(mood, emotion)
-            if mood_line:
-                who.append(mood_line)
+            # NOTE: the detected mood/emotion is intentionally NOT injected into the
+            # prompt for now — it pulled replies into unsolicited emotional support.
+            # It's still tracked on the graph/conversation node for the viz. Revisit
+            # once the emotion model / weighting is improved.
+            # RAG: what THEY said before that's relevant now (their own words only —
+            # we don't feed the robot's past replies back, to avoid reinforcing any
+            # earlier "I forgot" deflections).
+            hit_lines = [f'  – ({h["ts"][:10]}) "{h["child"]}"'
+                         for h in (rag_hits or []) if h.get("child")]
+            if hit_lines:
+                who.append("Relevant things they've told you before:\n"
+                           + "\n".join(hit_lines))
             blocks.append("\n".join(who))
         else:
             blocks.append("━━━ WHO YOU'RE TALKING TO ━━━\n"
@@ -988,42 +1043,93 @@ class WebcamKGLoop:
         if not (self.llm and self.llm.available):
             print("[WebcamLoop] extraction skipped — LLM not connected")
             return
-        from modules.graph_relationship.extraction import extract_and_apply
-        from modules.graph_relationship.interactions import (
-            unextracted_turns, mark_session_extracted,
-        )
+        # Graph-aware typed TOPIC extraction lives in the app layer (kg_extraction);
+        # closeness (rapport/trust) reuses the existing pure extractor for deltas
+        # ONLY and the untouched adjust_closeness — its interest logic is not used.
+        from modules.kg_extraction import extract_and_apply_topics
+        from modules.graph_relationship.extraction import extract as _extract_closeness
+        from modules.graph_relationship.interactions import adjust_closeness
         # Respect external edits (e.g. viz deletions) before extracting.
         if self.kg_path and os.path.exists(self.kg_path):
             self.store.reload(self.kg_path)
-        sessions = dict(self._sessions)
-        if not sessions:
-            print("[WebcamLoop] no session this run — nothing to extract")
+        people = list(self._run_sessions.keys())   # people talked to this run
+        if not people:
+            print("[WebcamLoop] no conversation this run — nothing to extract")
             return
         print("[WebcamLoop] extracting knowledge from this session …")
-        for pid, sid in sessions.items():
-            sess = self.store.get_node(sid)
-            if sess is None or sess.node_type != "session":
-                continue
-            # Only real conversation turns (with child/reply text).
-            turns = [t for t in unextracted_turns(sess)
+        for pid in people:
+            sid = self._run_sessions.get(pid)
+            # Un-extracted transcript turns come from the SQLite store now.
+            turns = [t for t in self._session_store.unextracted_turns(pid)
                      if t.get("child") or t.get("reply")]
             if not turns:
                 print(f"  {pid}: no conversation turns to extract")
                 continue
-            _update, s = extract_and_apply(
-                self.store, pid, self.robot_id, turns, self.llm.respond,
-                matcher=self._matcher, source="extraction")
-            mark_session_extracted(self.store, sid)
-            ints = s.get("interests_added", [])
-            int_str = ("  interests: " + ", ".join(
-                f"{lab}→{'/'.join(ts)}" if ts else lab for lab, ts, _sm in ints)
-            ) if ints else "  (no new interests)"
-            print(f"  {pid}: Δrapport {s['rapport_delta']:+.2f}"
-                  f"  Δtrust {s['trust_delta']:+.2f}{int_str}")
-            for item, tl in s.get("capability_links", []):
-                print(f"      ↳ shared topic '{tl}' — {self.robot_id} [{item}]")
+
+            # (a) Graph-aware typed topics (reuse existing / add genuinely new).
+            ts = extract_and_apply_topics(
+                self.store, pid, self.robot_id, turns, self.llm.respond, session_id=sid)
+
+            # (b) Closeness deltas — existing logic, untouched (deltas applied only).
+            cu = _extract_closeness(turns, self.llm.respond)
+            if cu.rapport_delta or cu.trust_delta:
+                adjust_closeness(self.store, pid, self.robot_id,
+                                 d_rapport=cu.rapport_delta, d_trust=cu.trust_delta,
+                                 source=f"extraction:{sid}")
+
+            self._session_store.mark_extracted(pid)
+
+            reinf = ", ".join(lab for lab, _c in ts.get("reinforced", []))
+            newt = ", ".join(f"{lab}[{cat}]" for lab, cat, _c in ts.get("added", []))
+            print(f"  {pid}: Δrapport {cu.rapport_delta:+.2f}  Δtrust {cu.trust_delta:+.2f}")
+            print(f"      reused: {reinf or '—'}   new: {newt or '—'}"
+                  + (f"   dropped: {len(ts.get('dropped', []))}" if ts.get('dropped') else ""))
+            if not ts.get("applied"):
+                print("      (topic extraction skipped — LLM JSON parse failed)")
+        # Consolidate near-duplicate topics + interests after EVERY extraction.
+        self._auto_consolidate()
         if self.kg_path:
             self.store.save(self.kg_path)
+
+    def _auto_consolidate(self) -> None:
+        """Merge near-duplicate topics + interests after every extraction session.
+        Applies merges (not a dry-run). No-op without embeddings."""
+        if self._embed_fn is None:
+            return
+        from modules.kg_extraction import (
+            consolidate_topics, consolidate_interests, link_related_topics,
+        )
+        merges = (consolidate_topics(self.store, self._embed_fn, source="auto-consolidate")["merges"]
+                  + consolidate_interests(self.store, self._embed_fn, source="auto-consolidate")["merges"])
+        if merges:
+            print(f"[WebcamLoop] auto-consolidate — merged {len(merges)}:")
+            for canon, dup in merges:
+                print(f"    '{dup}'  →  '{canon}'")
+        else:
+            print("[WebcamLoop] auto-consolidate: no near-duplicate topics/interests")
+        # Link related-but-distinct topics (rap ~ hiphop) rather than merging them.
+        links = link_related_topics(self.store, self._embed_fn, source="auto-related")["links"]
+        if links:
+            print(f"[WebcamLoop] related-topic links (+{len(links)}):")
+            for a, b, sim in links:
+                print(f"    '{a}' ~ '{b}'  ({sim})")
+
+    def _consolidate_preview(self) -> None:
+        """Dry-run: print near-duplicate topics that WOULD merge (non-destructive).
+        Applying is a separate, reviewable step: --mode consolidate."""
+        if self._embed_fn is None:
+            print("[WebcamLoop] consolidation needs embeddings (run without --no-embed)")
+            return
+        from modules.kg_extraction import consolidate_topics, consolidate_interests
+        merges = (consolidate_topics(self.store, self._embed_fn, dry_run=True)["merges"]
+                  + consolidate_interests(self.store, self._embed_fn, dry_run=True)["merges"])
+        if not merges:
+            print("[WebcamLoop] consolidation preview: no near-duplicate topics/interests")
+            return
+        print(f"[WebcamLoop] consolidation preview — {len(merges)} merge(s), DRY RUN:")
+        for canon, dup in merges:
+            print(f"    '{dup}'  →  '{canon}'")
+        print("    apply with:  python3 -m modules.face_webcam.webcam_loop --mode consolidate")
 
     def run(self, camera_index: int = _DEFAULT_CAMERA) -> None:  # noqa: C901
         cap = cv2.VideoCapture(camera_index)
@@ -1041,8 +1147,15 @@ class WebcamKGLoop:
                (" (emotion on)" if self._emotion_enabled else " (no emotion)")
         print(f"\n[WebcamLoop] robot={self._robot_display}  tick={self.tick_interval}s  "
               f"cam={camera_index}  {llm_status}  mode={mode}")
-        print("  T=chat  E=enroll  B=boost  K=dump KG  X=extract  S=save  Q=quit"
-              "  (all in the OpenCV window)\n")
+        print("  T=chat  E=enroll  B=boost  K=dump KG  X=extract  C=consolidate?  "
+              "S=save  Q=quit  (all in the OpenCV window)\n")
+
+        # Embed any un-embedded transcript turns once up front so the first chat
+        # doesn't stall building the RAG index.
+        if self._session_rag is not None:
+            added = self._session_rag.reindex()
+            if added:
+                print(f"[WebcamLoop] RAG: embedded {added} past turn(s)")
 
         # ── Background detection worker ───────────────────────────────────────
         worker = _DetectionWorker(
@@ -1301,26 +1414,23 @@ class WebcamKGLoop:
                                     # label. Both feed the LLM: the mood line sits in
                                     # the prompt context (stable), the emotion label is
                                     # tagged on this user turn (per-moment) — so a wrong
-                                    # single-frame read can be balanced by the mood.
-                                    cur_emotion = (last_emotion
-                                                   if self._emotion_enabled else None)
-                                    cur_mood = self._last_mood.get(
-                                        last_person_id or "", (None, None))[0]
+                                    # RAG: relevant past turns for this message.
+                                    rag_hits = []
+                                    if self._session_rag and last_person_id:
+                                        try:
+                                            rag_hits = self._session_rag.search(
+                                                msg, top_k=5, person_id=last_person_id)
+                                        except Exception:  # noqa: BLE001
+                                            rag_hits = []
                                     # PAD off → build the system prompt from the KG
-                                    # (persona + retrieved person memory + mood).
+                                    # (persona + retrieved person memory + RAG). Mood is
+                                    # tracked on the graph/viz only, not injected here.
                                     if self._pad_enabled and self._last_pad_result:
                                         sys_prompt = self._last_pad_result["system_prompt"]
                                     else:
                                         sys_prompt = self._build_system_prompt(
-                                            last_person_id, mood=cur_mood,
-                                            emotion=cur_emotion)
-                                    # Tag the emotion onto THIS turn only (history +
-                                    # transcript keep the plain message).
-                                    llm_msg = msg + (f"  (they appear: {cur_emotion})"
-                                                     if cur_emotion else "")
-                                    raw_reply = self.llm.respond(
-                                        sys_prompt, llm_msg, history=hist,
-                                    )
+                                            last_person_id, rag_hits=rag_hits)
+                                    raw_reply = self.llm.respond(sys_prompt, msg, history=hist)
                                     tag, verbal = _parse_llm_response(raw_reply)
                                     last_verbal = verbal
                                     if tag:
@@ -1338,29 +1448,32 @@ class WebcamKGLoop:
                                     if pid_key not in self._chat_history:
                                         self._chat_history[pid_key] = deque(maxlen=5)
                                     self._chat_history[pid_key].append((msg, verbal))
-                                    # Record the turn into the KG session transcript
-                                    # (recognized persons only) so end-of-session
-                                    # extraction has real conversation to distill.
+                                    # Record the turn (recognized persons only). The
+                                    # transcript goes to the SQLite session store, NOT
+                                    # the graph; the graph keeps only Interaction count.
                                     if last_person_id:
                                         from modules.graph_relationship.interactions import (
-                                            append_turn, sync_interaction_count,
+                                            set_interaction_count,
                                         )
-                                        sid = self._ensure_session(last_person_id)
-                                        append_turn(
-                                            self.store, session_id=sid,
-                                            emotion=(last_emotion
-                                                     if self._emotion_enabled else None),
-                                            child_message=msg, reply=verbal,
-                                        )
-                                        sync_interaction_count(
-                                            self.store, last_person_id, self.robot_id)
-                                        # Update the live conversation-status node
-                                        # (rolling recent topics + mood) so the viz
-                                        # shows what's being discussed now.
-                                        topic = self._detect_topic(msg, verbal)
                                         from modules.graph_relationship.topics import (
                                             update_conversation,
                                         )
+                                        sid = self._run_session_id(last_person_id)
+                                        topic = self._detect_topic(msg, verbal)
+                                        self._session_store.append_turn(
+                                            session_id=sid, person_id=last_person_id,
+                                            robot_id=self.robot_id,
+                                            emotion=(last_emotion
+                                                     if self._emotion_enabled else None),
+                                            child=msg, reply=verbal,
+                                            topics=[topic] if topic else None)
+                                        # interaction_count now comes from the store.
+                                        set_interaction_count(
+                                            self.store, last_person_id, self.robot_id,
+                                            self._session_store.person_turn_count(
+                                                last_person_id, self.robot_id),
+                                            source="session-store")
+                                        # Live conversation-status node (rolling topics + mood).
                                         conv = update_conversation(
                                             self.store, last_person_id, self.robot_id,
                                             topic=topic,
@@ -1423,6 +1536,8 @@ class WebcamKGLoop:
                         _dump_kg(self.store, self.robot_id)
                     elif key in (ord("x"), ord("X")):
                         self._extract_session()   # run extraction mid-session (testing)
+                    elif key in (ord("c"), ord("C")):
+                        self._consolidate_preview()   # dry-run: preview topic merges
                     elif key in (ord("b"), ord("B")) and last_person_id:
                         _update_rapport_trust(
                             self.store, last_person_id, self.robot_id,
@@ -1446,6 +1561,7 @@ class WebcamKGLoop:
             except Exception as exc:  # noqa: BLE001 — never fail on shutdown
                 print(f"[WebcamLoop] extraction failed: {exc}")
             self.store.save(self.kg_path)
+            self._session_store.close()
             cap.release()
             if self.show_window:
                 cv2.destroyAllWindows()
@@ -1469,6 +1585,95 @@ def run_enroll_mode(name: str, faces_path: str,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Standalone topic consolidation (--mode consolidate) — Feature 2
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run_consolidate_mode(kg_path: str, embed_model: str,
+                         merge_floor: float, dry_run: bool) -> None:
+    """Merge near-duplicate topics in an existing KG by embedding similarity.
+    Reviewable + deterministic; run with --dry-run first to preview."""
+    store = InMemoryGraphStore()
+    if not (os.path.exists(kg_path) and store.load(kg_path)):
+        print(f"[consolidate] no KG at '{kg_path}'")
+        return
+    try:
+        from modules.graph_relationship.embedding import ollama_embed_fn
+        embed_fn = ollama_embed_fn(model=embed_model)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[consolidate] embeddings unavailable ({exc}) — cannot consolidate")
+        return
+    from modules.kg_extraction import (
+        consolidate_topics, consolidate_interests, link_related_topics,
+    )
+    merges = (consolidate_topics(store, embed_fn, floor=merge_floor, dry_run=dry_run)["merges"]
+              + consolidate_interests(store, embed_fn, floor=merge_floor, dry_run=dry_run)["merges"])
+    links = link_related_topics(store, embed_fn, merge_floor=merge_floor, dry_run=dry_run)["links"]
+    if not merges and not links:
+        print(f"[consolidate] no near-duplicate or related topics/interests (floor {merge_floor})")
+        return
+    tag = "DRY RUN — no changes written" if dry_run else "APPLIED"
+    print(f"[consolidate] {len(merges)} merge(s), {len(links)} related-link(s) — {tag}:")
+    for canon, dup in merges:
+        print(f"    merge  '{dup}'  →  '{canon}'")
+    for a, b, sim in links:
+        print(f"    link   '{a}' ~ '{b}'  ({sim})")
+    if not dry_run:
+        store.save(kg_path)
+        print(f"[consolidate] saved → {kg_path}")
+
+
+def run_migrate_sessions(kg_path: str, sessions_db: str) -> None:
+    """One-off: move existing graph SessionNodes' transcripts into the SQLite store,
+    then remove the SessionNodes (+ has_session edges) from the graph. Migrated turns
+    are marked extracted (they already shaped the graph). interaction_count is
+    refreshed from the store."""
+    store = InMemoryGraphStore()
+    if not (os.path.exists(kg_path) and store.load(kg_path)):
+        print(f"[migrate] no KG at '{kg_path}'")
+        return
+    from modules.graph_relationship.interactions import set_interaction_count
+    ss = SessionStore(sessions_db)
+    sessions = [n for n in list(store._nodes.values()) if n.node_type == "session"]
+    if not sessions:
+        print("[migrate] no SessionNodes in the graph — nothing to move")
+        ss.close()
+        return
+    moved_turns = 0
+    pairs: set = set()
+    for sess in sessions:
+        # The interaction is the source of the has_session edge into this session.
+        inter_id = None
+        for edge, _nbr in store.query_neighbors(sess.id, "has_session"):
+            if edge.target_id == sess.id:
+                inter_id = edge.source_id
+                break
+        person = robot = None
+        if inter_id and inter_id.startswith("interaction:"):
+            parts = inter_id.split(":", 2)   # ['interaction', person, robot]
+            if len(parts) == 3:
+                person, robot = parts[1], parts[2]
+        for t in (sess.turns or []):
+            ss.append_turn(session_id=sess.id, person_id=person or "unknown",
+                           robot_id=robot or "chatbox",
+                           emotion=t.get("emotion"), child=t.get("child"),
+                           reply=t.get("reply"))
+            moved_turns += 1
+        if person and robot:
+            pairs.add((person, robot))
+        store.delete_node(sess.id)   # also drops the has_session edge
+    # Old history already shaped the graph → don't re-extract it.
+    for person, _robot in pairs:
+        ss.mark_extracted(person)
+    for person, robot in pairs:
+        set_interaction_count(store, person, robot,
+                              ss.person_turn_count(person, robot), source="migrate")
+    store.save(kg_path)
+    ss.close()
+    print(f"[migrate] moved {moved_turns} turn(s) from {len(sessions)} session(s) → "
+          f"{sessions_db}; removed SessionNodes from the graph → {kg_path}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # CLI
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1476,7 +1681,13 @@ def main() -> None:
     p = argparse.ArgumentParser(
         description="Live webcam → KG relationship engine → PAD persona loop"
     )
-    p.add_argument("--mode",       choices=["run", "enroll"], default="run")
+    p.add_argument("--mode",
+                   choices=["run", "enroll", "consolidate", "migrate-sessions"],
+                   default="run",
+                   help="run | enroll | consolidate (merge near-dup topics) | "
+                        "migrate-sessions (move graph SessionNodes → SQLite)")
+    p.add_argument("--sessions-db", default=_DEFAULT_SESSIONS_DB,
+                   help=f"SQLite transcript DB path (default: {_DEFAULT_SESSIONS_DB})")
     p.add_argument("--name",       default=None,
                    help="Person name for enroll mode")
     p.add_argument("--faces",      default=_DEFAULT_FACES,
@@ -1523,6 +1734,12 @@ def main() -> None:
                    help="Enable the PAD persona engine (disabled by default this pass)")
     p.add_argument("--enable-emotion", action="store_true",
                    help="Enable emotion detection (disabled by default this pass)")
+    # ── Feature 2: topic consolidation (--mode consolidate) ────────────────────
+    p.add_argument("--merge-floor", type=float, default=0.86,
+                   help="Min cosine similarity to MERGE two near-duplicate topics "
+                        "(default: 0.86; same-category only)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="consolidate mode: preview merges without writing")
     args = p.parse_args()
 
     if args.mode == "enroll":
@@ -1532,26 +1749,37 @@ def main() -> None:
                         args.n_captures, args.threshold)
         return
 
+    if args.mode == "consolidate":
+        run_consolidate_mode(args.kg, args.embed_model, args.merge_floor, args.dry_run)
+        return
+
+    if args.mode == "migrate-sessions":
+        run_migrate_sessions(args.kg, args.sessions_db)
+        return
+
     llm = None
     if args.llm:
         llm = LLMClient(model=args.model)
         llm.connect()
 
     # Embedding matcher (default when --llm); degrades gracefully on failure.
+    # embed_fn is also handed to the loop for the on-demand topic-merge preview (C).
     matcher = None
+    embed_fn = None
     if not args.no_embed:
         try:
             from modules.graph_relationship.embedding import (
                 make_embedding_matcher, ollama_embed_fn,
             )
-            matcher = make_embedding_matcher(
-                ollama_embed_fn(model=args.embed_model), floor=args.embed_floor)
+            embed_fn = ollama_embed_fn(model=args.embed_model)
+            matcher = make_embedding_matcher(embed_fn, floor=args.embed_floor)
             print(f"[WebcamLoop] topic matching via embeddings "
                   f"({args.embed_model}, floor {args.embed_floor})")
         except Exception as exc:  # noqa: BLE001
             print(f"[WebcamLoop] embedding matcher unavailable ({exc}) — "
                   "using keyword matcher")
             matcher = None
+            embed_fn = None
 
     loop = WebcamKGLoop(
         robot_id         = args.robot,
@@ -1567,6 +1795,8 @@ def main() -> None:
         spec_dir         = args.spec_dir,
         seed             = not args.no_seed,
         matcher          = matcher,
+        embed_fn         = embed_fn,
+        sessions_db      = args.sessions_db,
         pad_enabled      = args.enable_pad,
         emotion_enabled  = args.enable_emotion,
     )

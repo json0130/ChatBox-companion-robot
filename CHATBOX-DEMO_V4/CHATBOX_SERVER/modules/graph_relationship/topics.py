@@ -19,7 +19,7 @@ from typing import Callable, List, Optional, Tuple
 
 from .schema import (
     AboutEdge, ConversationNode, HasConversationEdge, HasInterestEdge,
-    InterestNode, Provenance, TopicNode,
+    InterestNode, Provenance, RelatedTopicEdge, TopicCategory, TopicNode,
 )
 from .store import GraphStore
 
@@ -29,8 +29,9 @@ from .store import GraphStore
 Matcher = Callable[[List[str], str], Optional[str]]
 
 
-def _prov(source: Optional[str]) -> Provenance:
-    return Provenance(source=source or "topics", confidence=1.0,
+def _prov(source: Optional[str], confidence: float = 1.0) -> Provenance:
+    return Provenance(source=source or "topics",
+                      confidence=max(0.0, min(1.0, float(confidence))),
                       timestamp=datetime.now(timezone.utc))
 
 
@@ -77,18 +78,36 @@ def add_person_interest(
     return inode
 
 
-def resolve_topic(store: GraphStore, label: str) -> TopicNode:
+def _cat_value(category) -> str:
+    """Category as a plain string ('music'), tolerant of enum or str input."""
+    if category is None:
+        return "other"
+    return category.value if hasattr(category, "value") else str(category)
+
+
+def resolve_topic(store: GraphStore, label: str, category=None) -> TopicNode:
     """Get-or-create the shared TopicNode for `label` (deterministic id).
 
-    Re-resolving the same label returns the SAME existing node — so both the
-    robot and a human interest land on ONE Topic node, and existing topic notes
-    are preserved (not overwritten).
+    The id is derived from the NORMALIZED LABEL only (topic_id) — `category` is an
+    attribute, never part of identity — so re-resolving the same label returns the
+    SAME node even if a later extraction disagrees on category, and existing topic
+    notes are preserved.
+
+    Category update rule (conservative, no embeddings/merge): only fill in a real
+    category when the node is still the "other" fallback. If the node already has a
+    non-"other" category, keep it (first non-other wins); a conflicting new category
+    is ignored. TopicNode has no provenance field, so the conflict is not persisted.
     """
     tid = topic_id(label)
     existing = store.get_node(tid)
     if existing is not None and existing.node_type == "topic":
+        new_cat = _cat_value(category)
+        if new_cat != "other" and _cat_value(existing.category) == "other":
+            # model_copy does NOT re-validate → coerce to the enum explicitly.
+            existing = existing.model_copy(update={"category": TopicCategory(new_cat)})
+            store.upsert_node(existing)
         return existing
-    node = TopicNode(id=tid, label=str(label))
+    node = TopicNode(id=tid, label=str(label), category=_cat_value(category))
     store.upsert_node(node)
     return node
 
@@ -181,6 +200,113 @@ def get_conversation(store: GraphStore, person_id: str, robot_id: str) -> Option
     return node if node is not None and node.node_type == "conversation" else None
 
 
+def topic_degree(store: GraphStore, topic_id_: str) -> int:
+    """Number of edges incident to a topic node — its 'establishedness'. Used to
+    pick the canonical node when consolidating duplicates. Pure O(neighbors)."""
+    return len(store.query_neighbors(topic_id_))
+
+
+def merge_topics(
+    store: GraphStore, canonical_id: str, duplicate_id: str, *,
+    source: Optional[str] = None,
+) -> Optional[TopicNode]:
+    """PURE graph surgery: fold `duplicate` topic into `canonical`.
+
+    Redirects every edge touching the duplicate onto the canonical (preserving
+    edge type / label / provenance; collisions merge under the store's normal
+    rule), unions the two nodes' notes (deduped) plus a `merged_from` marker,
+    upgrades the canonical category only if it was still 'other', then deletes the
+    duplicate node. No embeddings, no LLM. Idempotent; `canonical==duplicate` is a
+    no-op. Returns the canonical TopicNode, or None if either id is not a topic.
+    """
+    if canonical_id == duplicate_id:
+        return store.get_node(canonical_id)
+    canon = store.get_node(canonical_id)
+    dup = store.get_node(duplicate_id)
+    if (canon is None or canon.node_type != "topic"
+            or dup is None or dup.node_type != "topic"):
+        return None
+
+    # Redirect every edge incident to the duplicate onto the canonical.
+    for edge, _nbr in list(store.query_neighbors(duplicate_id)):
+        new_src = canonical_id if edge.source_id == duplicate_id else edge.source_id
+        new_dst = canonical_id if edge.target_id == duplicate_id else edge.target_id
+        store.delete_edge(edge.source_id, edge.target_id, edge.edge_type)
+        if new_src == new_dst:
+            continue  # never create a self-loop on the canonical
+        store.upsert_edge(edge.model_copy(update={
+            "source_id": new_src, "target_id": new_dst}))
+
+    # Union notes (dedup by person+text) + record the merge for provenance.
+    notes = list(canon.notes)
+    seen = {(n.get("person"), n.get("text")) for n in notes}
+    for n in dup.notes:
+        key = (n.get("person"), n.get("text"))
+        if key not in seen:
+            seen.add(key)
+            notes.append(n)
+    notes.append({"person": None, "text": f"merged_from: {dup.label}",
+                  "ts": datetime.now(timezone.utc).isoformat()})
+    update: dict = {"notes": notes}
+    if _cat_value(canon.category) == "other" and _cat_value(dup.category) != "other":
+        update["category"] = TopicCategory(_cat_value(dup.category))  # coerce to enum
+    store.upsert_node(canon.model_copy(update=update))
+
+    store.delete_node(duplicate_id)
+    return store.get_node(canonical_id)
+
+
+def link_related_topic(
+    store: GraphStore, topic_a_id: str, topic_b_id: str, weight: float, *,
+    source: Optional[str] = None,
+) -> bool:
+    """Add an undirected Topic↔Topic `related_topic` edge (stored once, endpoints
+    sorted). Idempotent: returns False if it already exists or either id isn't a
+    topic; True if a new edge was written. Pure — no embeddings/LLM."""
+    if topic_a_id == topic_b_id:
+        return False
+    a, b = sorted((topic_a_id, topic_b_id))
+    na, nb = store.get_node(a), store.get_node(b)
+    if na is None or na.node_type != "topic" or nb is None or nb.node_type != "topic":
+        return False
+    if store.get_edge(a, b, "related_topic") is not None:
+        return False
+    store.upsert_edge(RelatedTopicEdge(
+        source_id=a, target_id=b, weight=max(0.0, min(1.0, float(weight))),
+        provenance=_prov(source)))
+    return True
+
+
+def merge_interests(
+    store: GraphStore, canonical_id: str, duplicate_id: str, *,
+    source: Optional[str] = None,
+) -> Optional[InterestNode]:
+    """PURE graph surgery: fold a duplicate Interest into the canonical one.
+
+    Redirects every edge touching the duplicate (person --has_interest--> and
+    --about--> Topic) onto the canonical, then deletes the duplicate. Used to
+    merge near-duplicate interests (e.g. "sports" vs "sport" from old LLM labels
+    vs the new category-named interests). No embeddings. Idempotent.
+    """
+    if canonical_id == duplicate_id:
+        return store.get_node(canonical_id)
+    canon = store.get_node(canonical_id)
+    dup = store.get_node(duplicate_id)
+    if (canon is None or canon.node_type != "interest"
+            or dup is None or dup.node_type != "interest"):
+        return None
+    for edge, _nbr in list(store.query_neighbors(duplicate_id)):
+        new_src = canonical_id if edge.source_id == duplicate_id else edge.source_id
+        new_dst = canonical_id if edge.target_id == duplicate_id else edge.target_id
+        store.delete_edge(edge.source_id, edge.target_id, edge.edge_type)
+        if new_src == new_dst:
+            continue
+        store.upsert_edge(edge.model_copy(update={
+            "source_id": new_src, "target_id": new_dst}))
+    store.delete_node(duplicate_id)
+    return store.get_node(canonical_id)
+
+
 def _neighbors_of_type(store: GraphStore, node_id: str, edge_type: str, node_type: str):
     return [
         n for _e, n in store.query_neighbors(node_id, edge_type)
@@ -195,6 +321,74 @@ def person_interests(store: GraphStore, person_id: str) -> List[Tuple[InterestNo
         topics = _neighbors_of_type(store, interest.id, "about", "topic")
         out.append((interest, topics))
     return out
+
+
+def person_topics(store: GraphStore, person_id: str) -> List[Tuple[str, str]]:
+    """[(topic_label, category), ...] for one person — the distinct topics they
+    reach via any interest. Pure store read (no LLM); used to condition the
+    graph-aware extraction prompt so the LLM reuses established topics."""
+    out: List[Tuple[str, str]] = []
+    seen: set = set()
+    for _interest, topics in person_interests(store, person_id):
+        for t in topics:
+            if t.id in seen:
+                continue
+            seen.add(t.id)
+            out.append((t.label, _cat_value(t.category)))
+    return out
+
+
+def add_person_topic(
+    store: GraphStore, person_id: str, label: str, category=None, *,
+    source: Optional[str] = None, confidence: float = 1.0,
+    summary: Optional[str] = None,
+) -> Optional[TopicNode]:
+    """Wire a NEW typed topic into the person's Interest layer:
+        person --has_interest--> Interest(category) --about--> Topic(label, category)
+    The interest node is the topic's category (e.g. 'music'), so typed topics group
+    under their category. Idempotent (deterministic ids + upsert). Optional `summary`
+    is attached as a per-person topic note."""
+    label = str(label).strip()
+    if not label:
+        return None
+    conf = max(0.0, min(1.0, float(confidence)))
+    topic = resolve_topic(store, label, category=category)
+    interest_label = _cat_value(category)
+    inode = InterestNode(id=interest_id(person_id, interest_label), label=interest_label)
+    store.upsert_node(inode)
+    store.upsert_edge(HasInterestEdge(
+        source_id=person_id, target_id=inode.id, provenance=_prov(source, conf)))
+    store.upsert_edge(AboutEdge(
+        source_id=inode.id, target_id=topic.id, provenance=_prov(source, conf)))
+    if summary:
+        add_topic_note(store, topic, person_id, summary)
+    return topic
+
+
+def reinforce_person_topic(
+    store: GraphStore, person_id: str, label: str, *,
+    source: Optional[str] = None, confidence: float = 1.0,
+    summary: Optional[str] = None,
+) -> Optional[TopicNode]:
+    """Refresh an EXISTING person→interest→topic path (re-stamp provenance) without
+    creating any new node. Returns the topic if a path was found, else None. Used
+    for topics the LLM reports as already-known (existing_topics_discussed)."""
+    tid = topic_id(label)
+    topic = store.get_node(tid)
+    if topic is None or topic.node_type != "topic":
+        return None
+    conf = max(0.0, min(1.0, float(confidence)))
+    refreshed = False
+    for interest, topics in person_interests(store, person_id):
+        if any(t.id == tid for t in topics):
+            store.upsert_edge(HasInterestEdge(
+                source_id=person_id, target_id=interest.id, provenance=_prov(source, conf)))
+            store.upsert_edge(AboutEdge(
+                source_id=interest.id, target_id=tid, provenance=_prov(source, conf)))
+            refreshed = True
+    if summary:
+        add_topic_note(store, topic, person_id, summary)
+    return topic if refreshed else None
 
 
 def _person_topic_ids(store: GraphStore, person_id: str) -> set:
@@ -299,3 +493,55 @@ def shared_topics(store: GraphStore, person_id: str, robot_id: str) -> List[str]
     person_ids = _person_topic_ids(store, person_id)
     shared_ids = person_ids & set(robot_by_id)
     return sorted(robot_by_id[tid].label for tid in shared_ids)
+
+
+def topic_related(store: GraphStore, topic_id_: str) -> List[TopicNode]:
+    """TopicNodes linked to this one by a `related_topic` edge (one hop)."""
+    return _neighbors_of_type(store, topic_id_, "related_topic", "topic")
+
+
+def _person_topics_by_id(store: GraphStore, person_id: str) -> dict:
+    out: dict = {}
+    for _interest, topics in person_interests(store, person_id):
+        for t in topics:
+            out[t.id] = t.label
+    return out
+
+
+def related_common_ground(store: GraphStore, person_id: str, robot_id: str) -> dict:
+    """Common ground including RELATED bridges (Feature-2c).
+
+    Returns {"direct": [labels both sides reach], "bridges": [(person_topic_label,
+    robot_topic_label), ...]} where a bridge is a person topic that is
+    `related_topic`-linked to a robot capability topic (indirect common ground,
+    e.g. person 'multiplication' ~ robot 'math problems')."""
+    robot_by_id = {t.id: t.label for t in robot_topics(store, robot_id)}
+    person_by_id = _person_topics_by_id(store, person_id)
+    direct_ids = set(person_by_id) & set(robot_by_id)
+    direct = sorted(robot_by_id[i] for i in direct_ids)
+    bridges: List[Tuple[str, str]] = []
+    seen: set = set()
+    for pid, plabel in person_by_id.items():
+        if pid in robot_by_id:
+            continue                      # already direct common ground
+        for r in topic_related(store, pid):
+            if r.id in robot_by_id and (pid, r.id) not in seen:
+                seen.add((pid, r.id))
+                bridges.append((plabel, robot_by_id[r.id]))
+    return {"direct": direct, "bridges": bridges}
+
+
+def person_related_pairs(store: GraphStore, person_id: str) -> List[Tuple[str, str]]:
+    """[(label_a, label_b), ...] related-topic pairs among the person's own topics —
+    so the robot knows which of their interests connect (rap ~ hiphop)."""
+    person_by_id = _person_topics_by_id(store, person_id)
+    out: List[Tuple[str, str]] = []
+    seen: set = set()
+    for pid, plabel in person_by_id.items():
+        for r in topic_related(store, pid):
+            if r.id in person_by_id:
+                key = tuple(sorted((pid, r.id)))
+                if key not in seen:
+                    seen.add(key)
+                    out.append((plabel, person_by_id[r.id]))
+    return out

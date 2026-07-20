@@ -1183,6 +1183,19 @@ class WebcamKGLoop:
                                  d_rapport=cu.rapport_delta, d_trust=cu.trust_delta,
                                  source=f"extraction:{sid}")
 
+            # (c) Culture self-identification — tag belongs_to_culture ONLY when the
+            #     person EXPLICITLY states their own background (never from a name,
+            #     face, language, or liking a cuisine). Liking kimchi ≠ being Korean.
+            from modules.culture_extraction import detect_self_declared_culture
+            from modules.culture_seed import assign_person_culture
+            declared = detect_self_declared_culture(turns, self.llm.respond)
+            if declared:
+                from modules.graph_relationship.cultures import person_culture
+                if person_culture(self.store, pid) is None:
+                    assign_person_culture(self.store, pid, declared,
+                                          source=f"self-declared:{sid}")
+                    print(f"      culture: {pid} self-identified as {declared} → tagged")
+
             self._session_store.mark_extracted(pid)
 
             reinf = ", ".join(lab for lab, _c in ts.get("reinforced", []))

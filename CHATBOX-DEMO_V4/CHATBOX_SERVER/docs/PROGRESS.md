@@ -6,6 +6,32 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## fix: tag a person's culture ONLY on explicit self-declaration  *(branch `feature/cultural-awareness`)*
+
+**User point:** jay shouldn't be connected to Korean "at first place unless jay said he is korean" — the demo
+had assigned jay via the manual `--assign-culture` flag with no basis, which is exactly the stereotyping the
+layer is meant to avoid.
+**Two fixes:**
+1. Removed jay's unfounded `belongs_to_culture` edge from the live KG. ChatBox still `knows_culture` Korean
+   (its own prior knowledge) and the culture + priors remain — only the *person* tag was wrong.
+2. `belongs_to_culture` is now driven by SELF-DECLARATION, not an operator hunch:
+   - new `modules/culture_extraction.py` — `detect_self_declared_culture(turns, llm_fn)`: reads ONLY the
+     person's own words and returns a culture label ONLY on an explicit self-statement ("I'm Korean", "my
+     parents are from Korea"). Returns None for liking kimchi/K-dramas, visiting Korea, speaking Korean, or
+     any ambiguity. Conservative guards (NONE/empty/sentence/tag/non-demonym → None); robot replies never fed.
+   - wired into `_extract_session` step (c): after topic extraction, if the person self-identifies and isn't
+     already tagged, `assign_person_culture`. (This is NOT the prohibited auto-detection from face/name/
+     language/appearance — it's the person explicitly telling us; the earlier "manual only" guard was really
+     anti-stereotyping, which self-declaration honours.)
+**Verified:** real LLM 7/7 — "I'm Korean"/"my parents are from Korea" → tagged; "i love kimchi and
+k-dramas" / "I visited Korea" / "recommend korean bbq?" / "I'm learning Korean" → NOT tagged. Headless
+`test_culture_extraction.py` (fake LLM): parse/guards, robot-reply excluded, end-to-end (kimchi-lover not
+tagged, explicit declaration tags once, idempotent). culture-seed + preference-model tests still green.
+**Note:** the manual `--assign-culture` flag stays as an admin override. The seed still only sets ChatBox's
+`knows_culture` + priors; no person is tagged by seeding.
+
+---
+
 ## feat: Bayesian preference overlay — recommend topics on read (Command B)  *(branch `feature/cultural-awareness`)*
 
 **Goal:** rank topics the robot could tentatively bring up, blending the person's CULTURE priors (base

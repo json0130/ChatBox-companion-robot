@@ -490,81 +490,76 @@
       "node_type": "culture"
     },
     {
-      "id": "topic:kimchi",
+      "id": "ck:korean:kimchi",
       "label": "kimchi",
       "category": "food",
-      "notes": [],
-      "node_type": "topic"
+      "node_type": "culture_topic"
     },
     {
-      "id": "topic:korean-bbq",
+      "id": "ck:korean:korean-bbq",
       "label": "korean bbq",
       "category": "food",
-      "notes": [],
-      "node_type": "topic"
+      "node_type": "culture_topic"
     },
     {
-      "id": "topic:kpop",
+      "id": "ck:korean:kpop",
       "label": "kpop",
       "category": "music",
-      "notes": [],
-      "node_type": "topic"
+      "node_type": "culture_topic"
     },
     {
-      "id": "topic:kdrama",
+      "id": "ck:korean:kdrama",
       "label": "kdrama",
       "category": "media",
-      "notes": [],
-      "node_type": "topic"
+      "node_type": "culture_topic"
     },
     {
-      "id": "topic:bibimbap",
+      "id": "ck:korean:bibimbap",
       "label": "bibimbap",
       "category": "food",
-      "notes": [],
-      "node_type": "topic"
+      "node_type": "culture_topic"
     },
     {
-      "id": "topic:son-heung-min",
+      "id": "ck:korean:hiking",
+      "label": "hiking",
+      "category": "activity",
+      "node_type": "culture_topic"
+    },
+    {
+      "id": "ck:korean:son-heung-min",
       "label": "son heung-min",
       "category": "person",
-      "notes": [],
-      "node_type": "topic"
+      "node_type": "culture_topic"
     },
     {
-      "id": "topic:noraebang",
+      "id": "ck:korean:noraebang",
       "label": "noraebang",
       "category": "activity",
-      "notes": [],
-      "node_type": "topic"
+      "node_type": "culture_topic"
     },
     {
-      "id": "topic:chuseok",
+      "id": "ck:korean:chuseok",
       "label": "chuseok",
       "category": "activity",
-      "notes": [],
-      "node_type": "topic"
+      "node_type": "culture_topic"
     },
     {
-      "id": "topic:esports",
+      "id": "ck:korean:esports",
       "label": "esports",
       "category": "activity",
-      "notes": [],
-      "node_type": "topic"
+      "node_type": "culture_topic"
     },
     {
-      "id": "topic:baseball",
+      "id": "ck:korean:baseball",
       "label": "baseball",
       "category": "sport",
-      "notes": [],
-      "node_type": "topic"
+      "node_type": "culture_topic"
     },
     {
-      "id": "topic:taekwondo",
+      "id": "ck:korean:taekwondo",
       "label": "taekwondo",
       "category": "sport",
-      "notes": [],
-      "node_type": "topic"
+      "node_type": "culture_topic"
     }
   ],
   "edges": [
@@ -1120,12 +1115,24 @@
       "timescale": "SLOW"
     },
     {
-      "id": "9b592d0e-1be2-496c-930a-774b76c09a64",
-      "source_id": "culture:korean",
-      "target_id": "topic:kimchi",
+      "id": "dfa11d5d-37d1-4e69-a094-184077320d9f",
+      "source_id": "chatbox",
+      "target_id": "culture:korean",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T07:26:58.633046Z",
+        "timestamp": "2026-07-20T11:16:45.427797Z",
+        "confidence": 1.0
+      },
+      "edge_type": "knows_culture",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "c52c7db8-680c-4f79-a897-00956b28b482",
+      "source_id": "culture:korean",
+      "target_id": "ck:korean:kimchi",
+      "provenance": {
+        "source": "culture-seed",
+        "timestamp": "2026-07-20T11:16:45.427828Z",
         "confidence": 1.0
       },
       "edge_type": "culture_prior",
@@ -1133,12 +1140,12 @@
       "timescale": "SLOW"
     },
     {
-      "id": "4b1316f5-3687-4e0b-9fd1-8c33585b12e1",
+      "id": "933375e4-9c5c-4691-a379-ed45ebc3fa9f",
       "source_id": "culture:korean",
-      "target_id": "topic:korean-bbq",
+      "target_id": "ck:korean:korean-bbq",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T07:26:58.633074Z",
+        "timestamp": "2026-07-20T11:16:45.427843Z",
         "confidence": 1.0
       },
       "edge_type": "culture_prior",
@@ -1146,12 +1153,12 @@
       "timescale": "SLOW"
     },
     {
-      "id": "b7b92bbc-c3c4-465f-aef5-aac98c506df6",
+      "id": "df499f99-f584-4cf9-86bd-92c7c0439115",
       "source_id": "culture:korean",
-      "target_id": "topic:kpop",
+      "target_id": "ck:korean:kpop",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T07:26:58.633085Z",
+        "timestamp": "2026-07-20T11:16:45.427851Z",
         "confidence": 1.0
       },
       "edge_type": "culture_prior",
@@ -1159,12 +1166,12 @@
       "timescale": "SLOW"
     },
     {
-      "id": "cca383f0-b599-4de9-94dd-bad0d30c172c",
+      "id": "936b583d-98f7-442b-8d8e-83a019063cd5",
       "source_id": "culture:korean",
-      "target_id": "topic:kdrama",
+      "target_id": "ck:korean:kdrama",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T07:26:58.633093Z",
+        "timestamp": "2026-07-20T11:16:45.427859Z",
         "confidence": 1.0
       },
       "edge_type": "culture_prior",
@@ -1172,12 +1179,12 @@
       "timescale": "SLOW"
     },
     {
-      "id": "628c9606-75fb-4740-86a0-92f09a99bbdd",
+      "id": "8b4f2074-c0bc-4f97-84fb-78a732c30a54",
       "source_id": "culture:korean",
-      "target_id": "topic:bibimbap",
+      "target_id": "ck:korean:bibimbap",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T07:26:58.633100Z",
+        "timestamp": "2026-07-20T11:16:45.427866Z",
         "confidence": 1.0
       },
       "edge_type": "culture_prior",
@@ -1185,12 +1192,12 @@
       "timescale": "SLOW"
     },
     {
-      "id": "db768662-05de-471a-97b8-2785324dec45",
+      "id": "8e148fbf-3791-4b7c-80e9-284f72a14ed4",
       "source_id": "culture:korean",
-      "target_id": "topic:hiking",
+      "target_id": "ck:korean:hiking",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T07:26:58.633108Z",
+        "timestamp": "2026-07-20T11:16:45.427871Z",
         "confidence": 1.0
       },
       "edge_type": "culture_prior",
@@ -1198,12 +1205,12 @@
       "timescale": "SLOW"
     },
     {
-      "id": "47aeca55-0adb-4527-b788-172f594586fd",
+      "id": "f22ed5e2-8d6f-4fbe-8487-75a02b14b674",
       "source_id": "culture:korean",
-      "target_id": "topic:son-heung-min",
+      "target_id": "ck:korean:son-heung-min",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T07:26:58.633116Z",
+        "timestamp": "2026-07-20T11:16:45.427877Z",
         "confidence": 1.0
       },
       "edge_type": "culture_prior",
@@ -1211,12 +1218,12 @@
       "timescale": "SLOW"
     },
     {
-      "id": "3eb1eacf-db31-4436-831d-73763f89792f",
+      "id": "a7ec58b0-f671-4e94-b083-8d30299a4ffb",
       "source_id": "culture:korean",
-      "target_id": "topic:noraebang",
+      "target_id": "ck:korean:noraebang",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T07:26:58.633123Z",
+        "timestamp": "2026-07-20T11:16:45.427882Z",
         "confidence": 1.0
       },
       "edge_type": "culture_prior",
@@ -1224,12 +1231,12 @@
       "timescale": "SLOW"
     },
     {
-      "id": "4177424a-8a8f-49b0-a7dc-e739db826547",
+      "id": "d6e41e71-2c38-457e-af11-711654f461e3",
       "source_id": "culture:korean",
-      "target_id": "topic:chuseok",
+      "target_id": "ck:korean:chuseok",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T07:26:58.633130Z",
+        "timestamp": "2026-07-20T11:16:45.427889Z",
         "confidence": 1.0
       },
       "edge_type": "culture_prior",
@@ -1237,12 +1244,12 @@
       "timescale": "SLOW"
     },
     {
-      "id": "70512a90-0023-427a-9749-c82b8ec95d9c",
+      "id": "ac098c19-12c3-460f-80c3-1d846afd3023",
       "source_id": "culture:korean",
-      "target_id": "topic:esports",
+      "target_id": "ck:korean:esports",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T07:26:58.633137Z",
+        "timestamp": "2026-07-20T11:16:45.427894Z",
         "confidence": 1.0
       },
       "edge_type": "culture_prior",
@@ -1250,12 +1257,12 @@
       "timescale": "SLOW"
     },
     {
-      "id": "1d24c66c-8c15-412f-9a43-63f73c842262",
+      "id": "24a73ef2-e009-4b72-924f-a814a3952857",
       "source_id": "culture:korean",
-      "target_id": "topic:baseball",
+      "target_id": "ck:korean:baseball",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T07:26:58.633143Z",
+        "timestamp": "2026-07-20T11:16:45.427899Z",
         "confidence": 1.0
       },
       "edge_type": "culture_prior",
@@ -1263,12 +1270,12 @@
       "timescale": "SLOW"
     },
     {
-      "id": "1983b5a9-02ba-4977-a51a-606f9e6f092d",
+      "id": "d11345f7-53d8-4357-ae31-2506499cce62",
       "source_id": "culture:korean",
-      "target_id": "topic:taekwondo",
+      "target_id": "ck:korean:taekwondo",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T07:26:58.633149Z",
+        "timestamp": "2026-07-20T11:16:45.427904Z",
         "confidence": 1.0
       },
       "edge_type": "culture_prior",
@@ -1276,12 +1283,12 @@
       "timescale": "SLOW"
     },
     {
-      "id": "3ba7d2d7-c18e-46c0-b4da-30696facf449",
+      "id": "aaf6c284-cc45-4e75-ace3-ee8f2f3b8818",
       "source_id": "jay",
       "target_id": "culture:korean",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T07:27:00.159196Z",
+        "timestamp": "2026-07-20T11:16:46.847694Z",
         "confidence": 1.0
       },
       "edge_type": "belongs_to_culture",

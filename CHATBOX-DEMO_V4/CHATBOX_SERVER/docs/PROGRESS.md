@@ -6,6 +6,43 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## feat: first-impression mode — auto-enrol + learn names, fast-node-only KG  *(branch `first-impression`, from `feature/integration`)*
+
+**Goal:** a lightweight "meet a stranger" demo — recognise faces, save an unknown face after the first
+interaction, attach the person's real name if they say it, and show ONLY fast-updating data in the graph
+(emotion / current topic / mood) as a single node with edges from the person and the robot — no topic/interest
+knowledge-graph.
+
+**Tried / built:**
+- `--first-impression` mode on the webcam loop. On the first chat turn with an unknown face in view it
+  auto-enrols that face under a provisional `guest_N` id (`_auto_enroll` → `FaceIdentifier.enroll` on the live
+  frame) and saves `faces.npz`, so it's recognised from then on.
+- Name learning: `_extract_name` regex-matches self-introductions ("my name is …", "I'm …", "call me …",
+  "this is …") with a small stoplist to reject "I'm fine/tired". On a hit, `_learn_name` re-keys `guest_N` →
+  name across **four** stores: face DB (`FaceIdentifier.rename`, merges/averages if the name already exists),
+  the graph (`graph_relationship/rename.py::rename_person` — rewrites person + `interaction:` + `conversation:`
+  node ids and re-points every incident edge, preserving rapport/trust/mood/topics), the SQLite transcripts
+  (`SessionStore.rename_person`), and this run's in-memory maps (`_run_sessions`, `_last_mood`,
+  `_chat_history`, `_kg_state`).
+- Fast-node-only graph: seeding is off by default in this mode (`--seed-fi` to re-enable) and end-of-session
+  topic extraction is skipped, so no `TopicNode`/`InterestNode` is ever created. The only per-person node is
+  the existing `ConversationNode` (rolling current-topic keyword + mood valence + emotion), linked
+  `person --has_conversation--> Conversation <--has_conversation-- robot`. Emotion is forced on so the node
+  shows live mood.
+
+**Worked:** logic smoke test passes — name extraction (8 cases incl. hyphen/apostrophe + rejections), graph
+`rename_person` (old ids gone, new ids present, edge count unchanged, no dangling `guest_*` refs, rapport /
+topics preserved), and `FaceIdentifier.rename` (merge / move / missing-key). All four changed files byte-compile;
+`--first-impression`/`--seed-fi` show in `--help`.
+
+**Didn't work → worked around:** a *second Claude Code instance* sharing this working dir did a `git checkout`
+that committed my tree mid-edit (`b66f028`) and reverted the uncommitted half of the webcam-loop integration
+points. Recovered by moving the work into an isolated git worktree (`../ChatBox-first-impression-wt`, branch
+`first-impression-wt`) and re-applying the lost edits there. To land: `git branch -f first-impression
+first-impression-wt` once the main dir isn't on that branch.
+
+---
+
 ## refactor: prune dead code + share consolidation core (compact/modular)  *(branch `KG-knowledge-extraction`)*
 
 **Goal:** review the branch and remove unnecessary/redundant code. Net −109 lines, no behaviour change.

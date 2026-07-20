@@ -76,6 +76,7 @@ from modules.graph_relationship.store import InMemoryGraphStore
 from modules.pad_persona.pipeline_adapter import PADPipelineAdapter
 from modules.face_webcam.face_id import FaceIdentifier
 from modules.face_webcam.emotion_detector import EmotionDetector
+from modules.face_webcam.demographics import DemographicsDetector
 from modules.session_store import SessionStore, DEFAULT_DB as _DEFAULT_SESSIONS_DB
 
 # ── LLM ───────────────────────────────────────────────────────────────────────
@@ -335,6 +336,17 @@ def draw_overlay(
         if dem:
             emo_str = f"{dem} {dec:.0f}%" if dec > 1 else dem
             _text(frame, emo_str, (x1 + 4, max(y1 - 5, 34)), 0.46, dcol, 1)
+        # Culture: region/heritage + age band, drawn under the box (display only)
+        region = det.get("region", "")
+        if region:
+            lock = " *" if det.get("demo_locked") else ""
+            rconf = det.get("region_conf", 0.0)
+            _text(frame, f"{region} {rconf:.0%}{lock}",
+                  (x1 + 4, y2 + 18), 0.50, _C_CYAN, 1)
+            age, stage = det.get("age", ""), det.get("age_stage", "")
+            if age:
+                age_str = f"{age} ({stage})" if stage else age
+                _text(frame, age_str, (x1 + 4, y2 + 38), 0.46, _C_CYAN, 1)
 
     # ── Top bar ───────────────────────────────────────────────────────────────
     _panel(frame, 0, 0, w, 38)
@@ -576,6 +588,8 @@ class _DetectionWorker(threading.Thread):
         max_faces:       int   = 4,
         det_scale:       float = 0.5,
         detect_emotion:  bool  = True,
+        detect_demographics: bool = False,
+        demographics_backend: str = 'fairface',
     ):
         super().__init__(daemon=True, name="detection-worker")
         self._face_id         = face_id
@@ -590,6 +604,21 @@ class _DetectionWorker(threading.Thread):
         self._unknown_emotion = (
             EmotionDetector.create(emotion_backend) if detect_emotion else None
         )
+
+        # Demographics (region/heritage + age) — display-only ("--culture"). Runs
+        # the model per face and votes to a stable estimate; no KG/prompt use.
+        self._detect_demographics = detect_demographics
+        self._demographics_backend = demographics_backend
+        self._per_demo: dict[str, DemographicsDetector] = {}
+        self._last_demo: dict = {}   # key -> last DemographicsResult (throttle cache)
+        self._unknown_demo = (
+            DemographicsDetector.create(demographics_backend)
+            if detect_demographics else None
+        )
+        # FairFace is ~15 ms/face; run every Nth worker cycle to keep it light —
+        # the vote window keeps the last estimate visible between inferences.
+        self._demo_every = 3
+        self._demo_cycle = 0
 
         self._lock    = threading.Lock()
         self._frame   = None
@@ -637,6 +666,13 @@ class _DetectionWorker(threading.Thread):
                 scale=self._det_scale,
             )
 
+            # Throttle the (heavier) demographics model — infer every Nth cycle,
+            # reuse the last voted estimate on the cycles we skip.
+            run_demo = False
+            if self._detect_demographics:
+                self._demo_cycle += 1
+                run_demo = (self._demo_cycle % self._demo_every) == 0
+
             results = []
             for person_id, sim, box in raw:
                 if not self._detect_emotion:
@@ -654,6 +690,21 @@ class _DetectionWorker(threading.Thread):
                     emo, e_conf, ev, ea = self._unknown_emotion.detect(
                         frame, box=box, smooth=False
                     )
+
+                # ── Demographics (region/heritage + age) — display only ────────
+                demo = None
+                if self._detect_demographics:
+                    key = person_id or DemographicsDetector.__name__  # shared unknown
+                    if person_id is not None and key not in self._per_demo:
+                        self._per_demo[key] = DemographicsDetector.create(
+                            self._demographics_backend)
+                    det = self._per_demo.get(key, self._unknown_demo)
+                    if run_demo:
+                        demo = det.detect(frame, box=box, smooth=True)
+                        self._last_demo[key] = demo
+                    else:
+                        demo = self._last_demo.get(key)
+
                 results.append({
                     "person_id": person_id,
                     "sim":       sim,
@@ -661,6 +712,11 @@ class _DetectionWorker(threading.Thread):
                     "emotion":   emo,
                     "e_conf":    e_conf,
                     "va":        (ev, ea),
+                    "region":      demo.region      if demo else "",
+                    "region_conf": demo.region_conf if demo else 0.0,
+                    "age":         demo.age         if demo else "",
+                    "age_stage":   demo.age_stage   if demo else "",
+                    "demo_locked": demo.locked      if demo else False,
                 })
 
             with self._lock:
@@ -698,6 +754,8 @@ class WebcamKGLoop:
         sessions_db:     str   = _DEFAULT_SESSIONS_DB,
         pad_enabled:     bool  = False,
         emotion_enabled: bool  = False,
+        demographics_enabled: bool = False,
+        demographics_backend: str  = 'fairface',
     ):
         self.robot_id      = robot_id
         self.faces_path    = faces_path
@@ -743,6 +801,9 @@ class WebcamKGLoop:
         # (face-reco → KG-through-conversation only). Re-enable via CLI later.
         self._pad_enabled      = pad_enabled
         self._emotion_enabled  = emotion_enabled
+        # Demographics (region/heritage + age) — display only, no KG/prompt use.
+        self._demographics_enabled = demographics_enabled
+        self._demographics_backend = demographics_backend
         self._matcher          = matcher
         self._embed_fn         = embed_fn   # for on-demand topic consolidation (Feature 2)
         # Conversation transcripts live in SQLite (not the graph). The graph keeps
@@ -966,6 +1027,55 @@ class WebcamKGLoop:
         if note_lines:
             lines.append("What you remember about them:\n" + "\n".join(note_lines))
 
+        # Cultural-background HINT (manual, opt-in). Appended LAST so specific
+        # memories still lead — this is a weak background hint, not a fact.
+        cblock = self._culture_block(pid)
+        if cblock:
+            lines.append(cblock)
+
+        return "\n".join(lines)
+
+    def _culture_block(self, pid: str) -> str:
+        """A weak 'Cultural background' hint for `pid`, or "" if they have no
+        BelongsToCultureEdge. Offers up to 4 highest-prior culture topics that the
+        person does NOT already have an interest in (those are in memory already).
+        Applies the mood-weighting lesson: tentative, content-first, never asserts
+        what they like. Culture assignment is manual — never auto-detected."""
+        from modules.graph_relationship.cultures import person_culture, culture_priors
+        from modules.graph_relationship.topics import person_interests
+        cid = person_culture(self.store, pid)
+        if not cid:
+            return ""
+        cnode = self.store.get_node(cid)
+        if cnode is None:
+            return ""
+
+        # Topics the person already engages with — exclude to avoid duplicating
+        # the memory block above.
+        own_ids = {t.id for _interest, topics in person_interests(self.store, pid)
+                   for t in topics}
+        offers: list[str] = []
+        for tid, _prior in culture_priors(self.store, cid):   # sorted by prior desc
+            if tid in own_ids:
+                continue
+            node = self.store.get_node(tid)
+            if node is not None:
+                offers.append(node.label)
+            if len(offers) >= 4:
+                break
+
+        lines = [
+            "━━━ CULTURAL BACKGROUND ━━━",
+            f"Cultural background hint: {cnode.label}. This is a starting guess "
+            "about their background, not a fact about them as a person.",
+        ]
+        if offers:
+            lines.append(
+                f"You know a little about {cnode.label} culture "
+                f"(e.g. {', '.join(offers)}). If the conversation lulls, you may "
+                "politely offer ONE of these; drop it immediately if they show no "
+                "interest. Never assert what they like — ask. Keep a polite, warm, "
+                "respectful tone.")
         return "\n".join(lines)
 
     def _build_system_prompt(self, pid: Optional[str], *,
@@ -1164,6 +1274,8 @@ class WebcamKGLoop:
             max_faces=4,
             det_scale=0.5,
             detect_emotion=self._emotion_enabled,
+            detect_demographics=self._demographics_enabled,
+            demographics_backend=self._demographics_backend,
         )
         worker.start()
 
@@ -1622,6 +1734,43 @@ def run_consolidate_mode(kg_path: str, embed_model: str,
         print(f"[consolidate] saved → {kg_path}")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Culture demo seed (--mode seed-culture-demo) + --assign-culture — Command A
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run_seed_culture_demo(kg_path: str) -> None:
+    """Seed the Korean culture DEMO layer (dummy priors) into an existing KG.
+    Idempotent; reuses topics already present. Does NOT assign any person."""
+    store = InMemoryGraphStore()
+    if not (os.path.exists(kg_path) and store.load(kg_path)):
+        print(f"[seed-culture] no KG at '{kg_path}' — starting fresh")
+    from modules.culture_seed import seed_korean_demo
+    info = seed_korean_demo(store)
+    store.save(kg_path)
+    print(f"[seed-culture] culture={info['culture']}  topics={info['topics']}  "
+          f"priors={info['priors']}  reused={info['reused'] or '—'}")
+    print(f"[seed-culture] saved → {kg_path}")
+    print("[seed-culture] assign someone with: "
+          "--assign-culture <person> Korean")
+
+
+def run_assign_culture(kg_path: str, person_id: str, culture_label: str) -> None:
+    """Manually link a person to a culture (creating it if needed). Person must
+    already exist in the KG (enroll/talk first). Idempotent."""
+    store = InMemoryGraphStore()
+    if not (os.path.exists(kg_path) and store.load(kg_path)):
+        print(f"[assign-culture] no KG at '{kg_path}'")
+        return
+    if store.get_node(person_id) is None:
+        print(f"[assign-culture] person '{person_id}' not in KG — "
+              "enroll/talk to them first so the person node exists")
+        return
+    from modules.culture_seed import assign_person_culture
+    cid = assign_person_culture(store, person_id, culture_label)
+    store.save(kg_path)
+    print(f"[assign-culture] {person_id} → {cid}  (saved → {kg_path})")
+
+
 def run_migrate_sessions(kg_path: str, sessions_db: str) -> None:
     """One-off: move existing graph SessionNodes' transcripts into the SQLite store,
     then remove the SessionNodes (+ has_session edges) from the graph. Migrated turns
@@ -1682,10 +1831,16 @@ def main() -> None:
         description="Live webcam → KG relationship engine → PAD persona loop"
     )
     p.add_argument("--mode",
-                   choices=["run", "enroll", "consolidate", "migrate-sessions"],
+                   choices=["run", "enroll", "consolidate", "migrate-sessions",
+                            "seed-culture-demo"],
                    default="run",
                    help="run | enroll | consolidate (merge near-dup topics) | "
-                        "migrate-sessions (move graph SessionNodes → SQLite)")
+                        "migrate-sessions (move graph SessionNodes → SQLite) | "
+                        "seed-culture-demo (seed Korean culture demo priors)")
+    p.add_argument("--assign-culture", nargs=2, metavar=("PERSON", "CULTURE"),
+                   default=None,
+                   help="Manually link a person to a culture, e.g. "
+                        "--assign-culture jay Korean, then exit")
     p.add_argument("--sessions-db", default=_DEFAULT_SESSIONS_DB,
                    help=f"SQLite transcript DB path (default: {_DEFAULT_SESSIONS_DB})")
     p.add_argument("--name",       default=None,
@@ -1734,6 +1889,11 @@ def main() -> None:
                    help="Enable the PAD persona engine (disabled by default this pass)")
     p.add_argument("--enable-emotion", action="store_true",
                    help="Enable emotion detection (disabled by default this pass)")
+    p.add_argument("--culture", action="store_true",
+                   help="Show a cultural-awareness estimate (region/heritage + age) "
+                        "on the webcam view. Display-only — not fed to the KG/prompt.")
+    p.add_argument("--culture-backend", default="fairface", choices=["fairface"],
+                   help="Demographics model backend (default: fairface)")
     # ── Feature 2: topic consolidation (--mode consolidate) ────────────────────
     p.add_argument("--merge-floor", type=float, default=0.86,
                    help="Min cosine similarity to MERGE two near-duplicate topics "
@@ -1755,6 +1915,15 @@ def main() -> None:
 
     if args.mode == "migrate-sessions":
         run_migrate_sessions(args.kg, args.sessions_db)
+        return
+
+    if args.mode == "seed-culture-demo":
+        run_seed_culture_demo(args.kg)
+        return
+
+    # --assign-culture is a standalone action (independent of --mode run).
+    if args.assign_culture:
+        run_assign_culture(args.kg, args.assign_culture[0], args.assign_culture[1])
         return
 
     llm = None
@@ -1799,6 +1968,8 @@ def main() -> None:
         sessions_db      = args.sessions_db,
         pad_enabled      = args.enable_pad,
         emotion_enabled  = args.enable_emotion,
+        demographics_enabled = args.culture,
+        demographics_backend = args.culture_backend,
     )
     loop.run(camera_index=args.camera)
 

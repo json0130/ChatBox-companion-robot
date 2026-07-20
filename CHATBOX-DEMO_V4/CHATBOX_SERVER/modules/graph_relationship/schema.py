@@ -221,11 +221,25 @@ class ConversationNode(BaseModel):
     node_type: Literal["conversation"] = "conversation"
 
 
+class CultureNode(BaseModel):
+    """A cultural background label, e.g. 'Korean'. A person is (optionally,
+    manually) linked to ONE via a BelongsToCultureEdge, and the culture carries
+    soft priors over Topics (CulturePriorEdge) — a starting guess about what
+    someone from that background *might* engage with, never a fact about them.
+
+    Deterministic id `culture:<normalized-label>` (same slug as TopicNode) so
+    re-seeding the same culture resolves to the SAME node.
+    """
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    label: str
+    node_type: Literal["culture"] = "culture"
+
+
 # Union of all node types (discriminated on node_type for (de)serialisation)
 AnyNode = Union[
     RobotNode, PersonNode, TopicNode,
     PersonaNode, RoleNode, CapabilityNode, InterestNode,
-    InteractionNode, SessionNode, ConversationNode,
+    InteractionNode, SessionNode, ConversationNode, CultureNode,
 ]
 
 
@@ -401,6 +415,33 @@ class HasConversationEdge(EdgeBase):
 InteractionEdge = Union[HasInteractionEdge, HasSessionEdge, HasConversationEdge]
 
 
+# ---------------------------------------------------------------------------
+# Culture edges  (Person → Culture → Topic)
+# ---------------------------------------------------------------------------
+# A manual, background-hint layer: a person may BELONG to one Culture, and a
+# Culture carries soft PRIORS over Topics. Both SLOW (stable across sessions).
+# Priors are authored/seeded starting guesses — NOT learned per-person state.
+
+class BelongsToCultureEdge(EdgeBase):
+    """person → CultureNode. Manual assignment only (no auto-detection). SLOW,
+    idempotent — one per person-culture pair (replace-on-newer)."""
+    edge_type: Literal["belongs_to_culture"] = "belongs_to_culture"
+    timescale: Timescale = Timescale.SLOW
+
+
+class CulturePriorEdge(EdgeBase):
+    """CultureNode → TopicNode soft prior in [0,1] — how likely someone from this
+    background engages with the topic (a starting guess, not a person's state).
+    SLOW; one per culture-topic pair (upsert replaces the prior value)."""
+    edge_type: Literal["culture_prior"] = "culture_prior"
+    prior: float = Field(..., ge=0.0, le=1.0)
+    timescale: Timescale = Timescale.SLOW
+
+
+CultureEdge = Union[BelongsToCultureEdge, CulturePriorEdge]
+
+
 AnyEdge = Union[
-    RelationshipEdge, PersonAttributeEdge, IdentityEdge, TopicEdge, InteractionEdge
+    RelationshipEdge, PersonAttributeEdge, IdentityEdge, TopicEdge,
+    InteractionEdge, CultureEdge,
 ]

@@ -64,6 +64,9 @@ _TIMESCALE_BY_EDGE_TYPE = {
     "about": "SLOW",
     # Topic <-> Topic semantic relation (Feature-2c) — SLOW.
     "related_topic": "SLOW",
+    # Culture layer (Command A) — SLOW, cross-session.
+    "belongs_to_culture": "SLOW",
+    "culture_prior": "SLOW",
 }
 
 # node_type -> display type (frontend maps this to a shape)
@@ -81,6 +84,8 @@ _NODE_TYPE_DISPLAY = {
     "session": "Session",
     # Live conversation-status node (topics.py update_conversation).
     "conversation": "Conversation",
+    # Culture background node (cultures.py) — Command A.
+    "culture": "Culture",
 }
 
 
@@ -101,9 +106,11 @@ def _node_label(node: dict) -> str:
 
 
 def _edge_weight(edge: dict) -> float:
-    """Single numeric magnitude for thickness/label: weight, else count, else |value|."""
+    """Single numeric magnitude for thickness/label: weight/prior, else count, else |value|."""
     if "weight" in edge and edge["weight"] is not None:
         return float(edge["weight"])
+    if "prior" in edge and edge["prior"] is not None:      # culture_prior edges
+        return float(edge["prior"])
     if "count" in edge and edge["count"] is not None:
         return float(edge["count"])
     if "value" in edge and edge["value"] is not None:

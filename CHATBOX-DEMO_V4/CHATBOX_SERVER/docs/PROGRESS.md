@@ -6,6 +6,61 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## feat: Korean culture layer — dummy priors + prompt injection (Command A)  *(branch `feature/cultural-awareness`)*
+
+**Goal:** a MANUAL cultural-background layer that gives the robot a weak, respectful hint about a person's
+background + a few topics it could tentatively offer — plumbing/prompt only, NO Bayesian inference yet
+(that's the gated Command B, held for approval). No auto-detection from face/name/appearance — assignment
+is manual (CLI) only.
+**Schema (pure):** `CultureNode` (id `culture:<slug>`), `BelongsToCultureEdge` (person→culture, SLOW,
+idempotent), `CulturePriorEdge` (culture→topic, `prior∈[0,1]`, SLOW, upsert). Added to the node/edge unions
+exactly like `ConversationNode`/`RelatedTopicEdge`; old `kg_state.json` loads unchanged (40 nodes/44 edges).
+**Pure helpers (`graph_relationship/cultures.py`):** `ensure_culture`, `assign_culture`, `set_culture_prior`
+(clamped), `culture_priors` (sorted desc), `person_culture`. Imports ONLY schema/store/topics.
+**Seed (app `modules/culture_seed.py`):** seeds ONE culture `Korean` with 12 demo topics + DUMMY priors
+(hand-set placeholders, marked as demo — not research claims) via `resolve_topic`, so topics already in the
+graph (e.g. `hiking`) are REUSED not duplicated. Idempotent. Does NOT assign anyone. CLI:
+`--mode seed-culture-demo` + a standalone `--assign-culture <person> <culture>`.
+**Prompt (`_person_memory._culture_block`):** if the person has a `BelongsToCultureEdge`, append a
+"CULTURAL BACKGROUND" block — a hint line ("starting guess … not a fact about them"), up to 4 highest-prior
+topics EXCLUDING ones they already have an interest in, and tentative-offer phrasing (offer ONE if the
+convo lulls, drop if uninterested, never assert what they like). Appended LAST so specific memories still
+lead (applies the earlier mood-weighting lesson — weak hint, content first).
+**Viz:** `Culture` node → heptagon + legend row; `belongs_to_culture`/`culture_prior` → SLOW colour; edge
+thickness reflects `prior`.
+**Verified (`test_culture_seed.py`, headless, fake/real LLM):** empty seed = 1 culture/12 topics/12 priors,
+save→load→save byte-identical; idempotent; on a COPY of the real KG only `hiking` is reused (topics +11 not
++12, overlap computed from the file); jay→korean prompt has the block with ≤4 offers that exclude jay's
+kpop interest and keep interests above the culture block; purity (pure `graph_relationship/` has no
+LLM/PAD/app imports). Existing `tests_schema.py` still 5/5. Real-LLM smoke (qwen2.5:7b): "korean food?" →
+bibimbap/kimchi politely; "what should we talk about?" → offered a topic as a question, no false assertion.
+**Note:** the LIVE `kg_state.json` was never mutated — all tests used temp copies; seed it explicitly to see
+the culture nodes in the viz.
+**Deferred (gated):** Command B — the read-only Bayesian preference overlay (`preference_model.py`,
+noisy-OR propagation over `related_topic`). Held until this is approved.
+
+---
+
+## feat: cultural-awareness webcam view — FairFace region/age (--culture, display-only)  *(branch `feature/cultural-awareness`)*
+
+**Goal:** estimate a person's regional heritage (East Asian, European, …) + age from the webcam and show it
+on the live view. Display-only this pass — deliberately NOT fed to the KG or the LLM prompt.
+**Model (`modules/face_webcam/demographics.py`):** pluggable `DemographicsDetector` mirroring the
+emotion/face backends; `FairFaceDetector` runs the FairFace ResNet-34 ONNX (7 race + 2 gender + 9 age in one
+pass) via onnxruntime (~15 ms/face CPU, no torch dep). 7 races → friendly regions (East Asian, Southeast
+Asian, European, African, South Asian, Middle Eastern, Latino/Hispanic); age band → coarse stage. Weights
+(~85 MB) cached to `~/.fairface/`, auto-downloaded on first use. A confidence-weighted `_StableVote`
+stabilises + "locks" the estimate (demographics don't change frame-to-frame); standalone CLI + `--image`.
+**Webcam wiring (`webcam_loop.py`):** `--culture` flag; the detection worker runs the model per face
+(throttled every 3rd cycle, last estimate cached between), draws `region conf* / age (stage)` under each
+face box in cyan. Off by default; existing runs unchanged.
+**Verified:** module smoke test (loads, infers, vote locks + re-locks on sustained flip); headless worker
+→ overlay path attaches region/age and `draw_overlay` renders it; `--culture` parses.
+**Note:** region is an uncertain appearance estimate (flickers ~1 s then locks); framed as non-identifying.
+**Didn't / deferred:** no KG persistence, no prompt use, no auto-culture-assignment from it (kept manual).
+
+---
+
 ## refactor: prune dead code + share consolidation core (compact/modular)  *(branch `KG-knowledge-extraction`)*
 
 **Goal:** review the branch and remove unnecessary/redundant code. Net −109 lines, no behaviour change.

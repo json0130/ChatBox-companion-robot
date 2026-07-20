@@ -117,6 +117,16 @@ class SessionStore:
             ).fetchall()
         return [self._turn_row(r) for r in rows]
 
+    def recent_turns(self, person_id: str, limit: int = 5) -> List[dict]:
+        """A person's most recent turns, returned oldest→newest (chronological).
+        Used to feed recent conversation flow into the prompt across sessions."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM turns WHERE person_id = ? ORDER BY id DESC LIMIT ?",
+                (person_id, int(limit)),
+            ).fetchall()
+        return [self._turn_row(r) for r in reversed(rows)]
+
     def turns_for_topic(self, topic_label: str, person_id: Optional[str] = None,
                         limit: int = 20) -> List[dict]:
         """Turns whose detected `topics` include `topic_label` (timeline order).

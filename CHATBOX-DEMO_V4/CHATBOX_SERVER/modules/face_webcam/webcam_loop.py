@@ -1077,10 +1077,9 @@ class WebcamKGLoop:
                 "respectful tone.")
         return "\n".join(lines)
 
-    def _debug_prompt_dump(self, pid: str, msg: str, rag_hits: list,
-                           sys_prompt: str) -> None:
-        """Print the 3 modules that feed the prompt (KG retrieval / embedding RAG /
-        BN overlay) + the final prompt. Gated by --debug-prompt."""
+    def _debug_prompt_dump(self, pid: str, msg: str, rag_hits: list) -> None:
+        """Print ONLY the 3 modules that feed the prompt (KG retrieval / embedding
+        RAG / BN overlay) — not the full prompt. Gated by --debug-prompt."""
         from modules.graph_relationship.topics import (
             person_interests, related_common_ground, normalize_label,
         )
@@ -1120,8 +1119,7 @@ class WebcamKGLoop:
         print("     suggestions: " + (", ".join(
             f"{(self.store.get_node(i).label if self.store.get_node(i) else i)}={p:.3f}"
             for i, p in ranked) or "—"))
-
-        print(f"{bar}\n{sys_prompt}\n{bar}\n")
+        print(bar + "\n")
 
     def _build_system_prompt(self, pid: Optional[str], *,
                              rag_hits: Optional[list] = None) -> str:
@@ -1185,6 +1183,19 @@ class WebcamKGLoop:
             if hit_lines:
                 who.append("Relevant things they've told you before:\n"
                            + "\n".join(hit_lines))
+            # Recent conversation flow: the last few exchanges (persisted, so flow
+            # carries across sessions) — oldest → newest, leading up to now.
+            ss = getattr(self, "_session_store", None)
+            if ss is not None:
+                convo = []
+                for t in ss.recent_turns(pid, 5):
+                    if t.get("child"):
+                        convo.append(f"  them: {t['child']}")
+                    if t.get("reply"):
+                        convo.append(f"  you:  {t['reply']}")
+                if convo:
+                    who.append("Recent conversation so far (oldest → newest):\n"
+                               + "\n".join(convo))
             blocks.append("\n".join(who))
         else:
             blocks.append("━━━ WHO YOU'RE TALKING TO ━━━\n"
@@ -1602,7 +1613,7 @@ class WebcamKGLoop:
                                             last_person_id, rag_hits=rag_hits)
                                     if self._debug_prompt and last_person_id:
                                         self._debug_prompt_dump(
-                                            last_person_id, msg, rag_hits, sys_prompt)
+                                            last_person_id, msg, rag_hits)
                                     raw_reply = self.llm.respond(sys_prompt, msg, history=hist)
                                     tag, verbal = _parse_llm_response(raw_reply)
                                     last_verbal = verbal

@@ -6,6 +6,42 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## feat: Bayesian preference overlay — recommend topics on read (Command B)  *(branch `feature/cultural-awareness`)*
+
+**Goal:** rank topics the robot could tentatively bring up, blending the person's CULTURE priors (base
+rates) with OBSERVED interests (strong evidence) and soft propagation over `related_topic` links — a simple
+noisy-OR, no external BN library.
+**Module (`modules/preference_model.py`, app layer):** `rank_suggestions(store, person_id, k=3,
+floor=0.35) -> [(node_id, posterior)]`. Compiled ON READ, mirrors the `_tier_from_edges` pattern:
+READ-ONLY (zero writes/creates), no live embeddings (consumes only STORED `related_topic` weights), no LLM,
+no PAD. `graph_relationship/` is untouched (imports its pure reads only).
+**Algorithm:** (1) candidate set = culture-prior topics ∪ the person's own topics ∪ their one-hop
+`related_topic` neighbours; (2) init unobserved = culture prior (default 0.30); (3) clamp observed
+(interest/about) = 0.90; (4) 2 rounds noisy-OR `p[b]=max(p[b], p[a]·0.8·w)`, observed stay clamped;
+(5) top-k UNOBSERVED with posterior ≥ floor, tie-break posterior→prior→lexicographic id. Dislike/negative
+evidence explicitly OUT OF SCOPE (noted in a comment as future work).
+**Namespace join (post-redesign):** culture priors live on `ck:` CultureTopic nodes, DISTINCT from a
+person's `topic:` nodes — so the model works in a unified SLUG space (a culture "kimchi" prior and a person
+"kimchi" topic are the same concept, joined by normalized label). This is the label-join flagged when the
+culture layer became ChatBox-owned.
+**Prompt (`_culture_block`):** the raw-prior top-4 list is replaced by `rank_suggestions(k=4)` output;
+observed exclusion now comes for free (step 5). All other wording unchanged.
+**Pre-step:** `--mode consolidate` still creates `related_topic` links among PERSON topics (culture topics
+are a different node_type, so consolidation skips them — verified it runs cleanly and leaves the 12 culture
+topics untouched). The overlay degrades gracefully to prior-only when no related links exist.
+**Verified (`test_preference_model.py`, 6 synthetic checks):** prior-only == culture priors desc;
+propagation raises a linked topic (kpop 0.30→0.468 via kdrama·0.8·0.65) while an unlinked one is unchanged;
+observed topic never suggested; READ-ONLY (node/edge counts + save bytes identical across 3 calls);
+deterministic; graceful degradation when all `related_topic` edges are deleted. `test_culture_seed.py` +
+`tests_schema.py` still green. Real-LLM pipeline (qwen2.5:7b): fresh person tagged Korean → "i've been
+watching a lot of kdramas" → extraction adds the `kdramas` interest → "what should we talk about?" → robot
+offers Korean dramas AS A QUESTION, no false assertion. (Minor: extraction produced plural "kdramas" vs the
+culture "kdrama" slug — a labelling variance, harmless.)
+**Deferred (future):** negative/polarity evidence; confidence-weighted soft evidence; cross-namespace
+culture↔person `related_topic` links (would let a jazz-lover get kpop *propagated*, not just base-rate).
+
+---
+
 ## refactor: culture as ChatBox's prior knowledge — separate nodes, HJ decoupled  *(branch `feature/cultural-awareness`)*
 
 **User feedback on the first culture cut:** the viz showed HJ *near* Korean even though HJ never discussed

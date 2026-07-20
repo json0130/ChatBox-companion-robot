@@ -30,7 +30,10 @@ from modules.graph_relationship.cultures import (
 )
 from modules.culture_seed import seed_korean_demo, assign_person_culture, _KOREAN_DEMO
 
-_REAL_KG = "kg_state.json"
+# Prefer the culture-FREE pre-culture backup as the "real KG" fixture, so these
+# tests are independent of whether the live kg_state.json has been seeded.
+_REAL_KG = ("kg_state.pre-culture.bak" if os.path.exists("kg_state.pre-culture.bak")
+            else "kg_state.json")
 _ROBOT = "chatbox"
 
 

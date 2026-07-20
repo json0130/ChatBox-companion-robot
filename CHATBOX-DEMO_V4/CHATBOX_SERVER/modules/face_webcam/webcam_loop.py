@@ -1041,8 +1041,8 @@ class WebcamKGLoop:
         person does NOT already have an interest in (those are in memory already).
         Applies the mood-weighting lesson: tentative, content-first, never asserts
         what they like. Culture assignment is manual — never auto-detected."""
-        from modules.graph_relationship.cultures import person_culture, culture_priors
-        from modules.graph_relationship.topics import person_interests, normalize_label
+        from modules.graph_relationship.cultures import person_culture
+        from modules.preference_model import rank_suggestions
         cid = person_culture(self.store, pid)
         if not cid:
             return ""
@@ -1050,19 +1050,15 @@ class WebcamKGLoop:
         if cnode is None:
             return ""
 
-        # Topics the person already engages with — exclude by SLUG so we don't
-        # re-offer something already in the memory block. Culture topics are their
-        # own nodes (ck:…), so compare on normalized label, not node id.
-        own_slugs = {normalize_label(t.label)
-                     for _interest, topics in person_interests(self.store, pid)
-                     for t in topics}
+        # Bayesian preference overlay (Command B): rank what to bring up by
+        # posterior (culture priors + propagation from what they already like over
+        # related_topic links). rank_suggestions already returns UNOBSERVED topics
+        # only, so observed interests are excluded automatically. Read-only.
         offers: list[str] = []
-        for _tid, label, _prior in culture_priors(self.store, cid):  # prior desc
-            if normalize_label(label) in own_slugs:
-                continue
-            offers.append(label)
-            if len(offers) >= 4:
-                break
+        for node_id, _post in rank_suggestions(self.store, pid, k=4):
+            node = self.store.get_node(node_id)
+            if node is not None:
+                offers.append(node.label)
 
         lines = [
             "━━━ CULTURAL BACKGROUND ━━━",

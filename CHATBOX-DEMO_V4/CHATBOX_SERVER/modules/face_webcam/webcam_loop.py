@@ -756,6 +756,7 @@ class WebcamKGLoop:
         emotion_enabled: bool  = False,
         demographics_enabled: bool = False,
         demographics_backend: str  = 'fairface',
+        debug_prompt:    bool  = False,
     ):
         self.robot_id      = robot_id
         self.faces_path    = faces_path
@@ -804,6 +805,8 @@ class WebcamKGLoop:
         # Demographics (region/heritage + age) — display only, no KG/prompt use.
         self._demographics_enabled = demographics_enabled
         self._demographics_backend = demographics_backend
+        # Print the 3 prompt-feeding modules (KG / RAG / BN) at each chat turn.
+        self._debug_prompt = debug_prompt
         self._matcher          = matcher
         self._embed_fn         = embed_fn   # for on-demand topic consolidation (Feature 2)
         # Conversation transcripts live in SQLite (not the graph). The graph keeps
@@ -1073,6 +1076,52 @@ class WebcamKGLoop:
                 "interest. Never assert what they like — ask. Keep a polite, warm, "
                 "respectful tone.")
         return "\n".join(lines)
+
+    def _debug_prompt_dump(self, pid: str, msg: str, rag_hits: list,
+                           sys_prompt: str) -> None:
+        """Print the 3 modules that feed the prompt (KG retrieval / embedding RAG /
+        BN overlay) + the final prompt. Gated by --debug-prompt."""
+        from modules.graph_relationship.topics import (
+            person_interests, related_common_ground, normalize_label,
+        )
+        from modules.graph_relationship.cultures import person_culture, culture_priors
+        from modules.preference_model import rank_suggestions
+        bar = "═" * 74
+        print(f"\n{bar}\n PROMPT DEBUG — {pid}   msg={msg!r}\n{bar}")
+
+        # 1 — KG retrieval
+        print("[1] KG RETRIEVAL")
+        for interest, topics in person_interests(self.store, pid):
+            print(f"     {interest.label}: {', '.join(t.label for t in topics) or '—'}")
+        cg = related_common_ground(self.store, pid, self.robot_id)
+        print(f"     common ground: {cg['direct'] or '—'}  "
+              f"bridges: {[f'{a}~{b}' for a,b in cg['bridges']] or '—'}")
+        cid = person_culture(self.store, pid)
+        print(f"     culture tag: {cid or '— (untagged)'}")
+
+        # 2 — embedding RAG
+        print("[2] EMBEDDING RAG (top relevant past turns)")
+        if rag_hits:
+            for h in rag_hits:
+                print(f"     [{h.get('score',0):.3f}] ({h.get('ts','')[:10]}) "
+                      f"{h.get('child','')!r}")
+        else:
+            print("     (none retrieved / embeddings off)")
+
+        # 3 — BN overlay
+        print("[3] BN OVERLAY (rank_suggestions)")
+        if cid:
+            pri = ", ".join(f"{l}={p:.2f}" for _c, l, p in culture_priors(self.store, cid)[:6])
+            print(f"     culture priors: {pri} …")
+        obs = sorted({normalize_label(t.label)
+                      for _i, ts in person_interests(self.store, pid) for t in ts})
+        print(f"     observed(→0.90): {obs or '—'}")
+        ranked = rank_suggestions(self.store, pid, k=6)
+        print("     suggestions: " + (", ".join(
+            f"{(self.store.get_node(i).label if self.store.get_node(i) else i)}={p:.3f}"
+            for i, p in ranked) or "—"))
+
+        print(f"{bar}\n{sys_prompt}\n{bar}\n")
 
     def _build_system_prompt(self, pid: Optional[str], *,
                              rag_hits: Optional[list] = None) -> str:
@@ -1551,6 +1600,9 @@ class WebcamKGLoop:
                                     else:
                                         sys_prompt = self._build_system_prompt(
                                             last_person_id, rag_hits=rag_hits)
+                                    if self._debug_prompt and last_person_id:
+                                        self._debug_prompt_dump(
+                                            last_person_id, msg, rag_hits, sys_prompt)
                                     raw_reply = self.llm.respond(sys_prompt, msg, history=hist)
                                     tag, verbal = _parse_llm_response(raw_reply)
                                     last_verbal = verbal
@@ -1903,6 +1955,9 @@ def main() -> None:
                         "on the webcam view. Display-only — not fed to the KG/prompt.")
     p.add_argument("--culture-backend", default="fairface", choices=["fairface"],
                    help="Demographics model backend (default: fairface)")
+    p.add_argument("--debug-prompt", action="store_true",
+                   help="At each chat turn, print the 3 prompt-feeding modules "
+                        "(KG retrieval / embedding RAG / BN overlay) + the final prompt")
     # ── Feature 2: topic consolidation (--mode consolidate) ────────────────────
     p.add_argument("--merge-floor", type=float, default=0.86,
                    help="Min cosine similarity to MERGE two near-duplicate topics "
@@ -1979,6 +2034,7 @@ def main() -> None:
         emotion_enabled  = args.enable_emotion,
         demographics_enabled = args.culture,
         demographics_backend = args.culture_backend,
+        debug_prompt         = args.debug_prompt,
     )
     loop.run(camera_index=args.camera)
 

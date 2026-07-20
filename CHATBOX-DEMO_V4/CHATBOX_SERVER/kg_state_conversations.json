@@ -1,0 +1,20 @@
+{
+  "jay": [
+    {
+      "turn": 1,
+      "ts": "2026-07-02T03:34:52.716992+00:00",
+      "robot": "chatbox",
+      "emotion": "neutral",
+      "child": "hello",
+      "reply": "[SMILING] Hello there! It's nice to meet you. How are you feeling today?"
+    },
+    {
+      "turn": 2,
+      "ts": "2026-07-02T03:36:16.759401+00:00",
+      "robot": "chatbox",
+      "emotion": "neutral",
+      "child": "how are you?",
+      "reply": "[I'M FINE, THANK YOU FOR ASKING!] How can I help you today?"
+    }
+  ]
+}

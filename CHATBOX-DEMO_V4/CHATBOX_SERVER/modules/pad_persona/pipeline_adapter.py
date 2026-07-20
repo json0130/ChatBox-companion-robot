@@ -86,6 +86,9 @@ class PADPipelineAdapter:
         arousal: float,
         relationship_tier: str,
         memory_context: str = "",
+        rapport: float = 0.0,
+        trust: float = 0.0,
+        interaction_count: int = 0,
     ) -> dict:
         """Run the full PAD update for one conversation turn.
 
@@ -95,6 +98,9 @@ class PADPipelineAdapter:
             arousal:           Current user arousal, [-1, 1].
             relationship_tier: "close" | "family" | "known" | "visitor" | "unknown"
             memory_context:    RAG-retrieved snippets; empty string if none.
+            rapport:           KG rapport score [0, 1] for prompt injection.
+            trust:             KG trust score [0, 1] for prompt injection.
+            interaction_count: Number of prior KG interactions for prompt injection.
 
         Returns a dict with keys:
             system_prompt  (str | None) — pass to LLM; None → use existing default
@@ -113,6 +119,9 @@ class PADPipelineAdapter:
             descriptors=descriptors,
             relationship_tier=relationship_tier,
             memory_context=memory_context,
+            rapport=rapport,
+            trust=trust,
+            interaction_count=interaction_count,
         )
 
         return {

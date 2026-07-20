@@ -19,7 +19,7 @@ hsemotion      EfficientNet-B0 ONNX — AffectNet+VGAF trained, ~5 ms/frame CPU.
 hsemotion-b2   EfficientNet-B2 ONNX — same dataset, higher capacity, ~12 ms/frame.
 
 efficientnet   Original HQRAF EfficientNet-B0 via PyTorch + Haar cascade face detect.
-               Requires EmotionProcessor from Modules/emotion_processor.py.
+               Requires EmotionProcessor from modules/emotion_processor.py.
                Forces device='cpu' to avoid RTX 5060 sm_120 / torch 2.2.2 conflict.
 """
 
@@ -37,6 +37,17 @@ import numpy as np
 # ── Label normalisation ───────────────────────────────────────────────────────
 
 STANDARD_LABELS = ['angry', 'disgust', 'fear', 'happy', 'neutral', 'sad', 'surprise']
+
+# Russell (1980) circumplex — mirrors kg_bridge._EMOTION_VA + contempt/disgust alias
+_VA_TABLE: dict[str, tuple[float, float]] = {
+    "angry":    (-0.6,  0.7),
+    "disgust":  (-0.6,  0.3),
+    "fear":     (-0.5,  0.8),
+    "happy":    ( 0.8,  0.6),
+    "neutral":  ( 0.0,  0.0),
+    "sad":      (-0.7, -0.4),
+    "surprise": ( 0.1,  0.8),
+}
 
 _NORM = {
     # hsemotion (capitalised)
@@ -96,7 +107,8 @@ class EmotionDetector:
     def __init__(self, smooth_window: int = 5):
         self._smoother = _Smoother(smooth_window)
 
-    def _infer(self, face_bgr: np.ndarray) -> tuple[str, float]:
+    def _infer(self, face_bgr: np.ndarray) -> tuple[str, float, float, float]:
+        """Return (label, confidence_0_to_100, valence, arousal)."""
         raise NotImplementedError
 
     def detect(
@@ -104,7 +116,7 @@ class EmotionDetector:
         frame_bgr:  np.ndarray,
         box:        Optional[tuple] = None,
         smooth:     bool = True,
-    ) -> tuple[str, float]:
+    ) -> tuple[str, float, float, float]:
         """
         Detect emotion.
 
@@ -112,28 +124,29 @@ class EmotionDetector:
             frame_bgr : Full BGR webcam frame (or a face crop if box is None).
             box       : (x1, y1, x2, y2) face bounding box in frame_bgr.
                         If None, treats frame_bgr as the face crop directly.
-            smooth    : Apply 5-frame sliding-window smoothing.
+            smooth    : Apply 5-frame sliding-window smoothing (label + conf only).
 
         Returns:
-            (emotion_label, confidence_0_to_100)
+            (emotion_label, confidence_0_to_100, valence, arousal)
+            v/a are from the latest raw frame; label/conf may be window-smoothed.
         """
         if box is not None:
             x1, y1, x2, y2 = (max(0, int(v)) for v in box)
             face = frame_bgr[y1:y2, x1:x2]
             if face.size == 0:
-                return 'neutral', 0.0
+                return 'neutral', 0.0, 0.0, 0.0
         else:
             face = frame_bgr
 
         try:
-            label, conf = self._infer(face)
+            label, conf, v, a = self._infer(face)
         except Exception:
-            return 'neutral', 0.0
+            return 'neutral', 0.0, 0.0, 0.0
 
         label = _norm(label)
         if smooth:
             label, conf = self._smoother.update(label, conf)
-        return label, conf
+        return label, conf, v, a
 
     # ── Factory ───────────────────────────────────────────────────────────────
 
@@ -203,12 +216,18 @@ class HSEmotionDetector(EmotionDetector):
         self._labels     = self._recognizer.idx_to_class
         print(f"[EmotionDetector] HSEmotion ready  labels={list(self._labels.values())}")
 
-    def _infer(self, face_bgr: np.ndarray) -> tuple[str, float]:
-        # Model expects RGB
+    def _infer(self, face_bgr: np.ndarray) -> tuple[str, float, float, float]:
         face_rgb = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2RGB)
         label, scores = self._recognizer.predict_emotions(face_rgb, logits=False)
         conf = float(np.max(scores)) * 100.0
-        return label, conf
+        # Weighted-blend V/A from full softmax distribution (all 8 class probs)
+        v, a = 0.0, 0.0
+        for i, score in enumerate(scores):
+            lbl = _norm(self._labels[i])
+            lv, la = _VA_TABLE.get(lbl, (0.0, 0.0))
+            v += score * lv
+            a += score * la
+        return label, conf, float(v), float(a)
 
     @property
     def all_labels(self) -> list[str]:
@@ -239,9 +258,9 @@ class EfficientNetDetector(EmotionDetector):
             sys.path.insert(0, root)
 
         try:
-            from Modules.emotion_processor import EmotionProcessor
+            from modules.emotion_processor import EmotionProcessor
         except ImportError:
-            raise ImportError("Modules/emotion_processor.py not found")
+            raise ImportError("modules/emotion_processor.py not found")
 
         print("[EmotionDetector] Loading EfficientNet (original HQRAF) …")
         self._proc = EmotionProcessor(device="cpu")
@@ -251,9 +270,10 @@ class EfficientNetDetector(EmotionDetector):
         # Keep Haar cascade for face detection inside the crop
         self._haar_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
 
-    def _infer(self, face_bgr: np.ndarray) -> tuple[str, float]:
+    def _infer(self, face_bgr: np.ndarray) -> tuple[str, float, float, float]:
         emotion, conf, _ = self._proc.process_emotion_detection_realtime(face_bgr)
-        return emotion, float(conf)
+        v, a = _VA_TABLE.get(_norm(emotion), (0.0, 0.0))
+        return emotion, float(conf), v, a
 
 
 # ─────────────────────────────────────────────────────────────────────────────

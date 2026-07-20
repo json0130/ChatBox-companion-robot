@@ -14,7 +14,6 @@ class OceanTraits:
 class PersonaConfig:
     robot_id: str
     ocean: OceanTraits
-    relationship_tier: str = "unknown"
 
 
 @dataclass
@@ -24,14 +23,18 @@ class PADWeights:
     alpha_decay: float = 0.15  # per-turn decay back toward baseline
 
 
-# ChatBox: warm, outgoing, highly agreeable companion (from client_config.json)
+# OCEAN values on [0,1] scale — converted from the design table (−1→+1) via (v+1)/2.
+# Design table (−1→+1):  CHATBOX  O=−0.3  C=+0.2  E=−0.5  A=+0.6  N=−0.5
+#                         ELLEBOT  O=+0.4  C=+0.5  E=+0.6  A=+0.6  N=−0.2
+
+# ChatBox: calm home companion — low extraversion, highly agreeable, low neuroticism
 CHATBOX_PERSONA = PersonaConfig(
     robot_id="chatbox",
-    ocean=OceanTraits(o=0.6, c=0.7, e=0.8, agreeableness=0.9, n=0.3),
+    ocean=OceanTraits(o=0.35, c=0.60, e=0.25, agreeableness=0.80, n=0.25),
 )
 
-# ElleBot: calm, conscientious, moderately extraverted companion
+# ElleBot: outgoing mobile helper — high extraversion, high conscientiousness
 ELLEBOT_PERSONA = PersonaConfig(
     robot_id="ellebot",
-    ocean=OceanTraits(o=0.75, c=0.85, e=0.55, agreeableness=0.75, n=0.15),
+    ocean=OceanTraits(o=0.70, c=0.75, e=0.80, agreeableness=0.80, n=0.40),
 )

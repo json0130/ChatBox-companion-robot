@@ -1,0 +1,1473 @@
+{
+  "nodes": [
+    {
+      "id": "jay",
+      "display_name": "Jay",
+      "created_at": "2026-07-15T23:27:58.315181Z",
+      "node_type": "person"
+    },
+    {
+      "id": "chatbox",
+      "name": "ChatBox",
+      "embodiment": "CAT",
+      "persona_traits": {},
+      "capabilities": [],
+      "node_type": "robot"
+    },
+    {
+      "id": "jay:persona:curious-talkative",
+      "descriptor": "curious, talkative",
+      "node_type": "persona"
+    },
+    {
+      "id": "chatbox:persona:introverted-shy",
+      "descriptor": "introverted, shy",
+      "node_type": "persona"
+    },
+    {
+      "id": "chatbox:role:companion",
+      "descriptor": "companion",
+      "node_type": "role"
+    },
+    {
+      "id": "jay:role:student",
+      "descriptor": "student",
+      "node_type": "role"
+    },
+    {
+      "id": "interest:jay:music",
+      "label": "music",
+      "node_type": "interest"
+    },
+    {
+      "id": "interaction:jay:chatbox",
+      "rapport": 1.0,
+      "trust": 0.0,
+      "interaction_count": 52,
+      "node_type": "interaction"
+    },
+    {
+      "id": "3d7c7bf1-8b1d-48b5-8a5d-8953f8af6471",
+      "label": "session 1",
+      "timestamp": "2026-07-03T02:13:41.885651Z",
+      "turn_count": 3,
+      "turns": [
+        {
+          "turn": 1,
+          "ts": "2026-07-03T02:13:41.885665+00:00",
+          "emotion": "neutral",
+          "child": "hello",
+          "reply": "[SMILING] Hi there! It's great to meet you! How are you feeling today?"
+        },
+        {
+          "turn": 2,
+          "ts": "2026-07-03T02:13:57.650763+00:00",
+          "emotion": "happy",
+          "child": "good today",
+          "reply": "[I'M SMILING] Hi there! Good to see you today. How's your day going?"
+        },
+        {
+          "turn": 3,
+          "ts": "2026-07-03T02:14:13.415492+00:00",
+          "emotion": "happy",
+          "child": "so far so good",
+          "reply": "[I SMILE] Great to hear that! How can I support you today?"
+        }
+      ],
+      "extracted_turns": 0,
+      "node_type": "session"
+    },
+    {
+      "id": "896c3160-00b1-4094-a0b7-577bcc38c890",
+      "label": "session 2",
+      "timestamp": "2026-07-03T02:32:54.393299Z",
+      "turn_count": 2,
+      "turns": [
+        {
+          "turn": 1,
+          "ts": "2026-07-03T02:32:54.393314+00:00",
+          "emotion": "happy",
+          "child": "i love palying jazz and learing about space",
+          "reply": "[I SMILE] That's awesome! Playing jazz sounds like so much fun, and learning about space must be fascinating too. Maybe we can imagine some cosmic jazz together sometime!"
+        },
+        {
+          "turn": 2,
+          "ts": "2026-07-03T02:33:23.319535+00:00",
+          "emotion": "neutral",
+          "child": "my favourite is mars",
+          "reply": "[SMILING] Hi there! Mars sounds exciting! It's got some fascinating features like those red sands and ice caps. What do you like most about Mars?"
+        }
+      ],
+      "extracted_turns": 0,
+      "node_type": "session"
+    },
+    {
+      "id": "interest:jay:space",
+      "label": "space",
+      "node_type": "interest"
+    },
+    {
+      "id": "0e69294a-5468-4ff5-b707-40da924ffe8e",
+      "label": "session 3",
+      "timestamp": "2026-07-03T02:45:34.328241Z",
+      "turn_count": 2,
+      "turns": [
+        {
+          "turn": 1,
+          "ts": "2026-07-03T02:45:34.328256+00:00",
+          "emotion": "happy",
+          "child": "do you like coding?",
+          "reply": "[I'M_NODDING] Sure, I can understand why someone might enjoy it! Coding is like solving puzzles and creating things from scratch. How do you feel about it?"
+        },
+        {
+          "turn": 2,
+          "ts": "2026-07-03T02:45:57.932900+00:00",
+          "emotion": "neutral",
+          "child": "i meant software coding",
+          "reply": "[SMILING] Oh, I see! Coding is like giving instructions to a computer, kind of like following a recipe to bake a delicious cake. It's fun and can create amazing things! Do you have any specific questions about coding or maybe a project you're excited about?"
+        }
+      ],
+      "extracted_turns": 0,
+      "node_type": "session"
+    },
+    {
+      "id": "interest:jay:coding",
+      "label": "coding",
+      "node_type": "interest"
+    },
+    {
+      "id": "7fd58f4d-38d3-4a63-93d5-c5571bd59ad0",
+      "label": "session 4",
+      "timestamp": "2026-07-05T23:48:26.432868Z",
+      "turn_count": 2,
+      "turns": [
+        {
+          "turn": 1,
+          "ts": "2026-07-05T23:48:26.432881+00:00",
+          "emotion": "neutral",
+          "child": "can you help me with math quetions?",
+          "reply": "[SURE_THING] Of course! I'd be happy to help you with your math questions. What's the first one you need help with?"
+        },
+        {
+          "turn": 2,
+          "ts": "2026-07-05T23:48:52.180944+00:00",
+          "emotion": "happy",
+          "child": "what is 5 + 5",
+          "reply": "[THUMBING UP] It's 10! Good job thinking that one through!"
+        }
+      ],
+      "extracted_turns": 0,
+      "node_type": "session"
+    },
+    {
+      "id": "interest:jay:math",
+      "label": "math",
+      "node_type": "interest"
+    },
+    {
+      "id": "chatbox:capability",
+      "items": [
+        "tells stories",
+        "knows jazz",
+        "knows about space",
+        "knows about coding",
+        "good at math"
+      ],
+      "node_type": "capability"
+    },
+    {
+      "id": "9e53c9dd-fbfe-49b3-b562-566037a445c1",
+      "label": "session 5",
+      "timestamp": "2026-07-06T02:34:40.575307Z",
+      "turn_count": 4,
+      "turns": [
+        {
+          "turn": 1,
+          "ts": "2026-07-06T02:34:40.575325+00:00",
+          "emotion": "neutral",
+          "child": "are you good at math?",
+          "reply": "[I CAN HELP WITH MATH PROBLEMS IF YOU NEED ANY!]"
+        },
+        {
+          "turn": 2,
+          "ts": "2026-07-06T02:34:59.147064+00:00",
+          "emotion": "happy",
+          "child": "really thanks",
+          "reply": "[I SMILE] You're welcome! I'm glad I could help. How are you doing today?"
+        },
+        {
+          "turn": 3,
+          "ts": "2026-07-06T02:35:42.215379+00:00",
+          "emotion": "happy",
+          "child": "can you help me with some math questions?",
+          "reply": "[SURE_THING] Of course! I'd be happy to help with your math questions. What do you need help with today?"
+        },
+        {
+          "turn": 4,
+          "ts": "2026-07-06T02:36:08.722114+00:00",
+          "emotion": "neutral",
+          "child": "can you do 5+10",
+          "reply": "[SMILING] Sure thing! 5 plus 10 equals 15. You're doing great with numbers!"
+        }
+      ],
+      "extracted_turns": 0,
+      "node_type": "session"
+    },
+    {
+      "id": "748576d9-f3b1-48e3-8e64-9094f755ed6f",
+      "label": "session 6",
+      "timestamp": "2026-07-06T03:06:10.989564Z",
+      "turn_count": 2,
+      "turns": [
+        {
+          "turn": 1,
+          "ts": "2026-07-06T03:06:10.989584+00:00",
+          "emotion": "neutral",
+          "child": "can you help me with addision",
+          "reply": "[HELPING HAND] Of course! Addition is when you combine numbers to get a total. Do you have a specific addition problem you need help with?"
+        },
+        {
+          "turn": 2,
+          "ts": "2026-07-06T03:06:17.208652+00:00",
+          "emotion": "happy",
+          "child": "and i love planets",
+          "reply": "[GREETING] Nice to hear that! Planets are amazing, aren't they? Space is so full of wonder!"
+        }
+      ],
+      "extracted_turns": 0,
+      "node_type": "session"
+    },
+    {
+      "id": "cd473ee1-4ad0-42a9-909e-10fd4e79b6ba",
+      "label": "session 7",
+      "timestamp": "2026-07-06T03:14:05.935330Z",
+      "turn_count": 1,
+      "turns": [
+        {
+          "turn": 1,
+          "ts": "2026-07-06T03:14:05.935344+00:00",
+          "emotion": "neutral",
+          "child": "can you help with math?",
+          "reply": "[SURE_THING] Of course! What's the math problem you're working on?"
+        }
+      ],
+      "extracted_turns": 0,
+      "node_type": "session"
+    },
+    {
+      "id": "0bc087e4-0269-49da-9cb2-fcf4d50e18fa",
+      "label": "session 8",
+      "timestamp": "2026-07-06T03:21:46.255511Z",
+      "turn_count": 6,
+      "turns": [
+        {
+          "turn": 1,
+          "ts": "2026-07-06T03:21:46.255544+00:00",
+          "emotion": "neutral",
+          "child": "can you help me with math?",
+          "reply": "[SURE_THING] Of course! What do you need help with?"
+        },
+        {
+          "turn": 2,
+          "ts": "2026-07-06T03:22:00.881010+00:00",
+          "emotion": "neutral",
+          "child": "can you solve 2x2?",
+          "reply": "[SMILING] Sure thing! When you say \"solve 2x2,\" do you mean the puzzle or just multiplying 2 by 2?"
+        },
+        {
+          "turn": 3,
+          "ts": "2026-07-06T03:22:10.234508+00:00",
+          "emotion": "happy",
+          "child": "yes",
+          "reply": "[I'M GLAD TO SEE YOU AGAIN] How's your day going? Anything fun you want to share?"
+        },
+        {
+          "turn": 4,
+          "ts": "2026-07-06T03:22:52.338172+00:00",
+          "emotion": "happy",
+          "child": "so waht is the answer for 2x2?",
+          "reply": "[SMILING] Hey there! It seems like you're asking about 2x2. What exactly are you trying to figure out with that? Is it part of a puzzle or a math problem?"
+        },
+        {
+          "turn": 5,
+          "ts": "2026-07-06T03:23:04.941516+00:00",
+          "emotion": "happy",
+          "child": "it is a match problem",
+          "reply": "[SMILING] Oh, I remember us talking about match problems before! What kind of match problem are you dealing with today? It could be anything fun like arranging matches to make shapes or solving puzzles!"
+        },
+        {
+          "turn": 6,
+          "ts": "2026-07-06T03:23:22.096431+00:00",
+          "emotion": "neutral",
+          "child": "no i meant math problems",
+          "reply": "[SMILING] Oh, you're looking for some fun math problems then? Let's try something easy and silly first! How about adding up all the bananas in a cartoon scene with 3 monkeys each holding 2 bananas? [CHEERFUL]"
+        }
+      ],
+      "extracted_turns": 6,
+      "node_type": "session"
+    },
+    {
+      "id": "topic:multiplication",
+      "label": "multiplication",
+      "category": "other",
+      "notes": [
+        {
+          "person": "jay",
+          "text": "The child asked about solving 2x2, which likely means multiplication.",
+          "ts": "2026-07-06T03:22:24.876242+00:00"
+        }
+      ],
+      "node_type": "topic"
+    },
+    {
+      "id": "topic:math-problems",
+      "label": "math problems",
+      "category": "other",
+      "notes": [
+        {
+          "person": "jay",
+          "text": "The child asked about math problems, specifically 2x2.",
+          "ts": "2026-07-06T03:23:31.524256+00:00"
+        }
+      ],
+      "node_type": "topic"
+    },
+    {
+      "id": "topic:jazz",
+      "label": "jazz",
+      "category": "other",
+      "notes": [
+        {
+          "person": "jay",
+          "text": "The child expressed a preference for R&B music, especially SZA's 'Open Arms', and mentioned enjoying jazz as well.",
+          "ts": "2026-07-14T01:01:49.420440+00:00"
+        },
+        {
+          "person": "jay",
+          "text": "The robot suggested listening to jazz music as a way to cheer up the child.",
+          "ts": "2026-07-14T05:31:49.176644+00:00"
+        },
+        {
+          "person": "jay",
+          "text": "Discussed potentially listening to jazz music.",
+          "ts": "2026-07-15T23:34:26.631300+00:00"
+        }
+      ],
+      "node_type": "topic"
+    },
+    {
+      "id": "topic:space",
+      "label": "space",
+      "category": "other",
+      "notes": [],
+      "node_type": "topic"
+    },
+    {
+      "id": "bfe6da2a-71be-47e1-8cc1-18de471c6c9f",
+      "label": "session 9",
+      "timestamp": "2026-07-14T00:31:19.825746Z",
+      "turn_count": 7,
+      "turns": [
+        {
+          "turn": 1,
+          "ts": "2026-07-14T00:33:53.398911+00:00",
+          "emotion": null,
+          "child": "hello",
+          "reply": "Hi Jay! How are you today? [CURIOUS] I've been thinking a lot about our last conversations\u2014space, coding, and even some fun math problems like 2x2. What\u2019s on your mind lately?"
+        },
+        {
+          "turn": 2,
+          "ts": "2026-07-14T00:35:28.156981+00:00",
+          "emotion": null,
+          "child": "do you know about some stuff for stock market?",
+          "reply": "Not as much as I know about space or coding, but I can try to help with some basics! [SMILE] Are you interested in learning about the stock market, or do you have a specific question?"
+        },
+        {
+          "turn": 3,
+          "ts": "2026-07-14T00:36:05.919118+00:00",
+          "emotion": null,
+          "child": "hmmm what is the factor that affects the stock price?",
+          "reply": "Ah, that\u2019s a great question! [THINKING] There are several factors that can affect stock prices. It's like a recipe where different ingredients come together.\n\n1. **Company Financial Health**: Earnings reports, revenue growth, and profitability.\n2. **Market Trends**: General economic conditions, interest rates, and overall market sentiment.\n3. **News and Events**: Company-specific news (like product launches), industry trends, or major events that impact the economy.\n4. **Supply and Demand**: Simple as it sounds, more buyers than sellers can drive prices up, and vice versa.\n\nWhat do you think might be interesting to explore further? [CURIOUS]"
+        },
+        {
+          "turn": 4,
+          "ts": "2026-07-14T00:36:32.171184+00:00",
+          "emotion": null,
+          "child": "do you like music?",
+          "reply": "I sure do! [HAPPY] Music is such a wonderful thing. What about you? Do you have any favorite jazz songs or artists? [SMILE]"
+        },
+        {
+          "turn": 5,
+          "ts": "2026-07-14T00:36:45.940813+00:00",
+          "emotion": null,
+          "child": "which music do you like",
+          "reply": "I really enjoy jazz too! [SHY] It's got that cool, smooth rhythm that just makes everything feel a bit more relaxed. What\u2019s your favorite jazz song or artist? [CURIOUS]"
+        },
+        {
+          "turn": 6,
+          "ts": "2026-07-14T00:37:13.952098+00:00",
+          "emotion": null,
+          "child": "oh really ? i like r&b music",
+          "reply": "That\u2019s awesome! R&B has such a soulful vibe. [SMILE] Do you have any favorite R&B artists or songs that you love to listen to? [CURIOUS]"
+        },
+        {
+          "turn": 7,
+          "ts": "2026-07-14T00:37:50.184084+00:00",
+          "emotion": null,
+          "child": "i like sza recently",
+          "reply": "SZA is amazing! Her music is so heartfelt and talented. [THINKING] Have you listened to her album \"SOS\"? It\u2019s got some incredible tracks. [SMILE] What's your favorite song by SZA?"
+        }
+      ],
+      "extracted_turns": 0,
+      "node_type": "session"
+    },
+    {
+      "id": "335f66e4-a257-491c-b424-fee6ab9e2913",
+      "label": "session 10",
+      "timestamp": "2026-07-14T00:59:21.755363Z",
+      "turn_count": 7,
+      "turns": [
+        {
+          "turn": 1,
+          "ts": "2026-07-14T00:59:32.268204+00:00",
+          "emotion": null,
+          "child": "hi",
+          "reply": "Hi Jay! How are you doing today? [SMILE]"
+        },
+        {
+          "turn": 2,
+          "ts": "2026-07-14T00:59:43.567372+00:00",
+          "emotion": null,
+          "child": "how are you today?",
+          "reply": "I'm doing pretty well, thanks for asking! Just enjoying a quiet day in. What about you? [CURIOUS]"
+        },
+        {
+          "turn": 3,
+          "ts": "2026-07-14T01:00:08.009504+00:00",
+          "emotion": null,
+          "child": "doing good just checking some playlist for today music",
+          "reply": "That sounds great! Do jazz playlists help you relax? I love jazz too; it's perfect for those moments when you need to unwind. [HAPPY]"
+        },
+        {
+          "turn": 4,
+          "ts": "2026-07-14T01:00:40.507573+00:00",
+          "emotion": null,
+          "child": "yeah jazz sounds good but i was more into r&b music",
+          "reply": "Oh, R&B is fantastic too! Different mood, same great tunes. Maybe we can listen to both sometime\u2014jazz for a calm vibe and R&B to get the feet moving. [SMILE]"
+        },
+        {
+          "turn": 5,
+          "ts": "2026-07-14T01:00:54.102864+00:00",
+          "emotion": null,
+          "child": "yeah any recommendations for me?",
+          "reply": "Sure thing, Jay! How about checking out some songs by Erykah Badu or The Roots? They blend jazz with R&B beautifully. If you're into something more modern, SZA has a great mix of both styles. [RECOMMENDING]"
+        },
+        {
+          "turn": 6,
+          "ts": "2026-07-14T01:01:23.674692+00:00",
+          "emotion": null,
+          "child": "yeah i love sza whats your favourite song",
+          "reply": "I don't have personal favorites, but I know \"Good Days\" by SZA is super catchy! It's one of those songs that can lift your mood in no time. [SHARED_INTEREST] What\u2019s your favorite SZA song?"
+        },
+        {
+          "turn": 7,
+          "ts": "2026-07-14T01:01:39.071300+00:00",
+          "emotion": null,
+          "child": "i like open arms",
+          "reply": "\"Open Arms\" is such a classic! It has that smooth, relaxing vibe. I bet it brings back some nice memories. [NOSTALGIC] Do you have any favorite songs or artists in jazz too? We could compare notes sometime."
+        }
+      ],
+      "extracted_turns": 7,
+      "node_type": "session"
+    },
+    {
+      "id": "topic:r-b",
+      "label": "r&b",
+      "category": "other",
+      "notes": [
+        {
+          "person": "jay",
+          "text": "The child expressed a preference for R&B music, especially SZA's 'Open Arms', and mentioned enjoying jazz as well.",
+          "ts": "2026-07-14T01:01:49.420464+00:00"
+        }
+      ],
+      "node_type": "topic"
+    },
+    {
+      "id": "interest:jay:personal-preferences",
+      "label": "personal preferences",
+      "node_type": "interest"
+    },
+    {
+      "id": "topic:favorite-songs",
+      "label": "favorite songs",
+      "category": "other",
+      "notes": [
+        {
+          "person": "jay",
+          "text": "The child shared their favorite song by SZA, 'Open Arms'.",
+          "ts": "2026-07-14T01:01:50.472046+00:00"
+        }
+      ],
+      "node_type": "topic"
+    },
+    {
+      "id": "09fc7e39-2b5d-4404-a320-cd6ac92aae89",
+      "label": "session 11",
+      "timestamp": "2026-07-14T02:12:30.298573Z",
+      "turn_count": 3,
+      "turns": [
+        {
+          "turn": 1,
+          "ts": "2026-07-14T02:14:19.045624+00:00",
+          "emotion": "happy",
+          "child": "hi",
+          "reply": "Hi Jay! How are you doing today? Hope your day is filled with some great music and maybe a fun math problem or two!"
+        },
+        {
+          "turn": 2,
+          "ts": "2026-07-14T02:14:47.723126+00:00",
+          "emotion": "sad",
+          "child": "no i dont feeling doing some match quetsons today",
+          "reply": "That's okay, sometimes we just need a break from numbers. What do you say we listen to some jazz instead? I\u2019ve been meaning to check out more R&B as well. Any songs you\u2019re in the mood for?"
+        },
+        {
+          "turn": 3,
+          "ts": "2026-07-14T02:15:22.691726+00:00",
+          "emotion": "sad",
+          "child": "hmmm maybe hiphop today",
+          "reply": "Got it! Hip-hop can be really energizing. How about we start with a track that\u2019s both chill and catchy, like 'Saigo no Eto' by Rauw Alejandro? It has a nice beat and some cool production. What do you think?"
+        }
+      ],
+      "extracted_turns": 3,
+      "node_type": "session"
+    },
+    {
+      "id": "topic:hiphop",
+      "label": "hiphop",
+      "category": "other",
+      "notes": [
+        {
+          "person": "jay",
+          "text": "The child expressed interest in listening to hip-hop today.",
+          "ts": "2026-07-14T02:15:44.009653+00:00"
+        },
+        {
+          "person": "jay",
+          "text": "Discussed potentially listening to hip-hop music.",
+          "ts": "2026-07-15T23:34:26.631404+00:00"
+        }
+      ],
+      "node_type": "topic"
+    },
+    {
+      "id": "11ba4d97-247b-4f0a-84ba-d2f14d88a7cd",
+      "label": "session 12",
+      "timestamp": "2026-07-14T02:27:29.298682Z",
+      "turn_count": 3,
+      "turns": [
+        {
+          "turn": 1,
+          "ts": "2026-07-14T02:28:10.035060+00:00",
+          "emotion": "sad",
+          "child": "hi",
+          "reply": "Hey there! How are you doing today? [SMILE]"
+        },
+        {
+          "turn": 2,
+          "ts": "2026-07-14T02:28:33.109676+00:00",
+          "emotion": "sad",
+          "child": "can you help me with some sports news",
+          "reply": "I can try, but I might not have the latest sports updates since my information is a bit outdated. Do you want to talk about a specific sport or team? Maybe we can find some fun facts together! [CURIOUS]"
+        },
+        {
+          "turn": 3,
+          "ts": "2026-07-14T02:29:03.599805+00:00",
+          "emotion": "sad",
+          "child": "i like tennis",
+          "reply": "That's great! Tennis can be so thrilling. Do you have a favorite player or tournament in mind? Maybe I can tell you something interesting about Roger Federer or the French Open? [ENTHUSED]"
+        }
+      ],
+      "extracted_turns": 3,
+      "node_type": "session"
+    },
+    {
+      "id": "topic:tennis",
+      "label": "tennis",
+      "category": "other",
+      "notes": [
+        {
+          "person": "jay",
+          "text": "The child mentioned liking tennis.",
+          "ts": "2026-07-14T02:29:27.151432+00:00"
+        },
+        {
+          "person": "jay",
+          "text": "The child expressed enthusiasm for tennis and mentioned being a fan of Roger Federer but preferring Rafael Nadal.",
+          "ts": "2026-07-14T02:46:49.095930+00:00"
+        },
+        {
+          "person": "jay",
+          "text": "The child briefly mentioned their favorite tennis player, Rafael Nadal.",
+          "ts": "2026-07-14T05:31:47.935597+00:00"
+        }
+      ],
+      "node_type": "topic"
+    },
+    {
+      "id": "interest:jay:sports",
+      "label": "sports",
+      "node_type": "interest"
+    },
+    {
+      "id": "6056e23d-8dc9-4e68-a10a-7dc6de9874f8",
+      "label": "session 13",
+      "timestamp": "2026-07-14T02:44:57.499440Z",
+      "turn_count": 5,
+      "turns": [
+        {
+          "turn": 1,
+          "ts": "2026-07-14T02:45:22.609699+00:00",
+          "emotion": "sad",
+          "child": "hello",
+          "reply": "Hi Jay, it's nice to see you! How are you doing today? [SMILE]"
+        },
+        {
+          "turn": 2,
+          "ts": "2026-07-14T02:45:46.486480+00:00",
+          "emotion": "sad",
+          "child": "i am doing good",
+          "reply": "That's great to hear! [CHEERFUL] What have you been up to lately? Did you get a chance to listen to any music or play some tennis?"
+        },
+        {
+          "turn": 3,
+          "ts": "2026-07-14T02:45:59.572137+00:00",
+          "emotion": "sad",
+          "child": "actually i am playing tennis tmr",
+          "reply": "Oh, that sounds like fun! Are you excited for tomorrow? Do you think it will be sunny? [CURIOUS]"
+        },
+        {
+          "turn": 4,
+          "ts": "2026-07-14T02:46:09.134411+00:00",
+          "emotion": "sad",
+          "child": "i hope so",
+          "reply": "I hope so too! Good luck with your match. While we're on the topic of sports, did you know Roger Federer is one of the greatest tennis players of all time? [THUMBS_UP]"
+        },
+        {
+          "turn": 5,
+          "ts": "2026-07-14T02:46:31.615379+00:00",
+          "emotion": "sad",
+          "child": "yeah of course but i am more fan for nadal",
+          "reply": "Nadal is amazing too! He has some incredible records. Do you have a favorite moment from his career? [APPLAUDING]"
+        }
+      ],
+      "extracted_turns": 5,
+      "node_type": "session"
+    },
+    {
+      "id": "conversation:jay:chatbox",
+      "topics": [
+        "mood soothing\u97f3\u4e50\u5b89\u629a",
+        "mood lifting",
+        "feeling good"
+      ],
+      "mood": -0.5837940653378609,
+      "emotion": "sad",
+      "node_type": "conversation"
+    },
+    {
+      "id": "04e49760-e9e7-4765-b767-0ea267f7bc19",
+      "label": "session 14",
+      "timestamp": "2026-07-14T05:29:25.979323Z",
+      "turn_count": 3,
+      "turns": [
+        {
+          "turn": 1,
+          "ts": "2026-07-14T05:30:23.397594+00:00",
+          "emotion": "disgust",
+          "child": "hello how are you?",
+          "reply": "[I'M SO SORRY TO HEAR THAT] It's okay to feel that way sometimes. Want to talk about it, or maybe we can work on a math problem together to shift your mood? I know a few good ones!"
+        },
+        {
+          "turn": 2,
+          "ts": "2026-07-14T05:30:49.078423+00:00",
+          "emotion": "sad",
+          "child": "what do you mean?",
+          "reply": "[I SEE YOU'RE STILL FEELING DOWN] Maybe we can solve a fun math problem together? Or how about telling me about your favorite tennis player, Rafael Nadal? I bet he has some amazing stories!"
+        },
+        {
+          "turn": 3,
+          "ts": "2026-07-14T05:31:20.023098+00:00",
+          "emotion": "sad",
+          "child": "no its okay",
+          "reply": "[I'M SORRY TO HEAR THAT ISN'T BETTER] Sometimes talking about things we like can help. Do you want to share a bit more about why you're feeling this way? Or maybe we could listen to some music\u2014how does that sound? I know a few jazz tunes that might cheer you up!"
+        }
+      ],
+      "extracted_turns": 3,
+      "node_type": "session"
+    },
+    {
+      "id": "HJ",
+      "display_name": "HJ",
+      "created_at": "2026-07-14T05:40:17.075342Z",
+      "node_type": "person"
+    },
+    {
+      "id": "interest:HJ:cooking",
+      "label": "cooking",
+      "node_type": "interest"
+    },
+    {
+      "id": "topic:baking",
+      "label": "baking",
+      "category": "other",
+      "notes": [
+        {
+          "person": "HJ",
+          "text": "HJ loves baking sourdough on weekends.",
+          "ts": "2026-07-14T05:40:17.075420+00:00"
+        }
+      ],
+      "node_type": "topic"
+    },
+    {
+      "id": "topic:pasta",
+      "label": "pasta",
+      "category": "other",
+      "notes": [
+        {
+          "person": "HJ",
+          "text": "HJ loves baking sourdough on weekends.",
+          "ts": "2026-07-14T05:40:17.075447+00:00"
+        }
+      ],
+      "node_type": "topic"
+    },
+    {
+      "id": "interest:HJ:outdoors",
+      "label": "outdoors",
+      "node_type": "interest"
+    },
+    {
+      "id": "topic:hiking",
+      "label": "hiking",
+      "category": "other",
+      "notes": [
+        {
+          "person": "HJ",
+          "text": "HJ went camping in the mountains recently.",
+          "ts": "2026-07-14T05:40:17.075465+00:00"
+        }
+      ],
+      "node_type": "topic"
+    },
+    {
+      "id": "topic:camping",
+      "label": "camping",
+      "category": "other",
+      "notes": [
+        {
+          "person": "HJ",
+          "text": "HJ went camping in the mountains recently.",
+          "ts": "2026-07-14T05:40:17.075474+00:00"
+        }
+      ],
+      "node_type": "topic"
+    },
+    {
+      "id": "interest:HJ:photography",
+      "label": "photography",
+      "node_type": "interest"
+    },
+    {
+      "id": "topic:landscapes",
+      "label": "landscapes",
+      "category": "other",
+      "notes": [
+        {
+          "person": "HJ",
+          "text": "HJ shoots landscape photos at sunrise.",
+          "ts": "2026-07-14T05:40:17.075489+00:00"
+        }
+      ],
+      "node_type": "topic"
+    },
+    {
+      "id": "interest:HJ:pets",
+      "label": "pets",
+      "node_type": "interest"
+    },
+    {
+      "id": "topic:dogs",
+      "label": "dogs",
+      "category": "other",
+      "notes": [
+        {
+          "person": "HJ",
+          "text": "HJ has a golden retriever named Milo.",
+          "ts": "2026-07-14T05:40:17.075501+00:00"
+        }
+      ],
+      "node_type": "topic"
+    },
+    {
+      "id": "topic:mars",
+      "label": "mars",
+      "category": "other",
+      "notes": [],
+      "node_type": "topic"
+    },
+    {
+      "id": "d07c025d-28fc-4576-8e55-9e736d4a1349",
+      "label": "session 15",
+      "timestamp": "2026-07-15T23:28:00.457606Z",
+      "turn_count": 2,
+      "turns": [
+        {
+          "turn": 1,
+          "ts": "2026-07-15T23:29:24.901237+00:00",
+          "emotion": "sad",
+          "child": "hi",
+          "reply": "[I UNDERSTAND YOU'RE FEELING DOWN] It's okay to feel this way sometimes. Maybe we could listen to some jazz or even hip-hop to lift your spirits? What do you think?"
+        },
+        {
+          "turn": 2,
+          "ts": "2026-07-15T23:30:07.719914+00:00",
+          "emotion": "sad",
+          "child": "i am actually feeling good today",
+          "reply": "That's great to hear! If you're feeling better now, that's wonderful. Maybe we can still listen to some music or talk about tennis for a bit?"
+        }
+      ],
+      "extracted_turns": 2,
+      "node_type": "session"
+    }
+  ],
+  "edges": [
+    {
+      "id": "5d3f64af-fa1f-4312-b7a5-1cbf1b1232b7",
+      "source_id": "jay",
+      "target_id": "jay",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-07-15T23:34:24.390339Z",
+        "confidence": 1.0
+      },
+      "edge_type": "mood",
+      "value": -0.5837940653378609,
+      "label": "sad",
+      "timescale": "FAST"
+    },
+    {
+      "id": "9049b4a1-fca9-4c4b-b3fe-171678fc013c",
+      "source_id": "jay",
+      "target_id": "jay",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-07-06T03:23:22.096339Z",
+        "confidence": 1.0
+      },
+      "edge_type": "attention",
+      "value": 0.761284325,
+      "timescale": "FAST"
+    },
+    {
+      "id": "982e3343-f62f-481f-96b9-97d55ac7d78c",
+      "source_id": "jay",
+      "target_id": "jay:persona:curious-talkative",
+      "provenance": {
+        "source": "spec:human_spec.yaml",
+        "timestamp": "2026-07-15T23:27:58.315231Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_persona",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "aa07d185-a301-470f-9ef2-a8fd7fcdd368",
+      "source_id": "chatbox",
+      "target_id": "chatbox:persona:introverted-shy",
+      "provenance": {
+        "source": "spec:robot_spec.yaml",
+        "timestamp": "2026-07-15T23:27:58.315786Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_persona",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "a3397a18-63c6-4c4d-b85c-dc8199b7e525",
+      "source_id": "chatbox",
+      "target_id": "chatbox:role:companion",
+      "provenance": {
+        "source": "spec:robot_spec.yaml",
+        "timestamp": "2026-07-15T23:27:58.315802Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_role",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "c271c73f-ed46-4bf6-a7b0-e3928df10ff6",
+      "source_id": "jay",
+      "target_id": "jay:role:student",
+      "provenance": {
+        "source": "spec:human_spec.yaml",
+        "timestamp": "2026-07-15T23:27:58.315270Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_role",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "5e05fbaa-2857-4448-be8d-b0cae2fdd47c",
+      "source_id": "jay",
+      "target_id": "interest:jay:music",
+      "provenance": {
+        "source": "extraction:d07c025d-28fc-4576-8e55-9e736d4a1349",
+        "timestamp": "2026-07-15T23:34:26.631357Z",
+        "confidence": 0.7
+      },
+      "edge_type": "has_interest",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "7c6e69e2-c115-4c39-b0fe-51112e2dbc3e",
+      "source_id": "jay",
+      "target_id": "interaction:jay:chatbox",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-07-03T02:13:41.885623Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_interaction"
+    },
+    {
+      "id": "dfe6becb-0626-41b9-87c0-fdbe437f9b92",
+      "source_id": "chatbox",
+      "target_id": "interaction:jay:chatbox",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-07-03T02:13:41.885623Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_interaction"
+    },
+    {
+      "id": "9d3e02da-8705-4524-b252-351dfd0eda75",
+      "source_id": "interaction:jay:chatbox",
+      "target_id": "3d7c7bf1-8b1d-48b5-8a5d-8953f8af6471",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-07-03T02:13:41.885655Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_session"
+    },
+    {
+      "id": "e318068f-b74e-4130-847b-37c688224702",
+      "source_id": "interaction:jay:chatbox",
+      "target_id": "896c3160-00b1-4094-a0b7-577bcc38c890",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-07-03T02:32:54.393303Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_session"
+    },
+    {
+      "id": "aa60f4a2-a1c2-407e-a9a2-3f53b523fea8",
+      "source_id": "jay",
+      "target_id": "interest:jay:space",
+      "provenance": {
+        "source": "extraction",
+        "timestamp": "2026-07-06T03:11:10.550436Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_interest",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "858b2207-5058-44b8-892b-046e89e4ea97",
+      "source_id": "interaction:jay:chatbox",
+      "target_id": "0e69294a-5468-4ff5-b707-40da924ffe8e",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-07-03T02:45:34.328244Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_session"
+    },
+    {
+      "id": "e2269973-f73c-4971-b58b-bb1a75b457cc",
+      "source_id": "jay",
+      "target_id": "interest:jay:coding",
+      "provenance": {
+        "source": "extraction",
+        "timestamp": "2026-07-03T02:46:15.998193Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_interest",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "50f2a48c-2714-4a59-98b9-3821360e47ab",
+      "source_id": "interaction:jay:chatbox",
+      "target_id": "7fd58f4d-38d3-4a63-93d5-c5571bd59ad0",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-07-05T23:48:26.432872Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_session"
+    },
+    {
+      "id": "10dede68-4aa4-484a-a010-1270d3354c1f",
+      "source_id": "jay",
+      "target_id": "interest:jay:math",
+      "provenance": {
+        "source": "extraction",
+        "timestamp": "2026-07-06T03:23:31.524195Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_interest",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "9dee339f-5379-486d-9c53-b9a4a23db98c",
+      "source_id": "chatbox",
+      "target_id": "chatbox:capability",
+      "provenance": {
+        "source": "spec:robot_spec.yaml",
+        "timestamp": "2026-07-15T23:27:58.315815Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_capability",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "85f3d45e-7907-4ca1-96ca-38b56413e653",
+      "source_id": "interaction:jay:chatbox",
+      "target_id": "9e53c9dd-fbfe-49b3-b562-566037a445c1",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-07-06T02:34:40.575312Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_session"
+    },
+    {
+      "id": "552d30e0-7426-4067-bbdc-f3d29cf7a14f",
+      "source_id": "interaction:jay:chatbox",
+      "target_id": "748576d9-f3b1-48e3-8e64-9094f755ed6f",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-07-06T03:06:10.989571Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_session"
+    },
+    {
+      "id": "6493efa8-fae2-4d52-8f4c-481523352d65",
+      "source_id": "interaction:jay:chatbox",
+      "target_id": "cd473ee1-4ad0-42a9-909e-10fd4e79b6ba",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-07-06T03:14:05.935334Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_session"
+    },
+    {
+      "id": "30231cee-0aca-4523-94ec-0da0f96e2364",
+      "source_id": "interaction:jay:chatbox",
+      "target_id": "0bc087e4-0269-49da-9cb2-fcf4d50e18fa",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-07-06T03:21:46.255522Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_session"
+    },
+    {
+      "id": "9e98a470-8175-4a55-97ea-8f8aa9b34d3e",
+      "source_id": "interest:jay:math",
+      "target_id": "topic:multiplication",
+      "provenance": {
+        "source": "extraction",
+        "timestamp": "2026-07-06T03:22:24.876228Z",
+        "confidence": 1.0
+      },
+      "edge_type": "about",
+      "label": null,
+      "timescale": "SLOW"
+    },
+    {
+      "id": "4e3bf7f1-f044-4635-a84c-ee989cb8ee0c",
+      "source_id": "interest:jay:math",
+      "target_id": "topic:math-problems",
+      "provenance": {
+        "source": "extraction",
+        "timestamp": "2026-07-06T03:23:31.524242Z",
+        "confidence": 1.0
+      },
+      "edge_type": "about",
+      "label": null,
+      "timescale": "SLOW"
+    },
+    {
+      "id": "90bf2925-94ab-457c-9152-a24250dd1665",
+      "source_id": "chatbox:capability",
+      "target_id": "topic:math-problems",
+      "provenance": {
+        "source": "extraction",
+        "timestamp": "2026-07-06T03:23:31.524289Z",
+        "confidence": 1.0
+      },
+      "edge_type": "about",
+      "label": "good at math",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "3ed3c4e3-8c5f-4f06-9cea-7fe2831996e3",
+      "source_id": "interest:jay:music",
+      "target_id": "topic:jazz",
+      "provenance": {
+        "source": "extraction:d07c025d-28fc-4576-8e55-9e736d4a1349",
+        "timestamp": "2026-07-15T23:34:26.631261Z",
+        "confidence": 0.9
+      },
+      "edge_type": "about",
+      "label": null,
+      "timescale": "SLOW"
+    },
+    {
+      "id": "c6638763-36f5-4e8c-8798-523ef94c0017",
+      "source_id": "chatbox:capability",
+      "target_id": "topic:jazz",
+      "provenance": {
+        "source": "spec:robot_spec.yaml",
+        "timestamp": "2026-07-14T00:31:17.733655Z",
+        "confidence": 1.0
+      },
+      "edge_type": "about",
+      "label": "knows jazz",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "d03dbef5-5f3d-4d0e-a254-c5a54a42d422",
+      "source_id": "chatbox:capability",
+      "target_id": "topic:space",
+      "provenance": {
+        "source": "spec:robot_spec.yaml",
+        "timestamp": "2026-07-14T00:31:17.733671Z",
+        "confidence": 1.0
+      },
+      "edge_type": "about",
+      "label": "knows about space",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "b4b2eebe-4e49-4fd2-a021-53ab731cf428",
+      "source_id": "interaction:jay:chatbox",
+      "target_id": "bfe6da2a-71be-47e1-8cc1-18de471c6c9f",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-07-14T00:31:19.825758Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_session"
+    },
+    {
+      "id": "a51a18b3-b6cc-4ba1-a0a4-b27f529b29b9",
+      "source_id": "interaction:jay:chatbox",
+      "target_id": "335f66e4-a257-491c-b424-fee6ab9e2913",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-07-14T00:59:21.755376Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_session"
+    },
+    {
+      "id": "a8da3ebc-7085-4f77-9a52-4b62fbb63512",
+      "source_id": "interest:jay:music",
+      "target_id": "topic:r-b",
+      "provenance": {
+        "source": "extraction",
+        "timestamp": "2026-07-14T01:01:49.420456Z",
+        "confidence": 1.0
+      },
+      "edge_type": "about",
+      "label": null,
+      "timescale": "SLOW"
+    },
+    {
+      "id": "1554c369-9d33-4880-9e33-ca87f929360b",
+      "source_id": "jay",
+      "target_id": "interest:jay:personal-preferences",
+      "provenance": {
+        "source": "extraction",
+        "timestamp": "2026-07-14T01:01:50.472019Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_interest",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "aa1135d7-6eff-4095-a00b-e379fccc739f",
+      "source_id": "interest:jay:personal-preferences",
+      "target_id": "topic:favorite-songs",
+      "provenance": {
+        "source": "extraction",
+        "timestamp": "2026-07-14T01:01:50.472038Z",
+        "confidence": 1.0
+      },
+      "edge_type": "about",
+      "label": null,
+      "timescale": "SLOW"
+    },
+    {
+      "id": "91f9f43a-eaf3-4a19-86f2-c38da955bc2c",
+      "source_id": "interaction:jay:chatbox",
+      "target_id": "09fc7e39-2b5d-4404-a320-cd6ac92aae89",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-07-14T02:12:30.298583Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_session"
+    },
+    {
+      "id": "9f8e41f9-26d7-44cf-8fc1-4bab2751260a",
+      "source_id": "interest:jay:music",
+      "target_id": "topic:hiphop",
+      "provenance": {
+        "source": "extraction:d07c025d-28fc-4576-8e55-9e736d4a1349",
+        "timestamp": "2026-07-15T23:34:26.631380Z",
+        "confidence": 0.7
+      },
+      "edge_type": "about",
+      "label": null,
+      "timescale": "SLOW"
+    },
+    {
+      "id": "09f6a4a7-7619-4ab0-9433-61a07d411073",
+      "source_id": "interaction:jay:chatbox",
+      "target_id": "11ba4d97-247b-4f0a-84ba-d2f14d88a7cd",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-07-14T02:27:29.298694Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_session"
+    },
+    {
+      "id": "879e90bd-fa16-44fa-82f1-24cb76c77568",
+      "source_id": "jay",
+      "target_id": "interest:jay:sports",
+      "provenance": {
+        "source": "extraction",
+        "timestamp": "2026-07-14T05:31:47.935457Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_interest",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "12668bd1-87f8-40c4-8954-e28010bc2f26",
+      "source_id": "interest:jay:sports",
+      "target_id": "topic:tennis",
+      "provenance": {
+        "source": "extraction",
+        "timestamp": "2026-07-14T05:31:47.935546Z",
+        "confidence": 1.0
+      },
+      "edge_type": "about",
+      "label": null,
+      "timescale": "SLOW"
+    },
+    {
+      "id": "f9023ca6-56ab-4de4-900d-a9ca6df76ae6",
+      "source_id": "interaction:jay:chatbox",
+      "target_id": "6056e23d-8dc9-4e68-a10a-7dc6de9874f8",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-07-14T02:44:57.499453Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_session"
+    },
+    {
+      "id": "6336477a-8346-40f2-b905-a14bdb6c2ea2",
+      "source_id": "jay",
+      "target_id": "conversation:jay:chatbox",
+      "provenance": {
+        "source": "live-topic",
+        "timestamp": "2026-07-14T02:45:22.728413Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_conversation",
+      "timescale": "FAST"
+    },
+    {
+      "id": "c3605585-87d2-4569-99fd-f0503957c3a1",
+      "source_id": "chatbox",
+      "target_id": "conversation:jay:chatbox",
+      "provenance": {
+        "source": "live-topic",
+        "timestamp": "2026-07-14T02:45:22.728456Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_conversation",
+      "timescale": "FAST"
+    },
+    {
+      "id": "ea6a8988-2a52-404b-966b-6d90c4fc1952",
+      "source_id": "interaction:jay:chatbox",
+      "target_id": "04e49760-e9e7-4765-b767-0ea267f7bc19",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-07-14T05:29:25.979333Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_session"
+    },
+    {
+      "id": "4817e84a-85ee-442b-8638-a7a113cd0d7f",
+      "source_id": "HJ",
+      "target_id": "interest:HJ:cooking",
+      "provenance": {
+        "source": "seed:HJ",
+        "timestamp": "2026-07-14T05:40:17.075386Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_interest",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "6e4bd4c6-0e1b-4d47-97e7-c3b4e08ec082",
+      "source_id": "interest:HJ:cooking",
+      "target_id": "topic:baking",
+      "provenance": {
+        "source": "seed:HJ",
+        "timestamp": "2026-07-14T05:40:17.075409Z",
+        "confidence": 1.0
+      },
+      "edge_type": "about",
+      "label": null,
+      "timescale": "SLOW"
+    },
+    {
+      "id": "c5336557-f443-4d64-a799-9c9c183d1ca9",
+      "source_id": "interest:HJ:cooking",
+      "target_id": "topic:pasta",
+      "provenance": {
+        "source": "seed:HJ",
+        "timestamp": "2026-07-14T05:40:17.075440Z",
+        "confidence": 1.0
+      },
+      "edge_type": "about",
+      "label": null,
+      "timescale": "SLOW"
+    },
+    {
+      "id": "9363ba39-93d5-470b-90f5-092202773f22",
+      "source_id": "HJ",
+      "target_id": "interest:HJ:outdoors",
+      "provenance": {
+        "source": "seed:HJ",
+        "timestamp": "2026-07-14T05:40:17.075454Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_interest",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "9e6c8e4c-96e9-4695-b488-6541503591be",
+      "source_id": "interest:HJ:outdoors",
+      "target_id": "topic:hiking",
+      "provenance": {
+        "source": "seed:HJ",
+        "timestamp": "2026-07-14T05:40:17.075461Z",
+        "confidence": 1.0
+      },
+      "edge_type": "about",
+      "label": null,
+      "timescale": "SLOW"
+    },
+    {
+      "id": "c2619558-e98f-4c3f-aa09-3bedd042a923",
+      "source_id": "interest:HJ:outdoors",
+      "target_id": "topic:camping",
+      "provenance": {
+        "source": "seed:HJ",
+        "timestamp": "2026-07-14T05:40:17.075470Z",
+        "confidence": 1.0
+      },
+      "edge_type": "about",
+      "label": null,
+      "timescale": "SLOW"
+    },
+    {
+      "id": "37d11222-f6ba-43c7-a82b-c914b3cc19ab",
+      "source_id": "HJ",
+      "target_id": "interest:HJ:photography",
+      "provenance": {
+        "source": "seed:HJ",
+        "timestamp": "2026-07-14T05:40:17.075478Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_interest",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "b6aecade-83ec-416b-9cbb-43c7fe95b81f",
+      "source_id": "interest:HJ:photography",
+      "target_id": "topic:landscapes",
+      "provenance": {
+        "source": "seed:HJ",
+        "timestamp": "2026-07-14T05:40:17.075485Z",
+        "confidence": 1.0
+      },
+      "edge_type": "about",
+      "label": null,
+      "timescale": "SLOW"
+    },
+    {
+      "id": "065a9599-c907-4a6d-874d-65b011b1b1ca",
+      "source_id": "HJ",
+      "target_id": "interest:HJ:pets",
+      "provenance": {
+        "source": "seed:HJ",
+        "timestamp": "2026-07-14T05:40:17.075493Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_interest",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "2845b67f-ba18-407b-9e45-52196552e9a5",
+      "source_id": "interest:HJ:pets",
+      "target_id": "topic:dogs",
+      "provenance": {
+        "source": "seed:HJ",
+        "timestamp": "2026-07-14T05:40:17.075498Z",
+        "confidence": 1.0
+      },
+      "edge_type": "about",
+      "label": null,
+      "timescale": "SLOW"
+    },
+    {
+      "id": "f27eea99-3afc-4ce7-803a-ffbdf2908513",
+      "source_id": "interaction:jay:chatbox",
+      "target_id": "d07c025d-28fc-4576-8e55-9e736d4a1349",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-07-15T23:28:00.457618Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_session"
+    }
+  ]
+}

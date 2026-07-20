@@ -1,5 +1,5 @@
 from typing import Optional, List, Dict, Any
-from supabase_client import supabase
+from modules.supabase_client import supabase
 
 class Database:
     def __init__(self):

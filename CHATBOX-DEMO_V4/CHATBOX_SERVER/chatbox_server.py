@@ -7,27 +7,23 @@ from typing import Dict, Any, Optional, Set
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Add modules to path
-sys.path.append(os.path.join(os.path.dirname(__file__), 'Modules'))
-
 # Import modules
-from Modules.llm_processor import OllamaClient
-from Modules.rag_module import RagModule
-from Modules.database import Database
+from modules.llm_processor import OllamaClient
+from modules.rag_module import RagModule
+from modules.database import Database
 
-# Import other modules (these need to exist in your Modules folder)
 try:
-    from Modules.emotion_processor import EmotionProcessor
+    from modules.emotion_processor import EmotionProcessor
 except ImportError:
     EmotionProcessor = None
 
 try:
-    from Modules.speech_processor import SpeechProcessor
+    from modules.speech_processor import SpeechProcessor
 except ImportError:
     SpeechProcessor = None
 
 try:
-    from Modules.web_interface import WebInterface
+    from modules.web_interface import WebInterface
 except ImportError:
     WebInterface = None
 

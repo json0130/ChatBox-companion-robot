@@ -38,6 +38,7 @@
 
 WiFiServer tcpServer(TCP_PORT);
 WiFiClient tcpClient;
+bool wifiOk = false;  // set true once WiFi connects; TCP features gated on this
 
 // ==================== Constants ==================== //
 #define NUM_VALID_EXPRESSIONS 22
@@ -104,56 +105,54 @@ void setup() {
   Serial.begin(115200);
   delay(10);
 
+  // ── WiFi (optional — Serial commands work without it) ──────────────────
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
-
-  Serial.printf("[+] Connecting to %s", WIFI_SSID);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.printf("[+] Connecting to %s (15s timeout) ", WIFI_SSID);
 
   unsigned long wifiStart = millis();
-  while (WiFi.status() != WL_CONNECTED) {
-    if (millis() - wifiStart > 30000) {
-      Serial.println("\n[-] WiFi timeout — restarting in 5s");
-      delay(5000);
-      ESP.restart();
-    }
+  while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < 15000) {
     delay(500);
     Serial.print(".");
   }
-  Serial.println("\n[+] WiFi Connected: " + WiFi.localIP().toString());
 
-  tcpServer.begin();
-  Serial.printf("[+] TCP Server started on port %d\n", TCP_PORT);
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiOk = true;
+    Serial.println("\n[+] WiFi Connected: " + WiFi.localIP().toString());
+    tcpServer.begin();
+    Serial.printf("[+] TCP Server on port %d\n", TCP_PORT);
+  } else {
+    wifiOk = false;
+    Serial.println("\n[!] WiFi unavailable — Serial-only mode. TCP disabled.");
+    Serial.println("[!] Start ChatBox-AP hotspot and reset to enable TCP.");
+  }
+  // ───────────────────────────────────────────────────────────────────────
 
   servoInit();
-  sleepTimer = millis();  // start sleep countdown from now, not from boot
+  sleepTimer = millis();
 }
 
 // ==================== Main Loop ==================== //
 void loop() {
-  // ── WiFi watchdog — reconnect if hotspot drops ──────────────────────────
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[WiFi] Lost — reconnecting...");
+  // ── WiFi watchdog — background reconnect, never blocks or restarts ──────
+  if (wifiOk && WiFi.status() != WL_CONNECTED) {
+    wifiOk = false;
+    Serial.println("[WiFi] Lost — attempting background reconnect (Serial still active)");
     WiFi.reconnect();
-    unsigned long t = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - t < 15000) {
-      delay(500);
-      Serial.print(".");
-    }
-    if (WiFi.status() != WL_CONNECTED) {
-      Serial.println("\n[WiFi] Still down — restarting");
-      ESP.restart();
-    }
-    Serial.println("\n[WiFi] Reconnected: " + WiFi.localIP().toString());
-    tcpServer.begin();  // re-arm TCP server after reconnect
+  }
+  if (!wifiOk && WiFi.status() == WL_CONNECTED) {
+    wifiOk = true;
+    Serial.println("[WiFi] Reconnected: " + WiFi.localIP().toString());
+    tcpServer.begin();
   }
 
-  // Accept a new TCP client whenever the previous one drops
-  if (!tcpClient || !tcpClient.connected()) {
+  // Accept a new TCP client whenever the previous one drops (WiFi must be up)
+  if (wifiOk && (!tcpClient || !tcpClient.connected())) {
     WiFiClient c = tcpServer.available();
     if (c) {
       tcpClient = c;
-      sleepTimer = millis();  // reset sleep countdown when Jetson connects
+      sleepTimer = millis();
       Serial.println("[TCP] Client connected from " + tcpClient.remoteIP().toString());
     }
   }
@@ -182,7 +181,7 @@ void loop() {
         sleepTimer = millis();  // serial activity counts as "connected" for sleep timer
         currentState = LISTEN;
         Serial.println("ChatBox: IDLE -> LISTEN (Serial)");
-      } else if (!tcpClient.connected() && millis() - sleepTimer > 30000) {
+      } else if ((!wifiOk || !tcpClient.connected()) && millis() - sleepTimer > 30000) {
         // Only sleep when Jetson is not connected via either transport
         currentState = SLEEP;
         Serial.println("ChatBox: Going to sleep...");

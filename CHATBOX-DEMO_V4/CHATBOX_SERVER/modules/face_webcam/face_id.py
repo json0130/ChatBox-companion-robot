@@ -69,9 +69,10 @@ class FaceIdentifier:
         self._counts:     dict[str, int]         = {}
 
         self._device = torch.device("cpu")
-        self._mtcnn:  Optional[MTCNN]               = None
-        self._resnet: Optional[InceptionResnetV1]   = None
-        self._haar:   Optional[cv2.CascadeClassifier] = None
+        self._mtcnn:     Optional[MTCNN]               = None
+        self._mtcnn_all: Optional[MTCNN]               = None  # keep_all=True for multi-face
+        self._resnet:    Optional[InceptionResnetV1]   = None
+        self._haar:      Optional[cv2.CascadeClassifier] = None
 
         self._init_backend()
 
@@ -79,11 +80,17 @@ class FaceIdentifier:
 
     def _init_backend(self) -> None:
         if _FACENET_AVAILABLE:
-            self._mtcnn  = MTCNN(
+            self._mtcnn = MTCNN(
                 image_size=160, margin=20,
-                keep_all=False,        # largest face only
+                keep_all=False,       # single-face path (enroll, identify)
                 device=self._device,
-                post_process=True,     # returns normalised tensor ready for resnet
+                post_process=True,
+            )
+            self._mtcnn_all = MTCNN(
+                image_size=160, margin=20,
+                keep_all=True,        # multi-face path (identify_all)
+                device=self._device,
+                post_process=True,
             )
             self._resnet = InceptionResnetV1(pretrained="vggface2").eval()
         else:
@@ -290,6 +297,89 @@ class FaceIdentifier:
         if best_sim >= self.threshold:
             return best_name, best_sim, box
         return None, best_sim, box   # below threshold → unknown face present
+
+    def identify_all(
+        self,
+        frame_bgr:  np.ndarray,
+        max_faces:  int   = 4,
+        scale:      float = 0.5,
+    ) -> list[tuple[Optional[str], float, tuple]]:
+        """
+        Identify every face visible in the frame.
+
+        Returns:
+            List of (person_id, similarity, box) — one entry per detected face.
+            person_id is None for faces below the similarity threshold.
+            Faces are ordered by detection confidence (highest first).
+            Returns [] when no faces are found.
+        """
+        # ── Haar fallback: single face only ──────────────────────────────────
+        if self._mtcnn_all is None:
+            if self._haar is None:
+                return []
+            emb, box = self._embed_haar(frame_bgr)
+            if box is None:
+                return []
+            if not self._embeddings:
+                return [(None, 0.0, box)]
+            best_name, best_sim = None, -1.0
+            for name, stored in self._embeddings.items():
+                s = _cosine_sim(emb, stored)
+                if s > best_sim:
+                    best_sim, best_name = s, name
+            pid = best_name if best_sim >= self.threshold else None
+            return [(pid, best_sim, box)]
+
+        # ── FaceNet path ─────────────────────────────────────────────────────
+        # Downscale for faster MTCNN (boxes scaled back to original coords)
+        if scale != 1.0:
+            h0, w0 = frame_bgr.shape[:2]
+            small  = cv2.resize(frame_bgr, (int(w0 * scale), int(h0 * scale)))
+        else:
+            small  = frame_bgr
+
+        img_rgb = Image.fromarray(cv2.cvtColor(small, cv2.COLOR_BGR2RGB))
+
+        boxes, probs = self._mtcnn_all.detect(img_rgb)
+        if boxes is None or len(boxes) == 0:
+            return []
+
+        face_tensors = self._mtcnn_all(img_rgb)   # [N,3,160,160] or [3,160,160] or None
+        if face_tensors is None:
+            return []
+        if face_tensors.dim() == 3:               # single face edge case
+            face_tensors = face_tensors.unsqueeze(0)
+
+        with torch.no_grad():
+            embs = self._resnet(face_tensors)     # [N, 512]
+
+        results = []
+        n = min(len(boxes), embs.shape[0], max_faces)
+        for i in range(n):
+            prob = float(probs[i]) if probs[i] is not None else 0.0
+            if prob < 0.90:                       # skip low-confidence detections
+                continue
+            # Scale box coordinates back to original frame size
+            inv = 1.0 / scale
+            box = tuple(int(v * inv) for v in boxes[i])
+
+            emb_np = embs[i].cpu().numpy()
+            emb_np = emb_np / (np.linalg.norm(emb_np) + 1e-8)
+
+            if not self._embeddings:
+                results.append((None, 0.0, box))
+                continue
+
+            best_name, best_sim = None, -1.0
+            for name, stored in self._embeddings.items():
+                s = _cosine_sim(emb_np, stored)
+                if s > best_sim:
+                    best_sim, best_name = s, name
+
+            pid = best_name if best_sim >= self.threshold else None
+            results.append((pid, float(best_sim), box))
+
+        return results
 
     def known_people(self) -> list[str]:
         return sorted(self._embeddings.keys())

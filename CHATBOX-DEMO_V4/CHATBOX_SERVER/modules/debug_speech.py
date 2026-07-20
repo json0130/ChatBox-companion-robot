@@ -2,7 +2,7 @@
 import os
 import sys
 import base64
-from speech_processor import SpeechProcessor
+from modules.speech_processor import SpeechProcessor
 
 def debug_speech_processing(audio_file_path=None):
     """Debug speech processing with detailed logging"""

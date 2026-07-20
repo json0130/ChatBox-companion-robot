@@ -1083,8 +1083,16 @@ class WebcamKGLoop:
                  f"with someone through a webcam."]
         if personas:
             ident.append(f"Personality: {', '.join(personas)}.")
+        elif self._first_impression:
+            # First-impression runs unseeded (no persona/topic nodes in the graph),
+            # so give the robot a warm default character inline.
+            ident.append("Personality: warm, curious and welcoming — you love "
+                         "meeting someone new and remembering their name.")
         if caps:
             ident.append(f"You can: {', '.join(caps)}.")
+        if self._first_impression:
+            ident.append("If you don't yet know their name, gently invite them to "
+                         "introduce themselves.")
         blocks.append("\n".join(ident))
 
         # ── HOW TO REPLY ──
@@ -1497,6 +1505,27 @@ class WebcamKGLoop:
                                 last_user_msg  = msg
                                 chat_expire_t  = time.time() + 45.0
                                 print(f"\n  [you]  \"{msg}\"")
+
+                                # ── First impression: save the face + learn a name ──
+                                if self._first_impression:
+                                    # (1) Unknown face in view → enrol it now so this
+                                    #     very first exchange is attributed to them.
+                                    if last_person_id is None and last_box is not None:
+                                        gid = self._auto_enroll(frame)
+                                        if gid:
+                                            last_person_id = gid
+                                            last_tier      = "visitor"
+                                    # (2) Did they just introduce themselves? Re-key the
+                                    #     provisional guest id to their real name.
+                                    if last_person_id and last_person_id.startswith("guest_"):
+                                        nm   = _extract_name(msg)
+                                        slug = _slug_name(nm) if nm else ""
+                                        if slug and slug != last_person_id and \
+                                                self._learn_name(last_person_id, slug, nm):
+                                            if last_person_id in _kg_state:
+                                                _kg_state[slug] = _kg_state.pop(last_person_id)
+                                            last_person_id = slug
+
                                 if self.llm and self.llm.available:
                                     hist = list(self._chat_history.get(
                                         last_person_id or "", []
@@ -1626,7 +1655,13 @@ class WebcamKGLoop:
                     elif key in (ord("k"), ord("K")):
                         _dump_kg(self.store, self.robot_id)
                     elif key in (ord("x"), ord("X")):
-                        self._extract_session()   # run extraction mid-session (testing)
+                        # First-impression keeps ONLY the fast conversation node —
+                        # no interest/topic extraction (which would add topic nodes).
+                        if self._first_impression:
+                            print("[FirstImpression] topic extraction disabled "
+                                  "(fast conversation node only)")
+                        else:
+                            self._extract_session()   # run extraction mid-session (testing)
                     elif key in (ord("c"), ord("C")):
                         self._consolidate_preview()   # dry-run: preview topic merges
                     elif key in (ord("b"), ord("B")) and last_person_id:
@@ -1646,11 +1681,14 @@ class WebcamKGLoop:
             worker.join(timeout=2.0)
             if self.face_id.known_people():
                 self.face_id.save(self.faces_path)
-            # End-of-session knowledge extraction → update the graph.
-            try:
-                self._extract_session()
-            except Exception as exc:  # noqa: BLE001 — never fail on shutdown
-                print(f"[WebcamLoop] extraction failed: {exc}")
+            # End-of-session knowledge extraction → update the graph. Skipped in
+            # first-impression mode, which deliberately keeps only the fast
+            # conversation node (emotion / current topic / mood) — no topic nodes.
+            if not self._first_impression:
+                try:
+                    self._extract_session()
+                except Exception as exc:  # noqa: BLE001 — never fail on shutdown
+                    print(f"[WebcamLoop] extraction failed: {exc}")
             self.store.save(self.kg_path)
             self._session_store.close()
             cap.release()
@@ -1825,6 +1863,15 @@ def main() -> None:
                    help="Enable the PAD persona engine (disabled by default this pass)")
     p.add_argument("--enable-emotion", action="store_true",
                    help="Enable emotion detection (disabled by default this pass)")
+    p.add_argument("--first-impression", action="store_true",
+                   help="First-impression mode: auto-save an unknown face on its "
+                        "first chat, learn the person's name from what they type, "
+                        "and keep ONLY the fast conversation node (emotion / current "
+                        "topic / mood) — no interest/topic nodes. Implies emotion on "
+                        "and seeding off (re-enable seeding with --seed-fi).")
+    p.add_argument("--seed-fi", action="store_true",
+                   help="Allow KG spec seeding even in --first-impression mode "
+                        "(off by default, since seeding adds topic nodes)")
     # ── Feature 2: topic consolidation (--mode consolidate) ────────────────────
     p.add_argument("--merge-floor", type=float, default=0.86,
                    help="Min cosine similarity to MERGE two near-duplicate topics "
@@ -1872,6 +1919,12 @@ def main() -> None:
             matcher = None
             embed_fn = None
 
+    # First-impression mode implies emotion ON (so the fast node shows mood) and
+    # seeding OFF (spec seeding would add topic nodes) unless --seed-fi is given.
+    fi_mode         = args.first_impression
+    seed_enabled    = (args.seed_fi if fi_mode else not args.no_seed)
+    emotion_enabled = args.enable_emotion or fi_mode
+
     loop = WebcamKGLoop(
         robot_id         = args.robot,
         faces_path       = args.faces,
@@ -1884,12 +1937,13 @@ def main() -> None:
         esp32_host       = args.esp32_host,
         esp32_port       = args.esp32_port,
         spec_dir         = args.spec_dir,
-        seed             = not args.no_seed,
+        seed             = seed_enabled,
         matcher          = matcher,
         embed_fn         = embed_fn,
         sessions_db      = args.sessions_db,
         pad_enabled      = args.enable_pad,
-        emotion_enabled  = args.enable_emotion,
+        emotion_enabled  = emotion_enabled,
+        first_impression = fi_mode,
     )
     loop.run(camera_index=args.camera)
 

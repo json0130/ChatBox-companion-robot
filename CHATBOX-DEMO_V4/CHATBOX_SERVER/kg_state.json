@@ -3,7 +3,7 @@
     {
       "id": "jay",
       "display_name": "Jay",
-      "created_at": "2026-07-20T22:57:28.019046Z",
+      "created_at": "2026-07-20T23:05:50.583333Z",
       "node_type": "person"
     },
     {
@@ -297,8 +297,8 @@
         "previous conversation",
         "past conversations"
       ],
-      "mood": -0.3564114475273527,
-      "emotion": "neutral",
+      "mood": -0.3452010924404021,
+      "emotion": "sad",
       "node_type": "conversation"
     },
     {
@@ -569,12 +569,12 @@
       "target_id": "jay",
       "provenance": {
         "source": "chatbox",
-        "timestamp": "2026-07-20T23:02:03.201077Z",
+        "timestamp": "2026-07-20T23:05:54.853881Z",
         "confidence": 1.0
       },
       "edge_type": "mood",
-      "value": -0.3564114475273527,
-      "label": "neutral",
+      "value": -0.3452010924404021,
+      "label": "sad",
       "timescale": "FAST"
     },
     {
@@ -596,7 +596,7 @@
       "target_id": "jay:persona:curious-talkative",
       "provenance": {
         "source": "spec:human_spec.yaml",
-        "timestamp": "2026-07-20T22:57:28.019105Z",
+        "timestamp": "2026-07-20T23:05:50.583398Z",
         "confidence": 1.0
       },
       "edge_type": "has_persona",
@@ -608,7 +608,7 @@
       "target_id": "chatbox:persona:introverted-shy",
       "provenance": {
         "source": "spec:robot_spec.yaml",
-        "timestamp": "2026-07-20T22:57:28.019953Z",
+        "timestamp": "2026-07-20T23:05:50.584095Z",
         "confidence": 1.0
       },
       "edge_type": "has_persona",
@@ -620,7 +620,7 @@
       "target_id": "chatbox:role:companion",
       "provenance": {
         "source": "spec:robot_spec.yaml",
-        "timestamp": "2026-07-20T22:57:28.019973Z",
+        "timestamp": "2026-07-20T23:05:50.584112Z",
         "confidence": 1.0
       },
       "edge_type": "has_role",
@@ -632,7 +632,7 @@
       "target_id": "jay:role:student",
       "provenance": {
         "source": "spec:human_spec.yaml",
-        "timestamp": "2026-07-20T22:57:28.019145Z",
+        "timestamp": "2026-07-20T23:05:50.583439Z",
         "confidence": 1.0
       },
       "edge_type": "has_role",
@@ -644,7 +644,7 @@
       "target_id": "interest:jay:music",
       "provenance": {
         "source": "spec:human_spec.yaml",
-        "timestamp": "2026-07-20T22:57:28.019164Z",
+        "timestamp": "2026-07-20T23:05:50.583457Z",
         "confidence": 1.0
       },
       "edge_type": "has_interest",
@@ -714,7 +714,7 @@
       "target_id": "chatbox:capability",
       "provenance": {
         "source": "spec:robot_spec.yaml",
-        "timestamp": "2026-07-20T22:57:28.019987Z",
+        "timestamp": "2026-07-20T23:05:50.584129Z",
         "confidence": 1.0
       },
       "edge_type": "has_capability",
@@ -765,7 +765,7 @@
       "target_id": "topic:jazz",
       "provenance": {
         "source": "spec:human_spec.yaml",
-        "timestamp": "2026-07-20T22:57:28.019178Z",
+        "timestamp": "2026-07-20T23:05:50.583470Z",
         "confidence": 1.0
       },
       "edge_type": "about",
@@ -1280,18 +1280,6 @@
       },
       "edge_type": "culture_prior",
       "prior": 0.45,
-      "timescale": "SLOW"
-    },
-    {
-      "id": "aaf6c284-cc45-4e75-ace3-ee8f2f3b8818",
-      "source_id": "jay",
-      "target_id": "culture:korean",
-      "provenance": {
-        "source": "culture-seed",
-        "timestamp": "2026-07-20T11:16:46.847694Z",
-        "confidence": 1.0
-      },
-      "edge_type": "belongs_to_culture",
       "timescale": "SLOW"
     }
   ]

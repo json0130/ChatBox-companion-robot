@@ -3,7 +3,7 @@
     {
       "id": "jay",
       "display_name": "Jay",
-      "created_at": "2026-07-20T23:05:50.583333Z",
+      "created_at": "2026-07-20T23:26:36.610064Z",
       "node_type": "person"
     },
     {
@@ -41,9 +41,9 @@
     },
     {
       "id": "interaction:jay:chatbox",
-      "rapport": 0.9,
-      "trust": 0.0,
-      "interaction_count": 95,
+      "rapport": 1.0,
+      "trust": 0.05,
+      "interaction_count": 115,
       "node_type": "interaction"
     },
     {
@@ -293,11 +293,11 @@
     {
       "id": "conversation:jay:chatbox",
       "topics": [
-        "greeting",
-        "previous conversation",
-        "past conversations"
+        "k-pop",
+        "k-pop performances",
+        "concerts"
       ],
-      "mood": -0.3452010924404021,
+      "mood": -0.5752431450266158,
       "emotion": "sad",
       "node_type": "conversation"
     },
@@ -424,6 +424,16 @@
           "person": "jay",
           "text": "Discussed creating a playlist",
           "ts": "2026-07-16T02:16:21.487281+00:00"
+        },
+        {
+          "person": "jay",
+          "text": "Discussed planning to meet up with friends.",
+          "ts": "2026-07-20T23:09:34.325117+00:00"
+        },
+        {
+          "person": "jay",
+          "text": "The child was planning to create a playlist.",
+          "ts": "2026-07-20T23:23:23.600163+00:00"
         }
       ],
       "node_type": "topic"
@@ -462,13 +472,6 @@
           "ts": "2026-07-16T02:24:17.640754+00:00"
         }
       ],
-      "node_type": "topic"
-    },
-    {
-      "id": "topic:mars",
-      "label": "mars",
-      "category": "other",
-      "notes": [],
       "node_type": "topic"
     },
     {
@@ -560,6 +563,95 @@
       "label": "taekwondo",
       "category": "sport",
       "node_type": "culture_topic"
+    },
+    {
+      "id": "topic:korean-restaurant",
+      "label": "korean_restaurant",
+      "category": "place",
+      "notes": [
+        {
+          "person": "jay",
+          "text": "Going to a Korean restaurant for food.",
+          "ts": "2026-07-20T23:09:34.325222+00:00"
+        },
+        {
+          "person": "jay",
+          "text": "Discussed Korean cuisine.",
+          "ts": "2026-07-20T23:11:11.026373+00:00"
+        },
+        {
+          "person": "jay",
+          "text": "Not directly discussed but related to previous context.",
+          "ts": "2026-07-20T23:29:56.979534+00:00"
+        },
+        {
+          "person": "jay",
+          "text": "Implied interest in Korean cuisine based on discussion of 'mum's food' and 'spicy pork'",
+          "ts": "2026-07-20T23:36:10.574934+00:00"
+        }
+      ],
+      "node_type": "topic"
+    },
+    {
+      "id": "interest:jay:place",
+      "label": "place",
+      "node_type": "interest"
+    },
+    {
+      "id": "topic:spicy-pork",
+      "label": "spicy_pork",
+      "category": "food",
+      "notes": [
+        {
+          "person": "jay",
+          "text": "Discussed a favorite dish.",
+          "ts": "2026-07-20T23:11:11.026420+00:00"
+        },
+        {
+          "person": "jay",
+          "text": "Child likes spicy pork.",
+          "ts": "2026-07-20T23:36:10.574879+00:00"
+        }
+      ],
+      "node_type": "topic"
+    },
+    {
+      "id": "interest:jay:food",
+      "label": "food",
+      "node_type": "interest"
+    },
+    {
+      "id": "topic:mars",
+      "label": "mars",
+      "category": "other",
+      "notes": [],
+      "node_type": "topic"
+    },
+    {
+      "id": "topic:twice",
+      "label": "twice",
+      "category": "music",
+      "notes": [
+        {
+          "person": "jay",
+          "text": "Child likes the K-pop group Twice",
+          "ts": "2026-07-20T23:36:10.574969+00:00"
+        }
+      ],
+      "node_type": "topic"
+    },
+    {
+      "id": "topic:newjeans",
+      "label": "newjeans",
+      "category": "music",
+      "notes": [
+        {
+          "person": "jay",
+          "text": "Child also likes the K-pop group NewJeans",
+          "ts": "2026-07-20T23:36:10.574992+00:00"
+        }
+      ],
+      "node_type": "topic"
     }
   ],
   "edges": [
@@ -569,11 +661,11 @@
       "target_id": "jay",
       "provenance": {
         "source": "chatbox",
-        "timestamp": "2026-07-20T23:05:54.853881Z",
+        "timestamp": "2026-07-20T23:29:45.905747Z",
         "confidence": 1.0
       },
       "edge_type": "mood",
-      "value": -0.3452010924404021,
+      "value": -0.5752431450266158,
       "label": "sad",
       "timescale": "FAST"
     },
@@ -596,7 +688,7 @@
       "target_id": "jay:persona:curious-talkative",
       "provenance": {
         "source": "spec:human_spec.yaml",
-        "timestamp": "2026-07-20T23:05:50.583398Z",
+        "timestamp": "2026-07-20T23:26:36.610115Z",
         "confidence": 1.0
       },
       "edge_type": "has_persona",
@@ -608,7 +700,7 @@
       "target_id": "chatbox:persona:introverted-shy",
       "provenance": {
         "source": "spec:robot_spec.yaml",
-        "timestamp": "2026-07-20T23:05:50.584095Z",
+        "timestamp": "2026-07-20T23:26:36.610921Z",
         "confidence": 1.0
       },
       "edge_type": "has_persona",
@@ -620,7 +712,7 @@
       "target_id": "chatbox:role:companion",
       "provenance": {
         "source": "spec:robot_spec.yaml",
-        "timestamp": "2026-07-20T23:05:50.584112Z",
+        "timestamp": "2026-07-20T23:26:36.610937Z",
         "confidence": 1.0
       },
       "edge_type": "has_role",
@@ -632,7 +724,7 @@
       "target_id": "jay:role:student",
       "provenance": {
         "source": "spec:human_spec.yaml",
-        "timestamp": "2026-07-20T23:05:50.583439Z",
+        "timestamp": "2026-07-20T23:26:36.610155Z",
         "confidence": 1.0
       },
       "edge_type": "has_role",
@@ -643,8 +735,8 @@
       "source_id": "jay",
       "target_id": "interest:jay:music",
       "provenance": {
-        "source": "spec:human_spec.yaml",
-        "timestamp": "2026-07-20T23:05:50.583457Z",
+        "source": "extraction:backfill",
+        "timestamp": "2026-07-20T23:36:10.574980Z",
         "confidence": 1.0
       },
       "edge_type": "has_interest",
@@ -714,7 +806,7 @@
       "target_id": "chatbox:capability",
       "provenance": {
         "source": "spec:robot_spec.yaml",
-        "timestamp": "2026-07-20T23:05:50.584129Z",
+        "timestamp": "2026-07-20T23:26:36.610950Z",
         "confidence": 1.0
       },
       "edge_type": "has_capability",
@@ -765,7 +857,7 @@
       "target_id": "topic:jazz",
       "provenance": {
         "source": "spec:human_spec.yaml",
-        "timestamp": "2026-07-20T23:05:50.583470Z",
+        "timestamp": "2026-07-20T23:26:36.610185Z",
         "confidence": 1.0
       },
       "edge_type": "about",
@@ -1004,9 +1096,9 @@
       "source_id": "jay",
       "target_id": "interest:jay:activity",
       "provenance": {
-        "source": "extraction:93ccc6cc-0728-4a1c-8a61-95620ae51c47",
-        "timestamp": "2026-07-16T02:29:04.061553Z",
-        "confidence": 1.0
+        "source": "extraction:0b435ed1-f34f-4b0a-aa3a-da8bedc25d26",
+        "timestamp": "2026-07-20T23:23:23.600091Z",
+        "confidence": 0.8
       },
       "edge_type": "has_interest",
       "timescale": "SLOW"
@@ -1016,9 +1108,9 @@
       "source_id": "interest:jay:activity",
       "target_id": "topic:creating-playlist",
       "provenance": {
-        "source": "extraction:93ccc6cc-0728-4a1c-8a61-95620ae51c47",
-        "timestamp": "2026-07-16T02:29:04.061596Z",
-        "confidence": 1.0
+        "source": "extraction:0b435ed1-f34f-4b0a-aa3a-da8bedc25d26",
+        "timestamp": "2026-07-20T23:23:23.600141Z",
+        "confidence": 0.8
       },
       "edge_type": "about",
       "label": null,
@@ -1280,6 +1372,94 @@
       },
       "edge_type": "culture_prior",
       "prior": 0.45,
+      "timescale": "SLOW"
+    },
+    {
+      "id": "7a78cac3-941c-4254-9c44-8b5e7d792d75",
+      "source_id": "jay",
+      "target_id": "interest:jay:place",
+      "provenance": {
+        "source": "extraction:backfill",
+        "timestamp": "2026-07-20T23:36:10.574911Z",
+        "confidence": 0.8
+      },
+      "edge_type": "has_interest",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "b6db0832-6166-474d-80a2-37b56d2328bc",
+      "source_id": "interest:jay:place",
+      "target_id": "topic:korean-restaurant",
+      "provenance": {
+        "source": "extraction:backfill",
+        "timestamp": "2026-07-20T23:36:10.574923Z",
+        "confidence": 0.8
+      },
+      "edge_type": "about",
+      "label": null,
+      "timescale": "SLOW"
+    },
+    {
+      "id": "6aa00aaa-ea49-44e5-b764-61211d589faf",
+      "source_id": "jay",
+      "target_id": "interest:jay:food",
+      "provenance": {
+        "source": "extraction:backfill",
+        "timestamp": "2026-07-20T23:36:10.574815Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_interest",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "d612bbca-2339-4373-9aab-55220a8c678f",
+      "source_id": "interest:jay:food",
+      "target_id": "topic:spicy-pork",
+      "provenance": {
+        "source": "extraction:backfill",
+        "timestamp": "2026-07-20T23:36:10.574861Z",
+        "confidence": 1.0
+      },
+      "edge_type": "about",
+      "label": null,
+      "timescale": "SLOW"
+    },
+    {
+      "id": "701dcb85-0d72-4761-afaa-4d9ff0a61e5d",
+      "source_id": "jay",
+      "target_id": "culture:korean",
+      "provenance": {
+        "source": "self-declared:2b2ab7c7-50ab-424b-9698-74b23cb3d793",
+        "timestamp": "2026-07-20T23:11:12.074300Z",
+        "confidence": 1.0
+      },
+      "edge_type": "belongs_to_culture",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "b6a1b88e-608b-4e80-bc0e-1ff35bf08bdf",
+      "source_id": "interest:jay:music",
+      "target_id": "topic:twice",
+      "provenance": {
+        "source": "extraction:backfill",
+        "timestamp": "2026-07-20T23:36:10.574962Z",
+        "confidence": 1.0
+      },
+      "edge_type": "about",
+      "label": null,
+      "timescale": "SLOW"
+    },
+    {
+      "id": "3904877b-16c7-4048-b869-d65425bc8a69",
+      "source_id": "interest:jay:music",
+      "target_id": "topic:newjeans",
+      "provenance": {
+        "source": "extraction:backfill",
+        "timestamp": "2026-07-20T23:36:10.574987Z",
+        "confidence": 1.0
+      },
+      "edge_type": "about",
+      "label": null,
       "timescale": "SLOW"
     }
   ]

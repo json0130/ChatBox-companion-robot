@@ -214,11 +214,14 @@ class LLMClient:
         return self.available
 
     def respond(self, system_prompt: str, user_msg: str,
-                history: list[tuple[str, str]] | None = None) -> str:
+                history: list[tuple[str, str]] | None = None,
+                max_tokens: int = 140) -> str:
         """
         Args:
             history: list of (user_text, assistant_text) pairs from previous turns.
                      Injected as alternating user/assistant messages before user_msg.
+            max_tokens: reply budget. 140 suits a short spoken reply; JSON extraction
+                     (topics/closeness) needs far more or the JSON truncates mid-object.
         """
         if not self.available or self._client is None:
             return "[LLM not connected — run with --llm]"
@@ -231,7 +234,7 @@ class LLMClient:
             resp = self._client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                max_tokens=140,
+                max_tokens=max_tokens,
                 temperature=0.7,
                 # Stop if the model tries to continue past its turn / open a new one
                 # (qwen sometimes leaks ChatML tokens or a fake "user:" turn).
@@ -1232,12 +1235,17 @@ class WebcamKGLoop:
                 print(f"  {pid}: no conversation turns to extract")
                 continue
 
+            # JSON extraction needs a big token budget or the response truncates
+            # mid-object and every topic in it is silently lost (chat default is 140).
+            def _json_llm(sysp, usr):
+                return self.llm.respond(sysp, usr, max_tokens=900)
+
             # (a) Graph-aware typed topics (reuse existing / add genuinely new).
             ts = extract_and_apply_topics(
-                self.store, pid, self.robot_id, turns, self.llm.respond, session_id=sid)
+                self.store, pid, self.robot_id, turns, _json_llm, session_id=sid)
 
             # (b) Closeness deltas — existing logic, untouched (deltas applied only).
-            cu = _extract_closeness(turns, self.llm.respond)
+            cu = _extract_closeness(turns, _json_llm)
             if cu.rapport_delta or cu.trust_delta:
                 adjust_closeness(self.store, pid, self.robot_id,
                                  d_rapport=cu.rapport_delta, d_trust=cu.trust_delta,

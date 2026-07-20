@@ -6,6 +6,26 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## refactor: prune dead code + share consolidation core (compact/modular)  *(branch `KG-knowledge-extraction`)*
+
+**Goal:** review the branch and remove unnecessary/redundant code. Net −109 lines, no behaviour change.
+**Removed (dead):**
+- `_mood_phrase`, `_MOOD_WEIGHT`, and the `mood`/`emotion` params of `_build_system_prompt` (+ the
+  `cur_mood`/`cur_emotion` locals) — dead since mood was dropped from the prompt.
+- `CurrentTopicEdge` (schema class + union member + store classification + viz timescale map + comments) —
+  superseded by `ConversationNode`; 0 such edges in any persisted graph, so removal is backward-compatible.
+- `SessionStore.person_turns` (never called); an unused `_dump_kg` import.
+**Refactored (modular):** the three consolidation functions (`consolidate_topics`, `consolidate_interests`,
+`link_related_topics`) shared ~120 lines of near-identical embed + pairwise-cosine + union-find loops. Pulled
+out `_embed`, `_pairs`, `_merge_by_similarity`, `_same_category` helpers; the public functions are now thin
+wrappers (kg_extraction.py −143 lines).
+**Verified:** all modules compile; real `kg_state.json` loads (40 nodes / 44 edges, incl. related_topic);
+merge/related behaviour identical on a controlled synthetic case (near-dups merge, related link, unrelated
+skip); prompt has no mood line but keeps common-ground + related interests; real-LLM reply still recalls
+memory ("R&B and jazz … SZA and Kendrick Lamar").
+
+---
+
 ## feat: use topic↔topic relations in retrieval + common ground (2c points 1&2)  *(branch `KG-knowledge-extraction`)*
 
 **Goal:** actually *use* the `related_topic` edges (they were structure-only). Wired points 1 (retrieval /

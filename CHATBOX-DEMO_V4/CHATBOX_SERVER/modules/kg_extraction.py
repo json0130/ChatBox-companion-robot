@@ -229,124 +229,6 @@ class _UnionFind:
             self.parent[ra] = rb
 
 
-def consolidate_topics(
-    store, embed_fn: EmbedFn, *,
-    floor: float = CONSOLIDATE_FLOOR, same_category_only: bool = True,
-    dry_run: bool = False, source: str = "consolidate",
-) -> dict:
-    """Find near-duplicate topics by embedding cosine and merge each group into a
-    single canonical node (highest-degree; ties → shortest, then lexicographic).
-
-    same_category_only: never merge across categories (jazz[music] vs jaguar[animals]).
-    dry_run: compute + return the proposed merges but write NOTHING.
-
-    Returns {"pairs":[(a_label,b_label,sim)], "merges":[(canon_label,dup_label)],
-             "groups": n, "dry_run": bool}.
-    """
-    topics = _topic_nodes(store)
-    report = {"pairs": [], "merges": [], "groups": 0, "dry_run": dry_run}
-    if len(topics) < 2:
-        return report
-
-    # Embed each label once (cache); skip topics whose embedding fails.
-    vecs: dict = {}
-    for tid, label, _cat in topics:
-        try:
-            v = embed_fn(label)
-        except Exception:  # noqa: BLE001 — embedding backend down → skip
-            v = None
-        if v:
-            vecs[tid] = v
-
-    # Candidate pairs by cosine (optionally same-category only).
-    cat_of = {tid: cat for tid, _l, cat in topics}
-    label_of = {tid: lbl for tid, lbl, _c in topics}
-    uf = _UnionFind([t[0] for t in topics])
-    n = len(topics)
-    for i in range(n):
-        ai = topics[i][0]
-        if ai not in vecs:
-            continue
-        for j in range(i + 1, n):
-            bj = topics[j][0]
-            if bj not in vecs:
-                continue
-            if same_category_only and cat_of[ai] != cat_of[bj]:
-                continue
-            sim = _cosine(vecs[ai], vecs[bj])
-            if sim >= floor:
-                report["pairs"].append((label_of[ai], label_of[bj], round(sim, 3)))
-                uf.union(ai, bj)
-
-    # Group members; canonical = highest degree, tie → shortest then lexicographic.
-    groups: dict = {}
-    for tid, _l, _c in topics:
-        groups.setdefault(uf.find(tid), []).append(tid)
-    merge_ops = []  # (canonical_id, duplicate_id)
-    for members in groups.values():
-        if len(members) < 2:
-            continue
-        report["groups"] += 1
-        canonical = min(
-            members,
-            key=lambda t: (-topic_degree(store, t), len(label_of[t]), label_of[t]))
-        for tid in members:
-            if tid != canonical:
-                merge_ops.append((canonical, tid))
-                report["merges"].append((label_of[canonical], label_of[tid]))
-
-    if not dry_run:
-        for canonical, dup in merge_ops:
-            merge_topics(store, canonical, dup, source=source)
-    return report
-
-
-def link_related_topics(
-    store, embed_fn: EmbedFn, *,
-    related_floor: float = RELATED_FLOOR, merge_floor: float = CONSOLIDATE_FLOOR,
-    same_category_only: bool = True, dry_run: bool = False,
-    source: str = "related",
-) -> dict:
-    """Add Topic↔Topic `related_topic` links for pairs that are related but NOT
-    near-duplicates: cosine in [related_floor, merge_floor). Same-category only by
-    default (rap~hiphop, tennis~basketball). Returns {"links":[(a,b,sim)], ...}."""
-    from modules.graph_relationship.topics import link_related_topic
-    topics = _topic_nodes(store)                    # [(id, label, category)]
-    report = {"links": [], "existing": 0, "dry_run": dry_run}
-    if len(topics) < 2:
-        return report
-    vecs: dict = {}
-    for tid, label, _cat in topics:
-        try:
-            v = embed_fn(label)
-        except Exception:  # noqa: BLE001
-            v = None
-        if v:
-            vecs[tid] = v
-    cat_of = {tid: cat for tid, _l, cat in topics}
-    label_of = {tid: lbl for tid, lbl, _c in topics}
-    n = len(topics)
-    for i in range(n):
-        ai = topics[i][0]
-        if ai not in vecs:
-            continue
-        for j in range(i + 1, n):
-            bj = topics[j][0]
-            if bj not in vecs:
-                continue
-            if same_category_only and cat_of[ai] != cat_of[bj]:
-                continue
-            sim = _cosine(vecs[ai], vecs[bj])
-            if related_floor <= sim < merge_floor:
-                if store.get_edge(*sorted((ai, bj)), "related_topic") is not None:
-                    report["existing"] += 1
-                    continue
-                report["links"].append((label_of[ai], label_of[bj], round(sim, 3)))
-                if not dry_run:
-                    link_related_topic(store, ai, bj, sim, source=source)
-    return report
-
-
 def _interest_nodes(store) -> List[tuple]:
     """[(id, person_id, label), ...] for every InterestNode (id = interest:person:slug)."""
     out = []
@@ -358,62 +240,129 @@ def _interest_nodes(store) -> List[tuple]:
     return out
 
 
+# ── shared consolidation core (topics + interests) ──────────────────────────
+
+def _embed(items, embed_fn: EmbedFn) -> dict:
+    """items: iterable of (id, label). Returns {id: vec}, skipping embed failures."""
+    vecs: dict = {}
+    for id_, label in items:
+        try:
+            v = embed_fn(label)
+        except Exception:  # noqa: BLE001 — backend down → skip
+            v = None
+        if v:
+            vecs[id_] = v
+    return vecs
+
+
+def _pairs(ids, vecs, *, lo, hi, ok):
+    """Yield (a, b, round(sim,3)) for id pairs with lo <= sim < hi and ok(a, b)."""
+    for i in range(len(ids)):
+        a = ids[i]
+        if a not in vecs:
+            continue
+        for j in range(i + 1, len(ids)):
+            b = ids[j]
+            if b in vecs and ok(a, b):
+                sim = _cosine(vecs[a], vecs[b])
+                if lo <= sim < hi:
+                    yield a, b, round(sim, 3)
+
+
+def _merge_by_similarity(store, items, embed_fn, floor, merge_fn, *, ok, dry_run, source):
+    """Merge groups of near-duplicate nodes. items: [(id, label)]; `ok(a,b)` filters
+    pairs; canonical = highest degree, ties → shortest then lexicographic. Shared by
+    consolidate_topics and consolidate_interests."""
+    label_of = {i: l for i, l in items}
+    ids = list(label_of)
+    vecs = _embed(items, embed_fn)
+    uf = _UnionFind(ids)
+    pairs = []
+    for a, b, sim in _pairs(ids, vecs, lo=floor, hi=float("inf"), ok=ok):
+        pairs.append((label_of[a], label_of[b], sim))
+        uf.union(a, b)
+    groups: dict = {}
+    for i in ids:
+        groups.setdefault(uf.find(i), []).append(i)
+    merges, n_groups = [], 0
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        n_groups += 1
+        canonical = min(members,
+                        key=lambda t: (-topic_degree(store, t), len(label_of[t]), label_of[t]))
+        for m in members:
+            if m != canonical:
+                merges.append((label_of[canonical], label_of[m]))
+                if not dry_run:
+                    merge_fn(store, canonical, m, source=source)
+    return {"pairs": pairs, "merges": merges, "groups": n_groups}
+
+
+def _same_category(cat_of, enabled):
+    return (lambda a, b: cat_of[a] == cat_of[b]) if enabled else (lambda a, b: True)
+
+
+def consolidate_topics(
+    store, embed_fn: EmbedFn, *,
+    floor: float = CONSOLIDATE_FLOOR, same_category_only: bool = True,
+    dry_run: bool = False, source: str = "consolidate",
+) -> dict:
+    """Merge near-duplicate topics (cosine >= floor) into one canonical node.
+    same_category_only never merges across categories. Returns
+    {"pairs","merges","groups","dry_run"}."""
+    from modules.graph_relationship.topics import merge_topics
+    topics = _topic_nodes(store)                    # (id, label, category)
+    cat_of = {tid: cat for tid, _l, cat in topics}
+    r = _merge_by_similarity(
+        store, [(tid, lbl) for tid, lbl, _c in topics], embed_fn, floor, merge_topics,
+        ok=_same_category(cat_of, same_category_only), dry_run=dry_run, source=source)
+    r["dry_run"] = dry_run
+    return r
+
+
 def consolidate_interests(
     store, embed_fn: EmbedFn, *,
     floor: float = CONSOLIDATE_FLOOR, dry_run: bool = False,
     source: str = "consolidate",
 ) -> dict:
-    """Merge near-duplicate Interest nodes PER PERSON by embedding cosine — e.g.
-    "sports" (old LLM label) vs "sport" (new category-named interest). Canonical =
-    highest degree, ties → shortest then lexicographic. Same report shape as
-    consolidate_topics."""
+    """Merge near-duplicate Interest nodes PER PERSON — e.g. "sports" (old LLM
+    label) vs "sport" (new category-named interest)."""
     from modules.graph_relationship.topics import merge_interests
-    report = {"pairs": [], "merges": [], "groups": 0, "dry_run": dry_run}
     by_person: dict = {}
     for iid, person, label in _interest_nodes(store):
         by_person.setdefault(person, []).append((iid, label))
-
-    for _person, items in by_person.items():
+    out = {"pairs": [], "merges": [], "groups": 0, "dry_run": dry_run}
+    for items in by_person.values():
         if len(items) < 2:
             continue
-        label_of = {iid: lbl for iid, lbl in items}
-        vecs: dict = {}
-        for iid, label in items:
-            try:
-                v = embed_fn(label)
-            except Exception:  # noqa: BLE001
-                v = None
-            if v:
-                vecs[iid] = v
-        uf = _UnionFind([i[0] for i in items])
-        for a in range(len(items)):
-            ai = items[a][0]
-            if ai not in vecs:
-                continue
-            for b in range(a + 1, len(items)):
-                bj = items[b][0]
-                if bj not in vecs:
-                    continue
-                sim = _cosine(vecs[ai], vecs[bj])
-                if sim >= floor:
-                    report["pairs"].append((label_of[ai], label_of[bj], round(sim, 3)))
-                    uf.union(ai, bj)
-        groups: dict = {}
-        for iid, _l in items:
-            groups.setdefault(uf.find(iid), []).append(iid)
-        merge_ops = []
-        for members in groups.values():
-            if len(members) < 2:
-                continue
-            report["groups"] += 1
-            canonical = min(
-                members,
-                key=lambda i: (-topic_degree(store, i), len(label_of[i]), label_of[i]))
-            for iid in members:
-                if iid != canonical:
-                    merge_ops.append((canonical, iid))
-                    report["merges"].append((label_of[canonical], label_of[iid]))
+        r = _merge_by_similarity(
+            store, items, embed_fn, floor, merge_interests,
+            ok=lambda a, b: True, dry_run=dry_run, source=source)
+        out["pairs"] += r["pairs"]; out["merges"] += r["merges"]; out["groups"] += r["groups"]
+    return out
+
+
+def link_related_topics(
+    store, embed_fn: EmbedFn, *,
+    related_floor: float = RELATED_FLOOR, merge_floor: float = CONSOLIDATE_FLOOR,
+    same_category_only: bool = True, dry_run: bool = False, source: str = "related",
+) -> dict:
+    """Add Topic↔Topic `related_topic` links for pairs that are related but NOT
+    near-duplicates: cosine in [related_floor, merge_floor), same-category only by
+    default (rap~hiphop, tennis~basketball). Returns {"links","existing","dry_run"}."""
+    from modules.graph_relationship.topics import link_related_topic
+    topics = _topic_nodes(store)
+    cat_of = {tid: cat for tid, _l, cat in topics}
+    label_of = {tid: lbl for tid, lbl, _c in topics}
+    vecs = _embed([(tid, lbl) for tid, lbl, _c in topics], embed_fn)
+    report = {"links": [], "existing": 0, "dry_run": dry_run}
+    for a, b, sim in _pairs(list(label_of), vecs, lo=related_floor, hi=merge_floor,
+                            ok=_same_category(cat_of, same_category_only)):
+        if store.get_edge(*sorted((a, b)), "related_topic") is not None:
+            report["existing"] += 1
+            continue
+        report["links"].append((label_of[a], label_of[b], sim))
         if not dry_run:
-            for canonical, dup in merge_ops:
-                merge_interests(store, canonical, dup, source=source)
+            link_related_topic(store, a, b, sim, source=source)
     return report

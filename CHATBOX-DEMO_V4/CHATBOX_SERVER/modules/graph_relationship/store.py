@@ -44,7 +44,7 @@ _edge_adapter: TypeAdapter = TypeAdapter(_AnyEdgeDisc)
 # ---------------------------------------------------------------------------
 
 _PERSON_ATTRIBUTE_TYPES: frozenset = frozenset(
-    {"mood", "attention", "current_topic", "trait", "preference"}
+    {"mood", "attention", "trait", "preference"}
 )
 _RELATIONSHIP_TYPES: frozenset = frozenset(
     {"rapport", "trust", "interaction_count"}
@@ -60,7 +60,7 @@ class PersonContext:
     """
     All graph data relevant to one child, gathered in a single O(neighbors) pass.
 
-    person_attribute_edges — mood, attention, current_topic, trait, preference
+    person_attribute_edges — mood, attention, trait, preference
     relationship_edges     — rapport, trust, disclosure_depth, interaction_count
                              (Robot→Person; both robots' data lives here)
     """

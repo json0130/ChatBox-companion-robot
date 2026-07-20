@@ -504,7 +504,6 @@ def _read_rapport_trust(
 
 def _dump_kg(store: InMemoryGraphStore, robot_id: str) -> None:
     """Print all KG nodes and edges to stdout for debugging."""
-    from modules.graph_relationship.store import _PERSON_ATTRIBUTE_TYPES, _RELATIONSHIP_TYPES
     nodes = list(store._nodes.values())
     edges = list(store._edges.values())
     print("\n" + "=" * 60)
@@ -866,7 +865,7 @@ class WebcamKGLoop:
 
     def _detect_topic(self, user_msg: str, reply: str = "") -> Optional[str]:
         """Best-effort 1–3 word label of what's being discussed, via the LLM.
-        Used to set the FAST current_topic edge. Returns None on any failure."""
+        Used to update the live conversation node. Returns None on any failure."""
         if not (self.llm and self.llm.available):
             return None
         sys = ("You label the topic of a short conversation snippet. Reply with "
@@ -888,9 +887,6 @@ class WebcamKGLoop:
     _MAX_TOPICS_PER_INTEREST = 3
     _MAX_NOTES = 8
     _MAX_NOTES_PER_TOPIC = 2
-    # Down-weight the mood/emotion signal so replies follow the person's content,
-    # not their (often noisy) detected affect. 0.75 = a quarter less weight.
-    _MOOD_WEIGHT = 0.25
 
     def _person_memory(self, pid: Optional[str]) -> str:
         """The 'WHO YOU'RE TALKING TO' body: key interests (capped), common
@@ -972,34 +968,11 @@ class WebcamKGLoop:
 
         return "\n".join(lines)
 
-    @staticmethod
-    def _mood_phrase(valence: Optional[float], emotion: Optional[str]) -> str:
-        """One-line mood read for the prompt context, from the (smoothed) valence.
-        Kept separate from the per-turn emotion label so a wrong single-frame read
-        can still be balanced by the mood trend."""
-        if valence is None and not emotion:
-            return ""
-        v = valence or 0.0
-        if v > 0.15:
-            word = "a bit upbeat"
-        elif v < -0.15:
-            word = "a bit low"
-        else:
-            word = "neutral"
-        # Framed as a weak, optional background hint — NOT a directive.
-        return (f"(Weak background hint — the camera reads their mood as {word}; "
-                "this is unreliable, so don't steer the conversation to it.)")
-
     def _build_system_prompt(self, pid: Optional[str], *,
-                             mood: Optional[float] = None,
-                             emotion: Optional[str] = None,
                              rag_hits: Optional[list] = None) -> str:
         """Assemble the system prompt from the seeded RobotNode + retrieved memory,
         in three labelled blocks. Used when PAD is disabled (no PAD system_prompt).
-
-        `mood`/`emotion` are the person's current valence + emotion label; the mood
-        line lives in the context block (the per-turn emotion is tagged on the user
-        message by the caller)."""
+        Mood/emotion is deliberately not injected (kept for the graph/viz only)."""
         from modules.graph_relationship.topics import robot_capability
         personas = [n.descriptor for _e, n in
                     self.store.query_neighbors(self.robot_id, "has_persona")
@@ -1441,11 +1414,6 @@ class WebcamKGLoop:
                                     # label. Both feed the LLM: the mood line sits in
                                     # the prompt context (stable), the emotion label is
                                     # tagged on this user turn (per-moment) — so a wrong
-                                    # single-frame read can be balanced by the mood.
-                                    cur_emotion = (last_emotion
-                                                   if self._emotion_enabled else None)
-                                    cur_mood = self._last_mood.get(
-                                        last_person_id or "", (None, None))[0]
                                     # RAG: relevant past turns for this message.
                                     rag_hits = []
                                     if self._session_rag and last_person_id:
@@ -1455,19 +1423,14 @@ class WebcamKGLoop:
                                         except Exception:  # noqa: BLE001
                                             rag_hits = []
                                     # PAD off → build the system prompt from the KG
-                                    # (persona + retrieved person memory + mood + RAG).
+                                    # (persona + retrieved person memory + RAG). Mood is
+                                    # tracked on the graph/viz only, not injected here.
                                     if self._pad_enabled and self._last_pad_result:
                                         sys_prompt = self._last_pad_result["system_prompt"]
                                     else:
                                         sys_prompt = self._build_system_prompt(
-                                            last_person_id, mood=cur_mood,
-                                            emotion=cur_emotion, rag_hits=rag_hits)
-                                    # Mood/emotion is intentionally NOT added to the
-                                    # message for now (kept for the graph/viz only).
-                                    llm_msg = msg
-                                    raw_reply = self.llm.respond(
-                                        sys_prompt, llm_msg, history=hist,
-                                    )
+                                            last_person_id, rag_hits=rag_hits)
+                                    raw_reply = self.llm.respond(sys_prompt, msg, history=hist)
                                     tag, verbal = _parse_llm_response(raw_reply)
                                     last_verbal = verbal
                                     if tag:

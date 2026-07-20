@@ -37,7 +37,7 @@ _INDEX_HTML = os.path.join(_HERE, "index.html")
 
 # --------------------------------------------------------------------------
 # edge_type -> timescale bucket, extracted from schema.py.
-#   FAST         : mood, attention, current_topic   (decay within a session)
+#   FAST         : mood, attention   (decay within a session)
 #   SLOW         : trait, preference                 (stable across sessions)
 #   RELATIONSHIP : rapport, trust, disclosure_depth, interaction_count
 # Hardcoded (not imported) so this viz folder stays fully self-contained.
@@ -45,7 +45,6 @@ _INDEX_HTML = os.path.join(_HERE, "index.html")
 _TIMESCALE_BY_EDGE_TYPE = {
     "mood": "FAST",
     "attention": "FAST",
-    "current_topic": "FAST",
     "trait": "SLOW",
     "preference": "SLOW",
     "rapport": "RELATIONSHIP",
@@ -55,7 +54,6 @@ _TIMESCALE_BY_EDGE_TYPE = {
     # Interaction abstraction: person+robot <-> Interaction, Interaction -> Session.
     "has_interaction": "RELATIONSHIP",
     "has_session": "RELATIONSHIP",
-    # Live conversation-status node link — FAST.
     "has_conversation": "FAST",
     # Authored identity edges (seed.py) — SLOW, cross-session.
     "has_persona": "SLOW",

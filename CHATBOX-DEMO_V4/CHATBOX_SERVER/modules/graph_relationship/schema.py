@@ -64,7 +64,7 @@ TOPIC_CATEGORIES: frozenset = frozenset(c.value for c in TopicCategory)
 
 class Timescale(str, Enum):
     """Decay cadence hint consumed by the update-policy module."""
-    FAST = "FAST"   # mood, attention, current_topic — decay within a session
+    FAST = "FAST"   # mood, attention — decay within a session
     SLOW = "SLOW"   # traits, preferences — stable across sessions
 
 
@@ -290,17 +290,6 @@ class AttentionEdge(EdgeBase):
     timescale: Timescale = Timescale.FAST
 
 
-class CurrentTopicEdge(EdgeBase):
-    """Person → TopicNode currently being discussed — FAST, one at a time.
-
-    Written live during a conversation and replaced as the topic shifts (unlike
-    the SLOW interest/about edges distilled at session end). Lets the visualizer
-    show what the person and robot are talking about right now.
-    """
-    edge_type: Literal["current_topic"] = "current_topic"
-    timescale: Timescale = Timescale.FAST
-
-
 class TraitEdge(EdgeBase):
     """Stable personality/character attribute — SLOW."""
     edge_type: Literal["trait"] = "trait"
@@ -316,7 +305,7 @@ class PreferenceEdge(EdgeBase):
 
 
 PersonAttributeEdge = Union[
-    MoodEdge, AttentionEdge, CurrentTopicEdge, TraitEdge, PreferenceEdge
+    MoodEdge, AttentionEdge, TraitEdge, PreferenceEdge
 ]
 
 

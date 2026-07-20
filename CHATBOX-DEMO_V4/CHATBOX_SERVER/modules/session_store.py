@@ -117,14 +117,6 @@ class SessionStore:
             ).fetchall()
         return [self._turn_row(r) for r in rows]
 
-    def person_turns(self, person_id: str) -> List[dict]:
-        """All of a person's turns, oldest first (for history / viz)."""
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM turns WHERE person_id = ? ORDER BY id ASC", (person_id,),
-            ).fetchall()
-        return [self._turn_row(r) for r in rows]
-
     def turns_for_topic(self, topic_label: str, person_id: Optional[str] = None,
                         limit: int = 20) -> List[dict]:
         """Turns whose detected `topics` include `topic_label` (timeline order).

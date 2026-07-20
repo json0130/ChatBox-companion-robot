@@ -298,6 +298,28 @@ class FaceIdentifier:
         self._embeddings.pop(name, None)
         self._counts.pop(name, None)
 
+    def rename(self, old_name: str, new_name: str) -> bool:
+        """Move a person's enrolled embedding from `old_name` to `new_name`.
+
+        Used when a provisionally-enrolled face (e.g. 'guest_3') tells us their
+        real name. If `new_name` already exists, the two profiles are averaged
+        (weighted by sample count) so no enrolment work is lost.
+
+        Returns True if `old_name` existed and was renamed/merged.
+        """
+        if old_name == new_name or old_name not in self._embeddings:
+            return False
+        emb_old, n_old = self._embeddings.pop(old_name), self._counts.pop(old_name, 1)
+        if new_name in self._embeddings:
+            emb_new, n_new = self._embeddings[new_name], self._counts.get(new_name, 1)
+            avg = (emb_new * n_new + emb_old * n_old) / (n_new + n_old)
+            self._embeddings[new_name] = avg / (np.linalg.norm(avg) + 1e-8)
+            self._counts[new_name]     = n_new + n_old
+        else:
+            self._embeddings[new_name] = emb_old
+            self._counts[new_name]     = n_old
+        return True
+
     # ── Persistence ───────────────────────────────────────────────────────────
 
     def save(self, path: str) -> None:

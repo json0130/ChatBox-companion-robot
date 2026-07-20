@@ -186,6 +186,47 @@ def _send_esp32(expression: str, host: str, port: int = 8888,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# First-impression: learn a name from what the person types
+# ─────────────────────────────────────────────────────────────────────────────
+
+# "my name is Jay", "I'm Jay", "call me Jay", "this is Jay", "name's Jay"
+_NAME_RE = re.compile(
+    r"\b(?:my name is|my name's|i am|i'm|im|call me|this is|name is|name's|names)"
+    r"\s+([A-Za-z][A-Za-z'\-]{1,19})",
+    re.IGNORECASE,
+)
+# Words that follow the trigger phrases but are NOT names — avoids
+# "I'm fine" / "I am not sure" being read as the name "fine" / "not".
+_NAME_STOPWORDS = frozenset({
+    "not", "sorry", "fine", "good", "great", "okay", "ok", "here", "just",
+    "really", "so", "very", "doing", "the", "a", "an", "sure", "happy", "sad",
+    "tired", "hungry", "back", "done", "trying", "going", "feeling", "glad",
+    "curious", "bored", "excited", "confused", "afraid", "scared",
+})
+
+
+def _extract_name(text: Optional[str]) -> Optional[str]:
+    """Pull a first name out of a self-introduction, or None.
+
+    Returns the raw captured token (e.g. 'Jay'); the caller slugifies it into a
+    stable id. Rejects obvious non-names (feelings/filler) via a small stoplist.
+    """
+    m = _NAME_RE.search(text or "")
+    if not m:
+        return None
+    raw = m.group(1).strip("-'")
+    if len(raw) < 2 or raw.lower() in _NAME_STOPWORDS:
+        return None
+    return raw
+
+
+def _slug_name(name: str) -> str:
+    """Lowercase single-token id from a captured name, matching the existing
+    enrolment convention (faces are keyed 'jay', 'alice', …)."""
+    return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # LLM client
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -698,6 +739,7 @@ class WebcamKGLoop:
         sessions_db:     str   = _DEFAULT_SESSIONS_DB,
         pad_enabled:     bool  = False,
         emotion_enabled: bool  = False,
+        first_impression: bool = False,
     ):
         self.robot_id      = robot_id
         self.faces_path    = faces_path
@@ -743,6 +785,11 @@ class WebcamKGLoop:
         # (face-reco → KG-through-conversation only). Re-enable via CLI later.
         self._pad_enabled      = pad_enabled
         self._emotion_enabled  = emotion_enabled
+        # First-impression mode: auto-enrol unknown faces on first chat, learn a
+        # name from what they type, and keep ONLY the fast conversation node
+        # (emotion / current topic / mood) — no topic/interest extraction.
+        self._first_impression = first_impression
+        self._guest_seq        = 0
         self._matcher          = matcher
         self._embed_fn         = embed_fn   # for on-demand topic consolidation (Feature 2)
         # Conversation transcripts live in SQLite (not the graph). The graph keeps
@@ -862,6 +909,50 @@ class WebcamKGLoop:
                                 mood=valence, emotion=emotion, create=False,
                                 source="live-mood")
         return changed
+
+    # ── First-impression: auto-enrol + learn a name ────────────────────────────
+
+    def _next_guest_id(self) -> str:
+        """Next free provisional id ('guest_1', 'guest_2', …) not already in the
+        face DB — so re-runs don't collide with earlier guests."""
+        known = set(self.face_id.known_people())
+        self._guest_seq += 1
+        while f"guest_{self._guest_seq}" in known:
+            self._guest_seq += 1
+        return f"guest_{self._guest_seq}"
+
+    def _auto_enroll(self, frame: np.ndarray) -> Optional[str]:
+        """Enrol the face in `frame` under a fresh provisional id and persist the
+        face DB. Returns the new id, or None if no face was captured."""
+        gid = self._next_guest_id()
+        if not self.face_id.enroll(gid, frame):
+            self._guest_seq -= 1          # release the id we reserved
+            return None
+        self.face_id.save(self.faces_path)
+        print(f"[FirstImpression] new face → saved as '{gid}'")
+        return gid
+
+    def _learn_name(self, old_id: str, new_id: str, display: str) -> bool:
+        """Re-key a provisional guest to their real name across the face DB, the
+        graph, the transcript store and this run's in-memory maps."""
+        if not self.face_id.rename(old_id, new_id):
+            return False
+        self.face_id.save(self.faces_path)
+        try:
+            from modules.graph_relationship.rename import rename_person
+            rename_person(self.store, old_id, new_id, self.robot_id,
+                          display_name=display)
+        except Exception as exc:  # noqa: BLE001 — never crash the loop on rename
+            print(f"[FirstImpression] graph rename failed: {exc}")
+        self._session_store.rename_person(old_id, new_id)
+        # Re-key this run's in-memory per-person maps.
+        for d in (self._run_sessions, self._last_mood, self._chat_history):
+            if old_id in d:
+                d[new_id] = d.pop(old_id)
+        if self.kg_path:
+            self.store.save(self.kg_path)
+        print(f"[FirstImpression] learned name: '{old_id}' → '{new_id}'")
+        return True
 
     def _detect_topic(self, user_msg: str, reply: str = "") -> Optional[str]:
         """Best-effort 1–3 word label of what's being discussed, via the LLM.

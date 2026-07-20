@@ -153,6 +153,7 @@
     <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Interest (star)</div>
     <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Conversation (live)</div>
     <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Culture (heptagon)</div>
+    <div class="legend-row"><svg class="shape" width="18" height="18"></svg>Culture topic (sparkle)</div>
   </div>
   <div class="legend-section">
     <div class="legend-title">Edge colour → person</div>
@@ -277,11 +278,12 @@ function shapePath(type) {
     case "Interest":    return {tag:"path",  attrs:{d: starD(5, R*1.45, R*0.6)}};   // star
     case "Conversation":return {tag:"path",  attrs:{d: starD(4, R*1.7, R*0.75)}};   // 4-point burst (live)
     case "Culture":     return {tag:"path",  attrs:{d: polyD(7, R*1.35)}};          // heptagon
+    case "CultureTopic":return {tag:"path",  attrs:{d: starD(6, R*1.2, R*0.5)}};    // 6-point sparkle (robot knowledge)
     default:            return {tag:"circle",attrs:{r:R}};  // Person
   }
 }
 document.querySelectorAll("#legend .shape").forEach((svg, i) => {
-  const type = ["Person","Robot","Topic","Interaction","Session","Persona","Role","Capability","Interest","Conversation","Culture"][i];
+  const type = ["Person","Robot","Topic","Interaction","Session","Persona","Role","Capability","Interest","Conversation","Culture","CultureTopic"][i];
   const s = shapePath(type);
   const el = document.createElementNS("http://www.w3.org/2000/svg", s.tag);
   for (const [k,v] of Object.entries(s.attrs)) el.setAttribute(k, v);

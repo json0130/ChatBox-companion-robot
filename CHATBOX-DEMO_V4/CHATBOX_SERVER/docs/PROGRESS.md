@@ -6,6 +6,43 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## refactor: culture as ChatBox's prior knowledge — separate nodes, HJ decoupled  *(branch `feature/cultural-awareness`)*
+
+**User feedback on the first culture cut:** the viz showed HJ *near* Korean even though HJ never discussed
+anything Korean. **Root cause:** the culture reused the SHARED `topic:hiking` node (Command A's "reuse, don't
+duplicate" rule), and HJ already liked hiking — so both pointed at the one node and the force layout pulled
+them together (a 2-hop path, not a real HJ→Korean edge). **User's reframing (approved):** a culture is the
+ROBOT's *prior knowledge*; ChatBox should own it, and a person only links to a topic by actually talking
+about it over time. So: (1) anchor the culture under ChatBox, (2) give the culture its OWN topic nodes so no
+unrelated person is ever coupled in.
+**Redesign:**
+- schema: new `CultureTopicNode` (id `ck:<culture>:<slug>`, own `node_type` so topic consolidation / interest
+  machinery never touch or merge it into a person topic) + `KnowsCultureEdge` (robot→culture, SLOW).
+  `CulturePriorEdge` now targets a CultureTopic, not a shared Topic.
+- `cultures.py`: `culture_topic_id`, `ensure_culture_topic`, `knows_culture`, `culture_knowers`;
+  `culture_priors` now returns `(ck_id, label, prior)`. Still schema/store/topics-only (pure).
+- `culture_seed.py`: seeds `chatbox --knows_culture--> Korean --culture_prior--> ck:korean:*` — NO
+  `resolve_topic`, so shared person topics are never created or reused. Robot-aware (`--robot`).
+- prompt (`_culture_block`): offers now exclude the person's own topics by NORMALIZED LABEL (culture topics
+  are separate nodes, so compare slugs, not ids). Wording unchanged.
+- viz: `CultureTopic` → 6-point "sparkle" shape + legend; `knows_culture` → SLOW.
+**Model now:** `chatbox --knows_culture--> Korean`; `Korean --culture_prior--> ck:korean:kimchi …`;
+`jay --belongs_to_culture--> Korean` (tag only). `topic:hiking` (HJ's interest) and `ck:korean:hiking`
+(ChatBox's knowledge) are DISTINCT nodes → HJ has zero culture edges.
+**Verified (`test_culture_seed.py`, rewritten):** empty seed = chatbox-owns-Korean + 12 culture topics/priors
++ 0 person topics, round-trips identically; idempotent; on a copy of the real KG person topics are UNCHANGED
+(+12 culture topics, no reuse); jay→Korean prompt block correct (≤4 offers, kpop excluded by slug, memory
+leads, ChatBox owns culture); **HJ decoupled** (shares "hiking" label, zero culture edges, ck≠topic node);
+purity. `tests_schema.py` still 5/5. Real-LLM smoke (qwen2.5:7b) unchanged in behaviour (bibimbap/kimchi
+politely; offered jazz as a question, no false assertion). Live `kg_state.json` re-seeded to the new design.
+**Worktree:** done in an isolated git worktree (`.claude/worktrees/cultural-awareness`) so another agent can
+use `first-impression` in the main checkout concurrently.
+**Deferred (gated):** Command B — read-only Bayesian preference overlay. Note for B: culture priors are now
+`ck:` nodes distinct from person `topic:` nodes, so B must label-JOIN a culture prior to a person's observed
+topic by slug (not node id).
+
+---
+
 ## feat: Korean culture layer — dummy priors + prompt injection (Command A)  *(branch `feature/cultural-awareness`)*
 
 **Goal:** a MANUAL cultural-background layer that gives the robot a weak, respectful hint about a person's

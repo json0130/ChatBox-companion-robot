@@ -1,12 +1,15 @@
 """
-Culture layer helpers: a person may (manually) BELONG to one CultureNode, and a
-culture carries soft PRIORS over Topics.
+Culture layer helpers — the ROBOT's prior cultural knowledge.
 
-  person --belongs_to_culture--> Culture("Korean") --culture_prior[0.8]--> Topic("kimchi")
+  robot  --knows_culture-------> Culture("Korean")
+  Culture --culture_prior[0.8]-> CultureTopic("kimchi")      (robot-owned knowledge)
+  person --belongs_to_culture--> Culture("Korean")           (manual background tag)
 
-`culture_id()` gives every culture a deterministic id ("culture:" + slug, the SAME
-slug as TopicNode), so re-seeding "Korean" resolves to ONE node. Priors are authored
-starting guesses about a background — never a fact about an individual.
+Culture topics are their OWN nodes (id `ck:<culture>:<topic>`), deliberately SEPARATE
+from the shared person-interest TopicNodes. A person is only *tagged* with a culture;
+the culture layer never writes person→topic edges, so tagging one person Korean never
+couples another person who happens to share a topic. A person connects to a real topic
+only by actually discussing it (extraction, over time).
 
 Design contract: imports ONLY schema.py + store.py (+ the pure topics slug) — no LLM,
 no PAD, no embeddings, nothing in modules/. Stateless functions only.
@@ -18,7 +21,8 @@ from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
 from .schema import (
-    BelongsToCultureEdge, CultureNode, CulturePriorEdge, Provenance,
+    BelongsToCultureEdge, CultureNode, CulturePriorEdge, CultureTopicNode,
+    KnowsCultureEdge, Provenance, TopicCategory,
 )
 from .store import GraphStore
 from .topics import normalize_label
@@ -30,14 +34,30 @@ def _prov(source: Optional[str], confidence: float = 1.0) -> Provenance:
                       timestamp=datetime.now(timezone.utc))
 
 
+def _cat_value(category) -> str:
+    if category is None:
+        return "other"
+    return category.value if hasattr(category, "value") else str(category)
+
+
+# ── ids ───────────────────────────────────────────────────────────────────────
+
 def culture_id(label: str) -> str:
     """Deterministic id `culture:<slug>` (same normalization as topic_id)."""
     return f"culture:{normalize_label(label)}"
 
 
+def culture_topic_id(culture_id: str, label: str) -> str:
+    """Deterministic id `ck:<culture-slug>:<topic-slug>` — namespaced under the
+    culture so it never collides with a shared person `topic:<slug>` node."""
+    cslug = culture_id.split(":", 1)[1] if ":" in culture_id else culture_id
+    return f"ck:{cslug}:{normalize_label(label)}"
+
+
+# ── nodes / edges ─────────────────────────────────────────────────────────────
+
 def ensure_culture(store: GraphStore, label: str) -> CultureNode:
-    """Get-or-create the CultureNode for `label` (deterministic id). Idempotent —
-    re-calling returns the SAME node without duplicating it."""
+    """Get-or-create the CultureNode for `label` (deterministic id). Idempotent."""
     cid = culture_id(label)
     existing = store.get_node(cid)
     if existing is not None and existing.node_type == "culture":
@@ -47,37 +67,72 @@ def ensure_culture(store: GraphStore, label: str) -> CultureNode:
     return node
 
 
+def ensure_culture_topic(store: GraphStore, culture_id: str, label: str,
+                         category=None) -> CultureTopicNode:
+    """Get-or-create a CultureTopicNode under `culture_id` (deterministic id).
+    Idempotent; fills `category` only when still 'other' (first non-other wins)."""
+    tid = culture_topic_id(culture_id, label)
+    existing = store.get_node(tid)
+    if existing is not None and existing.node_type == "culture_topic":
+        new_cat = _cat_value(category)
+        if new_cat != "other" and _cat_value(existing.category) == "other":
+            existing = existing.model_copy(update={"category": TopicCategory(new_cat)})
+            store.upsert_node(existing)
+        return existing
+    node = CultureTopicNode(id=tid, label=str(label).strip(),
+                            category=_cat_value(category))
+    store.upsert_node(node)
+    return node
+
+
+def knows_culture(store: GraphStore, robot_id: str, culture_id: str,
+                  *, source: Optional[str] = None) -> None:
+    """Link a robot to a culture it holds as prior knowledge (knows_culture).
+    Idempotent — one edge per robot-culture pair."""
+    store.upsert_edge(KnowsCultureEdge(
+        source_id=robot_id, target_id=culture_id, provenance=_prov(source)))
+
+
 def assign_culture(store: GraphStore, person_id: str, culture_id: str,
                    *, source: Optional[str] = None) -> None:
-    """Link a person to a culture (belongs_to_culture). Idempotent — one edge per
-    person-culture pair (upsert replaces provenance, never duplicates)."""
+    """Tag a person with a culture (belongs_to_culture). Idempotent — one edge per
+    person-culture pair. Does NOT link the person to any culture topics."""
     store.upsert_edge(BelongsToCultureEdge(
         source_id=person_id, target_id=culture_id, provenance=_prov(source)))
 
 
-def set_culture_prior(store: GraphStore, culture_id: str, topic_id: str,
+def set_culture_prior(store: GraphStore, culture_id: str, culture_topic_id: str,
                       prior: float, *, source: Optional[str] = None) -> None:
-    """Upsert a culture→topic prior, clamped to [0,1]. Re-setting replaces the
-    stored value (one edge per culture-topic pair)."""
+    """Upsert a culture→culture_topic prior, clamped to [0,1]. Re-setting replaces
+    the stored value (one edge per culture-topic pair)."""
     p = max(0.0, min(1.0, float(prior)))
     store.upsert_edge(CulturePriorEdge(
-        source_id=culture_id, target_id=topic_id, prior=p, provenance=_prov(source)))
+        source_id=culture_id, target_id=culture_topic_id, prior=p,
+        provenance=_prov(source)))
 
 
-def culture_priors(store: GraphStore, culture_id: str) -> List[Tuple[str, float]]:
-    """[(topic_id, prior), ...] for one culture, sorted by prior DESC (stable
-    lexicographic tie-break on topic_id). Index-based read."""
-    out: List[Tuple[str, float]] = []
+# ── reads ─────────────────────────────────────────────────────────────────────
+
+def culture_priors(store: GraphStore, culture_id: str) -> List[Tuple[str, str, float]]:
+    """[(culture_topic_id, label, prior), ...] for one culture, sorted by prior
+    DESC (stable lexicographic tie-break on id). Index-based read."""
+    out: List[Tuple[str, str, float]] = []
     for edge, neighbor in store.query_neighbors(culture_id, "culture_prior"):
-        if neighbor.node_type == "topic":
-            out.append((neighbor.id, float(edge.prior)))
-    out.sort(key=lambda x: (-x[1], x[0]))
+        if neighbor.node_type == "culture_topic":
+            out.append((neighbor.id, neighbor.label, float(edge.prior)))
+    out.sort(key=lambda x: (-x[2], x[0]))
     return out
 
 
 def person_culture(store: GraphStore, person_id: str) -> Optional[str]:
-    """The culture_id this person belongs to, or None. If (unexpectedly) more than
-    one is assigned, returns the lexicographically-first for determinism."""
+    """The culture_id this person is tagged with, or None. If more than one is
+    (unexpectedly) assigned, returns the lexicographically-first for determinism."""
     cids = [n.id for _e, n in store.query_neighbors(person_id, "belongs_to_culture")
             if n.node_type == "culture"]
     return sorted(cids)[0] if cids else None
+
+
+def culture_knowers(store: GraphStore, culture_id: str) -> List[str]:
+    """Robot ids that hold this culture as prior knowledge (knows_culture)."""
+    return sorted(n.id for _e, n in store.query_neighbors(culture_id, "knows_culture")
+                  if n.node_type == "robot")

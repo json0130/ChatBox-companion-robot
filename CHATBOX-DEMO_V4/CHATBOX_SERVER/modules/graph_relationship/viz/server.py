@@ -65,6 +65,7 @@ _TIMESCALE_BY_EDGE_TYPE = {
     # Topic <-> Topic semantic relation (Feature-2c) — SLOW.
     "related_topic": "SLOW",
     # Culture layer (Command A) — SLOW, cross-session.
+    "knows_culture": "SLOW",
     "belongs_to_culture": "SLOW",
     "culture_prior": "SLOW",
 }
@@ -86,6 +87,8 @@ _NODE_TYPE_DISPLAY = {
     "conversation": "Conversation",
     # Culture background node (cultures.py) — Command A.
     "culture": "Culture",
+    # Robot-owned cultural-knowledge topic (cultures.py) — Command A.
+    "culture_topic": "CultureTopic",
 }
 
 
@@ -187,6 +190,8 @@ def transform(raw: dict) -> dict:
             obj["topicLabel"] = n.get("label", "")          # clean label for /history
             if notes:
                 obj["label"] = f"{obj['label']} ({len(notes)})"
+        elif node_type == "culture_topic":
+            obj["category"] = n.get("category", "other")   # robot-owned culture topic
         nodes.append(obj)
 
     edges = []

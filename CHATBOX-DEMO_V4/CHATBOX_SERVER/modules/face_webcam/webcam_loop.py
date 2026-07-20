@@ -1042,7 +1042,7 @@ class WebcamKGLoop:
         Applies the mood-weighting lesson: tentative, content-first, never asserts
         what they like. Culture assignment is manual — never auto-detected."""
         from modules.graph_relationship.cultures import person_culture, culture_priors
-        from modules.graph_relationship.topics import person_interests
+        from modules.graph_relationship.topics import person_interests, normalize_label
         cid = person_culture(self.store, pid)
         if not cid:
             return ""
@@ -1050,17 +1050,17 @@ class WebcamKGLoop:
         if cnode is None:
             return ""
 
-        # Topics the person already engages with — exclude to avoid duplicating
-        # the memory block above.
-        own_ids = {t.id for _interest, topics in person_interests(self.store, pid)
-                   for t in topics}
+        # Topics the person already engages with — exclude by SLUG so we don't
+        # re-offer something already in the memory block. Culture topics are their
+        # own nodes (ck:…), so compare on normalized label, not node id.
+        own_slugs = {normalize_label(t.label)
+                     for _interest, topics in person_interests(self.store, pid)
+                     for t in topics}
         offers: list[str] = []
-        for tid, _prior in culture_priors(self.store, cid):   # sorted by prior desc
-            if tid in own_ids:
+        for _tid, label, _prior in culture_priors(self.store, cid):  # prior desc
+            if normalize_label(label) in own_slugs:
                 continue
-            node = self.store.get_node(tid)
-            if node is not None:
-                offers.append(node.label)
+            offers.append(label)
             if len(offers) >= 4:
                 break
 
@@ -1738,20 +1738,20 @@ def run_consolidate_mode(kg_path: str, embed_model: str,
 # Culture demo seed (--mode seed-culture-demo) + --assign-culture — Command A
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_seed_culture_demo(kg_path: str) -> None:
-    """Seed the Korean culture DEMO layer (dummy priors) into an existing KG.
-    Idempotent; reuses topics already present. Does NOT assign any person."""
+def run_seed_culture_demo(kg_path: str, robot_id: str = _DEFAULT_ROBOT) -> None:
+    """Seed the Korean culture DEMO layer as `robot_id`'s prior knowledge (dummy
+    priors, robot-owned culture-topic nodes) into an existing KG. Idempotent; does
+    NOT touch any person or any shared person-interest topic."""
     store = InMemoryGraphStore()
     if not (os.path.exists(kg_path) and store.load(kg_path)):
         print(f"[seed-culture] no KG at '{kg_path}' — starting fresh")
     from modules.culture_seed import seed_korean_demo
-    info = seed_korean_demo(store)
+    info = seed_korean_demo(store, robot_id=robot_id)
     store.save(kg_path)
-    print(f"[seed-culture] culture={info['culture']}  topics={info['topics']}  "
-          f"priors={info['priors']}  reused={info['reused'] or '—'}")
+    print(f"[seed-culture] culture={info['culture']}  robot={info['robot'] or '—'}  "
+          f"topics={info['topics']}  priors={info['priors']}")
     print(f"[seed-culture] saved → {kg_path}")
-    print("[seed-culture] assign someone with: "
-          "--assign-culture <person> Korean")
+    print("[seed-culture] tag someone with: --assign-culture <person> Korean")
 
 
 def run_assign_culture(kg_path: str, person_id: str, culture_label: str) -> None:
@@ -1918,7 +1918,7 @@ def main() -> None:
         return
 
     if args.mode == "seed-culture-demo":
-        run_seed_culture_demo(args.kg)
+        run_seed_culture_demo(args.kg, args.robot)
         return
 
     # --assign-culture is a standalone action (independent of --mode run).

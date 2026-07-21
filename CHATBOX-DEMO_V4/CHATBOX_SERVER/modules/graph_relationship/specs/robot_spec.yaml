@@ -15,4 +15,3 @@ capabilities:
 knows_topics:            # capability --about--> shared TopicNode
   - jazz
   - space
-  - mars

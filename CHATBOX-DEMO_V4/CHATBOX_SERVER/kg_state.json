@@ -3,7 +3,7 @@
     {
       "id": "jay",
       "display_name": "Jay",
-      "created_at": "2026-07-20T23:26:36.610064Z",
+      "created_at": "2026-07-21T01:09:15.764426Z",
       "node_type": "person"
     },
     {
@@ -297,7 +297,7 @@
         "k-pop performances",
         "concerts"
       ],
-      "mood": -0.5752431450266158,
+      "mood": -0.5800831257976824,
       "emotion": "sad",
       "node_type": "conversation"
     },
@@ -683,11 +683,11 @@
       "target_id": "jay",
       "provenance": {
         "source": "chatbox",
-        "timestamp": "2026-07-20T23:29:45.905747Z",
+        "timestamp": "2026-07-21T01:09:21.930575Z",
         "confidence": 1.0
       },
       "edge_type": "mood",
-      "value": -0.5752431450266158,
+      "value": -0.5800831257976824,
       "label": "sad",
       "timescale": "FAST"
     },
@@ -710,7 +710,7 @@
       "target_id": "jay:persona:curious-talkative",
       "provenance": {
         "source": "spec:human_spec.yaml",
-        "timestamp": "2026-07-20T23:26:36.610115Z",
+        "timestamp": "2026-07-21T01:09:15.764475Z",
         "confidence": 1.0
       },
       "edge_type": "has_persona",
@@ -722,7 +722,7 @@
       "target_id": "chatbox:persona:introverted-shy",
       "provenance": {
         "source": "spec:robot_spec.yaml",
-        "timestamp": "2026-07-20T23:26:36.610921Z",
+        "timestamp": "2026-07-21T01:09:15.765049Z",
         "confidence": 1.0
       },
       "edge_type": "has_persona",
@@ -734,7 +734,7 @@
       "target_id": "chatbox:role:companion",
       "provenance": {
         "source": "spec:robot_spec.yaml",
-        "timestamp": "2026-07-20T23:26:36.610937Z",
+        "timestamp": "2026-07-21T01:09:15.765064Z",
         "confidence": 1.0
       },
       "edge_type": "has_role",
@@ -746,7 +746,7 @@
       "target_id": "jay:role:student",
       "provenance": {
         "source": "spec:human_spec.yaml",
-        "timestamp": "2026-07-20T23:26:36.610155Z",
+        "timestamp": "2026-07-21T01:09:15.764515Z",
         "confidence": 1.0
       },
       "edge_type": "has_role",
@@ -757,8 +757,8 @@
       "source_id": "jay",
       "target_id": "interest:jay:music",
       "provenance": {
-        "source": "backfill-group",
-        "timestamp": "2026-07-21T00:58:33.636946Z",
+        "source": "spec:human_spec.yaml",
+        "timestamp": "2026-07-21T01:09:15.764532Z",
         "confidence": 1.0
       },
       "edge_type": "has_interest",
@@ -828,7 +828,7 @@
       "target_id": "chatbox:capability",
       "provenance": {
         "source": "spec:robot_spec.yaml",
-        "timestamp": "2026-07-20T23:26:36.610950Z",
+        "timestamp": "2026-07-21T01:09:15.765077Z",
         "confidence": 1.0
       },
       "edge_type": "has_capability",
@@ -879,7 +879,7 @@
       "target_id": "topic:jazz",
       "provenance": {
         "source": "spec:human_spec.yaml",
-        "timestamp": "2026-07-20T23:26:36.610185Z",
+        "timestamp": "2026-07-21T01:09:15.764545Z",
         "confidence": 1.0
       },
       "edge_type": "about",

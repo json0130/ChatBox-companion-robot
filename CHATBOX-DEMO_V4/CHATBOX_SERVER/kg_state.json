@@ -1,0 +1,281 @@
+{
+  "nodes": [
+    {
+      "id": "chatbox",
+      "name": "ChatBox",
+      "embodiment": "CAT",
+      "persona_traits": {},
+      "capabilities": [],
+      "node_type": "robot"
+    },
+    {
+      "id": "chatbox:persona:introverted-shy",
+      "descriptor": "introverted, shy",
+      "node_type": "persona"
+    },
+    {
+      "id": "chatbox:role:companion",
+      "descriptor": "companion",
+      "node_type": "role"
+    },
+    {
+      "id": "chatbox:capability",
+      "items": [
+        "tells stories",
+        "knows jazz",
+        "knows about space",
+        "knows about coding",
+        "good at math"
+      ],
+      "node_type": "capability"
+    },
+    {
+      "id": "topic:jazz",
+      "label": "jazz",
+      "category": "other",
+      "notes": [],
+      "node_type": "topic"
+    },
+    {
+      "id": "topic:space",
+      "label": "space",
+      "category": "other",
+      "notes": [],
+      "node_type": "topic"
+    },
+    {
+      "id": "ever",
+      "display_name": "ever",
+      "created_at": "2026-07-21T07:12:53.592059Z",
+      "node_type": "person"
+    },
+    {
+      "id": "interaction:ever:chatbox",
+      "rapport": 0.1,
+      "trust": 0.0,
+      "interaction_count": 16,
+      "node_type": "interaction"
+    },
+    {
+      "id": "conversation:ever:chatbox",
+      "topics": [
+        "latte",
+        "desserts",
+        "chocolate dessert"
+      ],
+      "mood": -0.0650076727499254,
+      "emotion": "neutral",
+      "node_type": "conversation"
+    },
+    {
+      "id": "topic:cafe",
+      "label": "cafe",
+      "category": "place",
+      "notes": [
+        {
+          "person": "ever",
+          "text": "Ever mentions visiting her favorite cafe and plans to go there again.",
+          "ts": "2026-07-21T07:29:19.025718+00:00"
+        }
+      ],
+      "node_type": "topic"
+    },
+    {
+      "id": "interest:ever:place",
+      "label": "place",
+      "node_type": "interest"
+    },
+    {
+      "id": "topic:macha-latte",
+      "label": "macha latte",
+      "category": "food",
+      "notes": [
+        {
+          "person": "ever",
+          "text": "Ever enjoys a macha latte at the cafe she frequents.",
+          "ts": "2026-07-21T07:29:19.025823+00:00"
+        }
+      ],
+      "node_type": "topic"
+    },
+    {
+      "id": "interest:ever:food",
+      "label": "food",
+      "node_type": "interest"
+    }
+  ],
+  "edges": [
+    {
+      "id": "6147c8a5-0835-4549-acb5-0c21fdd45fe6",
+      "source_id": "chatbox",
+      "target_id": "chatbox:persona:introverted-shy",
+      "provenance": {
+        "source": "spec:robot_spec.yaml",
+        "timestamp": "2026-07-21T07:27:41.646628Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_persona",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "1c5924e4-a415-4269-8dc2-4ff817f12877",
+      "source_id": "chatbox",
+      "target_id": "chatbox:role:companion",
+      "provenance": {
+        "source": "spec:robot_spec.yaml",
+        "timestamp": "2026-07-21T07:27:41.646669Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_role",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "98b3944a-11af-4e58-ac22-d7a1b68beea6",
+      "source_id": "chatbox",
+      "target_id": "chatbox:capability",
+      "provenance": {
+        "source": "spec:robot_spec.yaml",
+        "timestamp": "2026-07-21T07:27:41.646689Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_capability",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "f4986e40-f8e9-4bc6-9d53-a0c673504862",
+      "source_id": "chatbox:capability",
+      "target_id": "topic:jazz",
+      "provenance": {
+        "source": "spec:robot_spec.yaml",
+        "timestamp": "2026-07-21T07:06:09.559294Z",
+        "confidence": 1.0
+      },
+      "edge_type": "about",
+      "label": "knows jazz",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "1ac51b06-e10c-410c-ab30-290e3e1854c9",
+      "source_id": "chatbox:capability",
+      "target_id": "topic:space",
+      "provenance": {
+        "source": "spec:robot_spec.yaml",
+        "timestamp": "2026-07-21T07:06:09.559315Z",
+        "confidence": 1.0
+      },
+      "edge_type": "about",
+      "label": "knows about space",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "e2d829d9-b902-421f-828d-678a61e900d1",
+      "source_id": "chatbox",
+      "target_id": "interaction:ever:chatbox",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-07-21T07:12:53.592071Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_interaction"
+    },
+    {
+      "id": "8dd1876f-7317-4e5d-b9a8-c59d1f9a5fb4",
+      "source_id": "ever",
+      "target_id": "ever",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-07-21T07:29:13.904873Z",
+        "confidence": 1.0
+      },
+      "edge_type": "mood",
+      "value": -0.09042091853916644,
+      "label": "neutral",
+      "timescale": "FAST"
+    },
+    {
+      "id": "cc6d8a1b-98e4-4b5b-8276-f9f9a68b3435",
+      "source_id": "chatbox",
+      "target_id": "conversation:ever:chatbox",
+      "provenance": {
+        "source": "live-topic",
+        "timestamp": "2026-07-21T07:12:53.744063Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_conversation",
+      "timescale": "FAST"
+    },
+    {
+      "id": "81b28e91-e8b4-4035-a0b5-6541245802be",
+      "source_id": "ever",
+      "target_id": "interaction:ever:chatbox",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-07-21T07:12:53.592071Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_interaction"
+    },
+    {
+      "id": "e379c9b0-7673-4b01-b4c6-81f028a70220",
+      "source_id": "ever",
+      "target_id": "conversation:ever:chatbox",
+      "provenance": {
+        "source": "live-topic",
+        "timestamp": "2026-07-21T07:12:53.744024Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_conversation",
+      "timescale": "FAST"
+    },
+    {
+      "id": "209860c1-d98d-433d-819e-0041ba9f8409",
+      "source_id": "ever",
+      "target_id": "interest:ever:place",
+      "provenance": {
+        "source": "extraction:d458b1fd-2b33-4c68-9ba1-3383422f3ad9",
+        "timestamp": "2026-07-21T07:29:19.025626Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_interest",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "d111d2b7-e108-4354-a10a-25bcb3094ed5",
+      "source_id": "interest:ever:place",
+      "target_id": "topic:cafe",
+      "provenance": {
+        "source": "extraction:d458b1fd-2b33-4c68-9ba1-3383422f3ad9",
+        "timestamp": "2026-07-21T07:29:19.025688Z",
+        "confidence": 1.0
+      },
+      "edge_type": "about",
+      "label": null,
+      "timescale": "SLOW"
+    },
+    {
+      "id": "914c63b7-ce9f-4ba8-a8c1-c630f24b457a",
+      "source_id": "ever",
+      "target_id": "interest:ever:food",
+      "provenance": {
+        "source": "extraction:d458b1fd-2b33-4c68-9ba1-3383422f3ad9",
+        "timestamp": "2026-07-21T07:29:19.025783Z",
+        "confidence": 1.0
+      },
+      "edge_type": "has_interest",
+      "timescale": "SLOW"
+    },
+    {
+      "id": "98e3e2f7-1add-4f27-8cd1-d7083d8a1341",
+      "source_id": "interest:ever:food",
+      "target_id": "topic:macha-latte",
+      "provenance": {
+        "source": "extraction:d458b1fd-2b33-4c68-9ba1-3383422f3ad9",
+        "timestamp": "2026-07-21T07:29:19.025804Z",
+        "confidence": 1.0
+      },
+      "edge_type": "about",
+      "label": null,
+      "timescale": "SLOW"
+    }
+  ]
+}

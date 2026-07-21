@@ -68,19 +68,26 @@ def ensure_culture(store: GraphStore, label: str) -> CultureNode:
 
 
 def ensure_culture_topic(store: GraphStore, culture_id: str, label: str,
-                         category=None) -> CultureTopicNode:
+                         category=None, facts=None) -> CultureTopicNode:
     """Get-or-create a CultureTopicNode under `culture_id` (deterministic id).
-    Idempotent; fills `category` only when still 'other' (first non-other wins)."""
+    Idempotent; fills `category` only when still 'other' (first non-other wins) and
+    replaces `facts` when a non-empty list is provided (re-seeding refreshes them)."""
     tid = culture_topic_id(culture_id, label)
+    facts = [str(f).strip() for f in (facts or []) if str(f).strip()]
     existing = store.get_node(tid)
     if existing is not None and existing.node_type == "culture_topic":
+        upd: dict = {}
         new_cat = _cat_value(category)
         if new_cat != "other" and _cat_value(existing.category) == "other":
-            existing = existing.model_copy(update={"category": TopicCategory(new_cat)})
+            upd["category"] = TopicCategory(new_cat)
+        if facts:
+            upd["facts"] = facts
+        if upd:
+            existing = existing.model_copy(update=upd)
             store.upsert_node(existing)
         return existing
     node = CultureTopicNode(id=tid, label=str(label).strip(),
-                            category=_cat_value(category))
+                            category=_cat_value(category), facts=facts)
     store.upsert_node(node)
     return node
 

@@ -63,6 +63,8 @@ def test_empty_seed_counts_and_roundtrip():
     assert len(priors) == 12, len(priors)
     assert len(knows) == 1 and info["robot"] == _ROBOT      # ChatBox owns it
     assert culture_knowers(s, info["culture"]) == [_ROBOT]
+    # every culture topic carries shareable facts
+    assert all(n.facts for n in ctopics), "culture topics must be seeded with facts"
 
     f1 = tempfile.mktemp(suffix=".json"); s.save(f1)
     s2 = InMemoryGraphStore(); s2.load(f1)
@@ -135,11 +137,15 @@ def test_prompt_block_and_ownership():
     assert "may politely offer ONE" in prompt and "Never assert what they like" in prompt
 
     import re
-    m = re.search(r"\(e\.g\. ([^)]+)\)", prompt)
-    offers = [o.strip() for o in m.group(1).split(",")] if m else []
+    # Offers are bulleted "  – <label>: <fact>" lines under the culture block.
+    block = prompt[prompt.index("CULTURAL BACKGROUND"):]
+    offers = re.findall(r"^  – ([^:\n]+?):", block, re.MULTILINE)
+    offers = [o.strip() for o in offers]
     assert 0 < len(offers) <= 4, offers
     assert "kpop" not in offers, f"observed topic leaked into offers: {offers}"
     assert offers[0] == "kimchi", offers
+    # each offered culture topic carries a fact
+    assert "fermented" in block, "kimchi fact missing from prompt"
     assert prompt.index("Interests:") < prompt.index("CULTURAL BACKGROUND")
     os.remove(tmp)
     print(f"4. prompt+ownership: ChatBox owns Korean; block present, offers={offers} "

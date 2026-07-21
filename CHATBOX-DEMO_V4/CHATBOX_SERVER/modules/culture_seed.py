@@ -28,20 +28,46 @@ from modules.graph_relationship.store import GraphStore
 _CULTURE_LABEL = "Korean"
 _DEFAULT_ROBOT = "chatbox"
 
-# (label, category, DUMMY prior in [0,1]) — demo placeholders, not research claims.
-_KOREAN_DEMO: List[Tuple[str, str, float]] = [
-    ("kimchi",        "food",     0.80),
-    ("korean bbq",    "food",     0.70),
-    ("kpop",          "music",    0.70),
-    ("kdrama",        "media",    0.65),
-    ("bibimbap",      "food",     0.65),
-    ("hiking",        "activity", 0.60),
-    ("son heung-min", "person",   0.55),
-    ("noraebang",     "activity", 0.55),
-    ("chuseok",       "activity", 0.50),
-    ("esports",       "activity", 0.50),
-    ("baseball",      "sport",    0.50),
-    ("taekwondo",     "sport",    0.45),
+# (label, category, DUMMY prior in [0,1], [facts...]) — demo placeholders, not
+# research claims. `facts` are short, shareable bits the robot can mention when it
+# brings the topic up (kept general and light, never asserted about the person).
+_KOREAN_DEMO: List[Tuple[str, str, float, List[str]]] = [
+    ("kimchi",        "food",     0.80, [
+        "Korea's iconic fermented vegetable dish, usually napa cabbage with chilli.",
+        "There are hundreds of varieties and it's served with almost every meal."]),
+    ("korean bbq",    "food",     0.70, [
+        "Meat grilled right at your table — a social, shared way to eat.",
+        "Often wrapped in lettuce with garlic and side dishes (banchan)."]),
+    ("kpop",          "music",    0.70, [
+        "Korean pop music known for polished songs and synchronised dance.",
+        "Groups like BTS, BLACKPINK, TWICE and NewJeans have huge global fandoms."]),
+    ("kdrama",        "media",    0.65, [
+        "Korean TV dramas with big international followings via streaming.",
+        "Genres span romance, thriller and historical (sageuk)."]),
+    ("bibimbap",      "food",     0.65, [
+        "A rice bowl topped with seasoned vegetables, egg and gochujang.",
+        "You mix everything together before eating."]),
+    ("hiking",        "activity", 0.60, [
+        "Extremely popular in Korea — mountains are everywhere, even in Seoul.",
+        "Weekend hiking clubs and well-marked trails are common."]),
+    ("son heung-min", "person",   0.55, [
+        "Korean footballer, a captain at Tottenham Hotspur and a national hero.",
+        "One of the Premier League's standout forwards."]),
+    ("noraebang",     "activity", 0.55, [
+        "Korean karaoke — private singing rooms rented by the hour.",
+        "A staple social outing with friends or after dinner."]),
+    ("chuseok",       "activity", 0.50, [
+        "Korea's harvest/thanksgiving holiday, a major family gathering.",
+        "People share songpyeon (rice cakes) and honour ancestors."]),
+    ("esports",       "activity", 0.50, [
+        "Korea is the heart of competitive gaming — StarCraft and League of Legends.",
+        "Pro leagues, star players and PC bangs (gaming cafés) are part of the culture."]),
+    ("baseball",      "sport",    0.50, [
+        "One of Korea's most popular sports, with the lively KBO league.",
+        "Games are famous for organised cheering, chants and fan songs."]),
+    ("taekwondo",     "sport",    0.45, [
+        "A Korean martial art and the national sport, now an Olympic event.",
+        "Known for fast, high kicks."]),
 ]
 
 
@@ -56,8 +82,9 @@ def seed_korean_demo(store: GraphStore, *, robot_id: str = _DEFAULT_ROBOT,
     cnode = ensure_culture(store, _CULTURE_LABEL)
     if store.get_node(robot_id) is not None:
         knows_culture(store, robot_id, cnode.id, source=source)
-    for label, category, prior in _KOREAN_DEMO:
-        ct = ensure_culture_topic(store, cnode.id, label, category=category)
+    for label, category, prior, facts in _KOREAN_DEMO:
+        ct = ensure_culture_topic(store, cnode.id, label, category=category,
+                                  facts=facts)
         set_culture_prior(store, cnode.id, ct.id, prior, source=source)
     return {
         "culture": cnode.id,

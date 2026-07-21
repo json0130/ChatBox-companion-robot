@@ -1060,11 +1060,15 @@ class WebcamKGLoop:
         # posterior (culture priors + propagation from what they already like over
         # related_topic links). rank_suggestions already returns UNOBSERVED topics
         # only, so observed interests are excluded automatically. Read-only.
-        offers: list[str] = []
+        # Each offer carries ONE cultural fact (from the CultureTopicNode) so the
+        # robot has something real to say, not just a bare label.
+        offers: list[tuple[str, str]] = []   # (label, one_fact_or_"")
         for node_id, _post in rank_suggestions(self.store, pid, k=4):
             node = self.store.get_node(node_id)
-            if node is not None:
-                offers.append(node.label)
+            if node is None:
+                continue
+            fact = (getattr(node, "facts", None) or [""])[0]
+            offers.append((node.label, fact))
 
         lines = [
             "━━━ CULTURAL BACKGROUND ━━━",
@@ -1072,12 +1076,15 @@ class WebcamKGLoop:
             "about their background, not a fact about them as a person.",
         ]
         if offers:
+            offer_lines = "\n".join(
+                (f"  – {label}: {fact}" if fact else f"  – {label}")
+                for label, fact in offers)
             lines.append(
-                f"You know a little about {cnode.label} culture "
-                f"(e.g. {', '.join(offers)}). If the conversation lulls, you may "
-                "politely offer ONE of these; drop it immediately if they show no "
-                "interest. Never assert what they like — ask. Keep a polite, warm, "
-                "respectful tone.")
+                f"You know a little about {cnode.label} culture — things you could "
+                f"bring up (with a fact to share):\n{offer_lines}\n"
+                "If the conversation lulls, you may politely offer ONE of these and "
+                "share its fact; drop it immediately if they show no interest. Never "
+                "assert what they like — ask. Keep a polite, warm, respectful tone.")
         return "\n".join(lines)
 
     def _debug_prompt_dump(self, pid: str, msg: str, rag_hits: list) -> None:

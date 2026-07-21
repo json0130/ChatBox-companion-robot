@@ -496,72 +496,120 @@
       "id": "ck:korean:kimchi",
       "label": "kimchi",
       "category": "food",
+      "facts": [
+        "Korea's iconic fermented vegetable dish, usually napa cabbage with chilli.",
+        "There are hundreds of varieties and it's served with almost every meal."
+      ],
       "node_type": "culture_topic"
     },
     {
       "id": "ck:korean:korean-bbq",
       "label": "korean bbq",
       "category": "food",
+      "facts": [
+        "Meat grilled right at your table \u2014 a social, shared way to eat.",
+        "Often wrapped in lettuce with garlic and side dishes (banchan)."
+      ],
       "node_type": "culture_topic"
     },
     {
       "id": "ck:korean:kpop",
       "label": "kpop",
       "category": "music",
+      "facts": [
+        "Korean pop music known for polished songs and synchronised dance.",
+        "Groups like BTS, BLACKPINK, TWICE and NewJeans have huge global fandoms."
+      ],
       "node_type": "culture_topic"
     },
     {
       "id": "ck:korean:kdrama",
       "label": "kdrama",
       "category": "media",
+      "facts": [
+        "Korean TV dramas with big international followings via streaming.",
+        "Genres span romance, thriller and historical (sageuk)."
+      ],
       "node_type": "culture_topic"
     },
     {
       "id": "ck:korean:bibimbap",
       "label": "bibimbap",
       "category": "food",
+      "facts": [
+        "A rice bowl topped with seasoned vegetables, egg and gochujang.",
+        "You mix everything together before eating."
+      ],
       "node_type": "culture_topic"
     },
     {
       "id": "ck:korean:hiking",
       "label": "hiking",
       "category": "activity",
+      "facts": [
+        "Extremely popular in Korea \u2014 mountains are everywhere, even in Seoul.",
+        "Weekend hiking clubs and well-marked trails are common."
+      ],
       "node_type": "culture_topic"
     },
     {
       "id": "ck:korean:son-heung-min",
       "label": "son heung-min",
       "category": "person",
+      "facts": [
+        "Korean footballer, a captain at Tottenham Hotspur and a national hero.",
+        "One of the Premier League's standout forwards."
+      ],
       "node_type": "culture_topic"
     },
     {
       "id": "ck:korean:noraebang",
       "label": "noraebang",
       "category": "activity",
+      "facts": [
+        "Korean karaoke \u2014 private singing rooms rented by the hour.",
+        "A staple social outing with friends or after dinner."
+      ],
       "node_type": "culture_topic"
     },
     {
       "id": "ck:korean:chuseok",
       "label": "chuseok",
       "category": "activity",
+      "facts": [
+        "Korea's harvest/thanksgiving holiday, a major family gathering.",
+        "People share songpyeon (rice cakes) and honour ancestors."
+      ],
       "node_type": "culture_topic"
     },
     {
       "id": "ck:korean:esports",
       "label": "esports",
       "category": "activity",
+      "facts": [
+        "Korea is the heart of competitive gaming \u2014 StarCraft and League of Legends.",
+        "Pro leagues, star players and PC bangs (gaming caf\u00e9s) are part of the culture."
+      ],
       "node_type": "culture_topic"
     },
     {
       "id": "ck:korean:baseball",
       "label": "baseball",
       "category": "sport",
+      "facts": [
+        "One of Korea's most popular sports, with the lively KBO league.",
+        "Games are famous for organised cheering, chants and fan songs."
+      ],
       "node_type": "culture_topic"
     },
     {
       "id": "ck:korean:taekwondo",
       "label": "taekwondo",
       "category": "sport",
+      "facts": [
+        "A Korean martial art and the national sport, now an Olympic event.",
+        "Known for fast, high kicks."
+      ],
       "node_type": "culture_topic"
     },
     {
@@ -1234,7 +1282,7 @@
       "target_id": "culture:korean",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T11:16:45.427797Z",
+        "timestamp": "2026-07-21T03:20:02.703969Z",
         "confidence": 1.0
       },
       "edge_type": "knows_culture",
@@ -1246,7 +1294,7 @@
       "target_id": "ck:korean:kimchi",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T11:16:45.427828Z",
+        "timestamp": "2026-07-21T03:20:02.704019Z",
         "confidence": 1.0
       },
       "edge_type": "culture_prior",
@@ -1259,7 +1307,7 @@
       "target_id": "ck:korean:korean-bbq",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T11:16:45.427843Z",
+        "timestamp": "2026-07-21T03:20:02.704038Z",
         "confidence": 1.0
       },
       "edge_type": "culture_prior",
@@ -1272,7 +1320,7 @@
       "target_id": "ck:korean:kpop",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T11:16:45.427851Z",
+        "timestamp": "2026-07-21T03:20:02.704051Z",
         "confidence": 1.0
       },
       "edge_type": "culture_prior",
@@ -1285,7 +1333,7 @@
       "target_id": "ck:korean:kdrama",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T11:16:45.427859Z",
+        "timestamp": "2026-07-21T03:20:02.704062Z",
         "confidence": 1.0
       },
       "edge_type": "culture_prior",
@@ -1298,7 +1346,7 @@
       "target_id": "ck:korean:bibimbap",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T11:16:45.427866Z",
+        "timestamp": "2026-07-21T03:20:02.704072Z",
         "confidence": 1.0
       },
       "edge_type": "culture_prior",
@@ -1311,7 +1359,7 @@
       "target_id": "ck:korean:hiking",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T11:16:45.427871Z",
+        "timestamp": "2026-07-21T03:20:02.704080Z",
         "confidence": 1.0
       },
       "edge_type": "culture_prior",
@@ -1324,7 +1372,7 @@
       "target_id": "ck:korean:son-heung-min",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T11:16:45.427877Z",
+        "timestamp": "2026-07-21T03:20:02.704089Z",
         "confidence": 1.0
       },
       "edge_type": "culture_prior",
@@ -1337,7 +1385,7 @@
       "target_id": "ck:korean:noraebang",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T11:16:45.427882Z",
+        "timestamp": "2026-07-21T03:20:02.704097Z",
         "confidence": 1.0
       },
       "edge_type": "culture_prior",
@@ -1350,7 +1398,7 @@
       "target_id": "ck:korean:chuseok",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T11:16:45.427889Z",
+        "timestamp": "2026-07-21T03:20:02.704104Z",
         "confidence": 1.0
       },
       "edge_type": "culture_prior",
@@ -1363,7 +1411,7 @@
       "target_id": "ck:korean:esports",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T11:16:45.427894Z",
+        "timestamp": "2026-07-21T03:20:02.704113Z",
         "confidence": 1.0
       },
       "edge_type": "culture_prior",
@@ -1376,7 +1424,7 @@
       "target_id": "ck:korean:baseball",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T11:16:45.427899Z",
+        "timestamp": "2026-07-21T03:20:02.704121Z",
         "confidence": 1.0
       },
       "edge_type": "culture_prior",
@@ -1389,7 +1437,7 @@
       "target_id": "ck:korean:taekwondo",
       "provenance": {
         "source": "culture-seed",
-        "timestamp": "2026-07-20T11:16:45.427904Z",
+        "timestamp": "2026-07-21T03:20:02.704129Z",
         "confidence": 1.0
       },
       "edge_type": "culture_prior",

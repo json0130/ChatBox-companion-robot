@@ -251,6 +251,9 @@ class CultureTopicNode(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     label: str
     category: TopicCategory = TopicCategory.OTHER
+    # Short cultural facts the robot can share when it brings up this topic, e.g.
+    # esports → ["Korea is the heart of competitive gaming (StarCraft, LoL)"].
+    facts: List[str] = Field(default_factory=list)
     node_type: Literal["culture_topic"] = "culture_topic"
 
 

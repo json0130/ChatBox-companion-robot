@@ -28,11 +28,13 @@ import math
 from modules.graph_relationship.schema import TOPIC_CATEGORIES
 from modules.graph_relationship.topics import (
     add_person_topic,
+    link_related_topic,
     merge_topics,
     normalize_label,
     person_topics,
     reinforce_person_topic,
     topic_degree,
+    topic_id,
 )
 from modules.graph_relationship.extraction import format_transcript  # pure transcript renderer
 
@@ -40,6 +42,10 @@ LLMFn = Callable[[str, str], str]
 
 # Drop any extracted item below this confidence (constant — easy to tune).
 CONFIDENCE_MIN = 0.6
+# Weight for an LLM-asserted specific↔broader relation (e.g. twice ~ kpop). The
+# embedding matcher can't see this (proper noun vs genre), so world knowledge from
+# the LLM supplies it. Sits in the related band, feeds Command B propagation.
+RELATION_WEIGHT = 0.7
 
 
 def build_system_prompt(existing: List[Tuple[str, str]]) -> str:
@@ -60,7 +66,8 @@ def build_system_prompt(existing: List[Tuple[str, str]]) -> str:
         '"new_topics": ['
         '{"label": "<short canonical noun phrase, lowercase>", '
         f'"category": "<one of: {cats}>", '
-        '"confidence": <0.0-1.0>, "summary": "<optional one short sentence>"}]}\n\n'
+        '"confidence": <0.0-1.0>, "summary": "<optional one short sentence>"}], '
+        '"relations": [{"a": "<specific topic label>", "b": "<broader topic label>"}]}\n\n'
         "Rules:\n"
         "- Prefer reusing an existing label over a near-duplicate: if \"jazz\" is "
         "known and the child says \"jazz music\", REUSE \"jazz\".\n"
@@ -71,6 +78,11 @@ def build_system_prompt(existing: List[Tuple[str, str]]) -> str:
         "new_topics WITH a category (e.g. a K-pop group → music). Never place an "
         "unlisted topic in existing_topics_discussed.\n"
         f"- category MUST be one of: {cats}. Use \"other\" if unsure — never invent one.\n"
+        "- GROUPING: if the child mentions specific examples of a broader topic "
+        "(K-pop groups like Twice or NewJeans → the umbrella genre \"kpop\"; a specific "
+        "athlete → their sport), ALSO include the broader topic, and add each pair to "
+        "\"relations\" as {\"a\": specific, \"b\": broader}. Both labels MUST appear in "
+        "your existing/new topics above. Use [] when there is nothing to relate.\n"
         "- Include ONLY topics the CHILD actually expressed; use empty arrays if none.\n"
         "- Return ONLY the JSON object."
     )
@@ -179,7 +191,22 @@ def extract_and_apply_topics(
         if node:
             added.append((label, cat, conf))
 
-    return {"applied": True, "reinforced": reinforced, "added": added, "dropped": dropped}
+    # ── relations (specific ↔ broader, e.g. twice ~ kpop) ─────────────────────
+    # Only link topic nodes that exist (created above or already present); the pure
+    # link_related_topic no-ops on a non-topic id, so bad labels are harmless.
+    related: list = []
+    for item in (obj.get("relations") or []):
+        if not isinstance(item, dict):
+            continue
+        a, b = normalize_label(item.get("a", "")), normalize_label(item.get("b", ""))
+        if not a or not b or a == b:
+            continue
+        if link_related_topic(store, topic_id(a), topic_id(b),
+                               RELATION_WEIGHT, source=source):
+            related.append((a, b))
+
+    return {"applied": True, "reinforced": reinforced, "added": added,
+            "dropped": dropped, "related": related}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

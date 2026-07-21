@@ -588,6 +588,11 @@
           "person": "jay",
           "text": "Implied interest in Korean cuisine based on discussion of 'mum's food' and 'spicy pork'",
           "ts": "2026-07-20T23:36:10.574934+00:00"
+        },
+        {
+          "person": "jay",
+          "text": "Child mentioned liking food from Korean restaurants.",
+          "ts": "2026-07-21T00:57:34.539342+00:00"
         }
       ],
       "node_type": "topic"
@@ -636,6 +641,11 @@
           "person": "jay",
           "text": "Child likes the K-pop group Twice",
           "ts": "2026-07-20T23:36:10.574969+00:00"
+        },
+        {
+          "person": "jay",
+          "text": "Child likes the K-pop group Twice.",
+          "ts": "2026-07-21T00:57:34.539392+00:00"
         }
       ],
       "node_type": "topic"
@@ -649,8 +659,20 @@
           "person": "jay",
           "text": "Child also likes the K-pop group NewJeans",
           "ts": "2026-07-20T23:36:10.574992+00:00"
+        },
+        {
+          "person": "jay",
+          "text": "Child likes the K-pop group NewJeans.",
+          "ts": "2026-07-21T00:57:34.539429+00:00"
         }
       ],
+      "node_type": "topic"
+    },
+    {
+      "id": "topic:kpop",
+      "label": "kpop",
+      "category": "music",
+      "notes": [],
       "node_type": "topic"
     }
   ],
@@ -735,8 +757,8 @@
       "source_id": "jay",
       "target_id": "interest:jay:music",
       "provenance": {
-        "source": "extraction:backfill",
-        "timestamp": "2026-07-20T23:36:10.574980Z",
+        "source": "backfill-group",
+        "timestamp": "2026-07-21T00:58:33.636946Z",
         "confidence": 1.0
       },
       "edge_type": "has_interest",
@@ -1379,9 +1401,9 @@
       "source_id": "jay",
       "target_id": "interest:jay:place",
       "provenance": {
-        "source": "extraction:backfill",
-        "timestamp": "2026-07-20T23:36:10.574911Z",
-        "confidence": 0.8
+        "source": "extraction:backfill-group",
+        "timestamp": "2026-07-21T00:57:34.539319Z",
+        "confidence": 0.75
       },
       "edge_type": "has_interest",
       "timescale": "SLOW"
@@ -1391,9 +1413,9 @@
       "source_id": "interest:jay:place",
       "target_id": "topic:korean-restaurant",
       "provenance": {
-        "source": "extraction:backfill",
-        "timestamp": "2026-07-20T23:36:10.574923Z",
-        "confidence": 0.8
+        "source": "extraction:backfill-group",
+        "timestamp": "2026-07-21T00:57:34.539331Z",
+        "confidence": 0.75
       },
       "edge_type": "about",
       "label": null,
@@ -1404,8 +1426,8 @@
       "source_id": "jay",
       "target_id": "interest:jay:food",
       "provenance": {
-        "source": "extraction:backfill",
-        "timestamp": "2026-07-20T23:36:10.574815Z",
+        "source": "extraction:backfill-group",
+        "timestamp": "2026-07-21T00:57:34.539234Z",
         "confidence": 1.0
       },
       "edge_type": "has_interest",
@@ -1416,8 +1438,8 @@
       "source_id": "interest:jay:food",
       "target_id": "topic:spicy-pork",
       "provenance": {
-        "source": "extraction:backfill",
-        "timestamp": "2026-07-20T23:36:10.574861Z",
+        "source": "extraction:backfill-group",
+        "timestamp": "2026-07-21T00:57:34.539281Z",
         "confidence": 1.0
       },
       "edge_type": "about",
@@ -1441,8 +1463,8 @@
       "source_id": "interest:jay:music",
       "target_id": "topic:twice",
       "provenance": {
-        "source": "extraction:backfill",
-        "timestamp": "2026-07-20T23:36:10.574962Z",
+        "source": "extraction:backfill-group",
+        "timestamp": "2026-07-21T00:57:34.539383Z",
         "confidence": 1.0
       },
       "edge_type": "about",
@@ -1454,12 +1476,51 @@
       "source_id": "interest:jay:music",
       "target_id": "topic:newjeans",
       "provenance": {
-        "source": "extraction:backfill",
-        "timestamp": "2026-07-20T23:36:10.574987Z",
+        "source": "extraction:backfill-group",
+        "timestamp": "2026-07-21T00:57:34.539421Z",
         "confidence": 1.0
       },
       "edge_type": "about",
       "label": null,
+      "timescale": "SLOW"
+    },
+    {
+      "id": "971ade0b-2923-4639-a0bf-05384f1124a9",
+      "source_id": "interest:jay:music",
+      "target_id": "topic:kpop",
+      "provenance": {
+        "source": "backfill-group",
+        "timestamp": "2026-07-21T00:58:33.636981Z",
+        "confidence": 1.0
+      },
+      "edge_type": "about",
+      "label": null,
+      "timescale": "SLOW"
+    },
+    {
+      "id": "160346bc-a28f-4b88-8b02-c8f6581e19f1",
+      "source_id": "topic:kpop",
+      "target_id": "topic:twice",
+      "provenance": {
+        "source": "backfill-group",
+        "timestamp": "2026-07-21T00:58:33.636995Z",
+        "confidence": 1.0
+      },
+      "edge_type": "related_topic",
+      "weight": 0.7,
+      "timescale": "SLOW"
+    },
+    {
+      "id": "706a1dc4-1788-4895-84b5-9084c0e75425",
+      "source_id": "topic:kpop",
+      "target_id": "topic:newjeans",
+      "provenance": {
+        "source": "backfill-group",
+        "timestamp": "2026-07-21T00:58:33.637004Z",
+        "confidence": 1.0
+      },
+      "edge_type": "related_topic",
+      "weight": 0.7,
       "timescale": "SLOW"
     }
   ]

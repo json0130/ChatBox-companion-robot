@@ -1268,8 +1268,10 @@ class WebcamKGLoop:
 
             reinf = ", ".join(lab for lab, _c in ts.get("reinforced", []))
             newt = ", ".join(f"{lab}[{cat}]" for lab, cat, _c in ts.get("added", []))
+            rel = ", ".join(f"{a}~{b}" for a, b in ts.get("related", []))
             print(f"  {pid}: Δrapport {cu.rapport_delta:+.2f}  Δtrust {cu.trust_delta:+.2f}")
             print(f"      reused: {reinf or '—'}   new: {newt or '—'}"
+                  + (f"   related: {rel}" if rel else "")
                   + (f"   dropped: {len(ts.get('dropped', []))}" if ts.get('dropped') else ""))
             if not ts.get("applied"):
                 print("      (topic extraction skipped — LLM JSON parse failed)")

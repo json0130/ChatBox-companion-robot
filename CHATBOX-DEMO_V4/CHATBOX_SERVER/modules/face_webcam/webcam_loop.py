@@ -254,11 +254,14 @@ class LLMClient:
         return self.available
 
     def respond(self, system_prompt: str, user_msg: str,
-                history: list[tuple[str, str]] | None = None) -> str:
+                history: list[tuple[str, str]] | None = None,
+                max_tokens: int = 140) -> str:
         """
         Args:
             history: list of (user_text, assistant_text) pairs from previous turns.
                      Injected as alternating user/assistant messages before user_msg.
+            max_tokens: reply budget. 140 suits a short spoken reply; JSON extraction
+                     (topics/closeness) needs far more or the JSON truncates mid-object.
         """
         if not self.available or self._client is None:
             return "[LLM not connected — run with --llm]"
@@ -271,7 +274,7 @@ class LLMClient:
             resp = self._client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                max_tokens=140,
+                max_tokens=max_tokens,
                 temperature=0.7,
                 # Stop if the model tries to continue past its turn / open a new one
                 # (qwen sometimes leaks ChatML tokens or a fake "user:" turn).
@@ -1168,12 +1171,17 @@ class WebcamKGLoop:
                 print(f"  {pid}: no conversation turns to extract")
                 continue
 
+            # JSON extraction needs a big token budget or the response truncates
+            # mid-object and every topic in it is silently lost (chat default is 140).
+            def _json_llm(sysp, usr):
+                return self.llm.respond(sysp, usr, max_tokens=900)
+
             # (a) Graph-aware typed topics (reuse existing / add genuinely new).
             ts = extract_and_apply_topics(
-                self.store, pid, self.robot_id, turns, self.llm.respond, session_id=sid)
+                self.store, pid, self.robot_id, turns, _json_llm, session_id=sid)
 
             # (b) Closeness deltas — existing logic, untouched (deltas applied only).
-            cu = _extract_closeness(turns, self.llm.respond)
+            cu = _extract_closeness(turns, _json_llm)
             if cu.rapport_delta or cu.trust_delta:
                 adjust_closeness(self.store, pid, self.robot_id,
                                  d_rapport=cu.rapport_delta, d_trust=cu.trust_delta,
@@ -1201,6 +1209,7 @@ class WebcamKGLoop:
         from modules.kg_extraction import (
             consolidate_topics, consolidate_interests, link_related_topics,
         )
+        from modules.graph_relationship.topics import relink_capability_topics
         merges = (consolidate_topics(self.store, self._embed_fn, source="auto-consolidate")["merges"]
                   + consolidate_interests(self.store, self._embed_fn, source="auto-consolidate")["merges"])
         if merges:
@@ -1215,6 +1224,15 @@ class WebcamKGLoop:
             print(f"[WebcamLoop] related-topic links (+{len(links)}):")
             for a, b, sim in links:
                 print(f"    '{a}' ~ '{b}'  ({sim})")
+        # Connect the person's topics to ChatBox's capabilities where they MATCH,
+        # so shared interests become common ground (uses the embedding matcher when
+        # available — e.g. their 'space travel' ~ ChatBox's 'space' — else keyword).
+        cap_links = relink_capability_topics(
+            self.store, self.robot_id, matcher=self._matcher)
+        if cap_links:
+            print(f"[WebcamLoop] ChatBox capability links (+{len(cap_links)}):")
+            for item, topic in cap_links:
+                print(f"    ChatBox '{item}'  ~  '{topic}'")
 
     def _consolidate_preview(self) -> None:
         """Dry-run: print near-duplicate topics that WOULD merge (non-destructive).
@@ -1658,13 +1676,7 @@ class WebcamKGLoop:
                     elif key in (ord("k"), ord("K")):
                         _dump_kg(self.store, self.robot_id)
                     elif key in (ord("x"), ord("X")):
-                        # First-impression keeps ONLY the fast conversation node —
-                        # no interest/topic extraction (which would add topic nodes).
-                        if self._first_impression:
-                            print("[FirstImpression] topic extraction disabled "
-                                  "(fast conversation node only)")
-                        else:
-                            self._extract_session()   # run extraction mid-session (testing)
+                        self._extract_session()   # run extraction mid-session (testing)
                     elif key in (ord("c"), ord("C")):
                         self._consolidate_preview()   # dry-run: preview topic merges
                     elif key in (ord("b"), ord("B")) and last_person_id:
@@ -1684,14 +1696,14 @@ class WebcamKGLoop:
             worker.join(timeout=2.0)
             if self.face_id.known_people():
                 self.face_id.save(self.faces_path)
-            # End-of-session knowledge extraction → update the graph. Skipped in
-            # first-impression mode, which deliberately keeps only the fast
-            # conversation node (emotion / current topic / mood) — no topic nodes.
-            if not self._first_impression:
-                try:
-                    self._extract_session()
-                except Exception as exc:  # noqa: BLE001 — never fail on shutdown
-                    print(f"[WebcamLoop] extraction failed: {exc}")
+            # End-of-session knowledge extraction → update the graph. In
+            # first-impression mode this is how the unknown person is built up over
+            # time: the live fast nodes (emotion/topic/mood) are distilled into typed
+            # topic nodes, consolidated, and connected to ChatBox's capabilities.
+            try:
+                self._extract_session()
+            except Exception as exc:  # noqa: BLE001 — never fail on shutdown
+                print(f"[WebcamLoop] extraction failed: {exc}")
             self.store.save(self.kg_path)
             self._session_store.close()
             cap.release()

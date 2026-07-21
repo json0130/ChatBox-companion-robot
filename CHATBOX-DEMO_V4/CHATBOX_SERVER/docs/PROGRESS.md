@@ -6,6 +6,35 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## feat: first-impression — build the person over time (extract + consolidate + connect to ChatBox)  *(branch `first-impression`)*
+
+**Goal (user):** now that a stranger starts as fast-nodes-only, let the profile GROW — extract typed topic
+nodes/edges from the conversation history, consolidate them, and connect to ChatBox's capabilities where they
+match. This is the "construction of the unknown person over time" the branch is for.
+**Changes (`webcam_loop.py`):**
+- Re-enabled end-of-session + `X`-hotkey `_extract_session()` in first-impression mode (was skipped for
+  fast-node-only). The live fast nodes (emotion/current topic/mood) are now distilled into typed topics at
+  session end.
+- Fixed the extraction truncation latent on this branch: `LLMClient.respond` hardcoded `max_tokens=140`, so
+  the topic/closeness JSON truncated mid-object and topics were silently lost. Added a `max_tokens` param;
+  `_extract_session` runs the JSON calls at 900.
+- `_auto_consolidate` now also runs `relink_capability_topics(store, robot, matcher=self._matcher)` — connects
+  the person's topics to ChatBox's capabilities by the embedding matcher (floor 0.62), so shared interests
+  become common ground.
+**Connection mechanism:** exact-label matches connect automatically via the shared TopicNode (person 'jazz'
+resolves to the SAME `topic:jazz` the robot's `knows jazz` capability points to); fuzzy matches connect via
+the matcher (their 'math' ~ ChatBox 'good at math').
+**Verified (real LLM + embeddings):** guest talks jazz + math + astronomy → extraction adds
+`jazz[music], math[other], astronomy[science]` (no truncation); capability link `ChatBox 'good at math' ~
+'math'`; `shared_topics(guest, chatbox) = ['jazz','math']`; astronomy correctly NOT shared (robot knows
+'space', floor keeps them distinct — no spurious link).
+**Known edge case (not hit in the normal flow):** if topics are extracted (via `X`) BEFORE the guest gives
+their name, the `interest:guest_N:*` nodes aren't moved by `rename_person` (it re-keys person/interaction/
+conversation only). The usual flow learns the name during the chat, so end-of-session extraction attaches to
+the real name — safe. Fix deferred (rename would need to also re-key interest ids).
+
+---
+
 ## fix+refine: first-impression — restore ChatBox identity (robot-only seed) + sync stale modules  *(branch `first-impression`)*
 
 **Bugs (running `--first-impression --enable-emotion`):** the branch's `webcam_loop.py` was the newer

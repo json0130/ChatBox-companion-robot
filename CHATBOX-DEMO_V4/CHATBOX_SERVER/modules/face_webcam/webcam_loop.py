@@ -734,6 +734,7 @@ class WebcamKGLoop:
         esp32_port:      int   = 8888,
         spec_dir:        Optional[str] = None,
         seed:            bool  = True,
+        seed_robots_only: bool = False,
         matcher                = None,
         embed_fn               = None,
         sessions_db:     str   = _DEFAULT_SESSIONS_DB,
@@ -768,7 +769,9 @@ class WebcamKGLoop:
             )
             try:
                 from modules.graph_relationship.seed import seed_all
-                seed_all(self.store, spec_dir)
+                # First-impression seeds ONLY the robot's identity (persona/role/
+                # capabilities) — never a person profile, which it builds over time.
+                seed_all(self.store, spec_dir, robots_only=seed_robots_only)
                 if self.kg_path:
                     self.store.save(self.kg_path)
             except Exception as exc:  # noqa: BLE001 — seeding is best-effort
@@ -1870,8 +1873,8 @@ def main() -> None:
                         "topic / mood) — no interest/topic nodes. Implies emotion on "
                         "and seeding off (re-enable seeding with --seed-fi).")
     p.add_argument("--seed-fi", action="store_true",
-                   help="Allow KG spec seeding even in --first-impression mode "
-                        "(off by default, since seeding adds topic nodes)")
+                   help="In --first-impression mode, seed the FULL spec set incl. "
+                        "person profiles (by default FI seeds ONLY ChatBox's identity)")
     # ── Feature 2: topic consolidation (--mode consolidate) ────────────────────
     p.add_argument("--merge-floor", type=float, default=0.86,
                    help="Min cosine similarity to MERGE two near-duplicate topics "
@@ -1919,11 +1922,14 @@ def main() -> None:
             matcher = None
             embed_fn = None
 
-    # First-impression mode implies emotion ON (so the fast node shows mood) and
-    # seeding OFF (spec seeding would add topic nodes) unless --seed-fi is given.
-    fi_mode         = args.first_impression
-    seed_enabled    = (args.seed_fi if fi_mode else not args.no_seed)
-    emotion_enabled = args.enable_emotion or fi_mode
+    # First-impression mode implies emotion ON (so the fast node shows mood). It
+    # STILL seeds ChatBox's own identity (persona/role/capabilities), but robot-only
+    # — never a person profile, which it builds up over time. --seed-fi re-enables
+    # full seeding (including the human spec).
+    fi_mode          = args.first_impression
+    seed_enabled     = True if fi_mode else (not args.no_seed)
+    seed_robots_only = fi_mode and not args.seed_fi
+    emotion_enabled  = args.enable_emotion or fi_mode
 
     loop = WebcamKGLoop(
         robot_id         = args.robot,
@@ -1938,6 +1944,7 @@ def main() -> None:
         esp32_port       = args.esp32_port,
         spec_dir         = args.spec_dir,
         seed             = seed_enabled,
+        seed_robots_only = seed_robots_only,
         matcher          = matcher,
         embed_fn         = embed_fn,
         sessions_db      = args.sessions_db,

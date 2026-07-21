@@ -6,6 +6,30 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## fix+refine: first-impression — restore ChatBox identity (robot-only seed) + sync stale modules  *(branch `first-impression`)*
+
+**Bugs (running `--first-impression --enable-emotion`):** the branch's `webcam_loop.py` was the newer
+integration version but two support modules were stale reverts, so the detection worker crashed every frame:
+1. `FaceIdentifier` had no `identify_all` → `AttributeError` (no bounding box / label). Ported the multi-face
+   path (`_mtcnn_all` keep_all=True MTCNN + `identify_all` returning (person_id, sim, box), Haar fallback).
+2. `emotion_detector.detect()` returned 2 values but the worker unpacks 4 → `not enough values to unpack`.
+   The file even used the pre-rename `from Modules.emotion_processor` import. Restored the VA version
+   (label, conf, valence, arousal via `_VA_TABLE`) + lowercase import. (Both latent in integration too —
+   emotion was off by default there; FI mode forces it on.)
+**Refine (user request):** keep ChatBox's persona/role/capabilities the same as before, but no person
+profile (first-impression builds the unknown person up over time). Previously FI turned seeding fully OFF and
+used an inline "warm" placeholder persona.
+- `seed.seed_all(store, spec_dir, robots_only=False)` — new `robots_only` seeds ONLY robot specs
+  (persona/role/capabilities), skipping human specs (`_spec_is_robot` peek).
+- webcam loop: FI mode now seeds `robots_only=True` (was seed=off); `--seed-fi` re-enables the FULL seed
+  incl. the human spec. New `seed_robots_only` param on `WebcamKGLoop`.
+**Verified:** robots_only seeds `chatbox` + persona "introverted, shy" + role "companion" + all capabilities,
+and ZERO person nodes (full seed also brings `jay`). Prompt for a guest shows the real identity + "invite
+them to introduce themselves", no culture. Detection-worker emotion path runs end-to-end (fake face → real
+detect, 4 values). All webcam modules compile; no stale `Modules.` imports remain.
+
+---
+
 ## feat: first-impression mode — auto-enrol + learn names, fast-node-only KG  *(branch `first-impression`, from `feature/integration`)*
 
 **Goal:** a lightweight "meet a stranger" demo — recognise faces, save an unknown face after the first

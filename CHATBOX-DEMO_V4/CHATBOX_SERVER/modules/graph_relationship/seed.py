@@ -222,9 +222,26 @@ def _spec_files(spec_dir: str) -> List[str]:
     return sorted(files)
 
 
-def seed_all(store: InMemoryGraphStore, spec_dir: str) -> Dict[str, int]:
-    """Seed every spec file found in spec_dir. Returns aggregate write counts."""
+def _spec_is_robot(spec_path: str) -> bool:
+    """True if a spec describes a robot (has `embodiment` or type=='robot')."""
+    try:
+        spec = _load_spec(spec_path)
+    except Exception:  # noqa: BLE001 — a bad spec simply isn't a robot for this check
+        return False
+    return ("embodiment" in spec) or (str(spec.get("type", "")).lower() == "robot")
+
+
+def seed_all(store: InMemoryGraphStore, spec_dir: str,
+             robots_only: bool = False) -> Dict[str, int]:
+    """Seed spec files found in spec_dir. Returns aggregate write counts.
+
+    robots_only — seed ONLY robot specs (persona/role/capabilities), skipping human
+    person specs. Used by first-impression mode, which keeps the robot's identity
+    but must not pre-load any person profile.
+    """
     files = _spec_files(spec_dir)
+    if robots_only:
+        files = [f for f in files if _spec_is_robot(f)]
     if not files:
         print(f"[seed] no spec files (*.yaml/*.yml/*.json) found in {spec_dir}")
         return {"nodes": 0, "edges": 0}

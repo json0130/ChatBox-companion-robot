@@ -63,7 +63,7 @@
         "desserts",
         "chocolate dessert"
       ],
-      "mood": -0.0650076727499254,
+      "mood": 0.023384357667964657,
       "emotion": "neutral",
       "node_type": "conversation"
     },
@@ -111,7 +111,7 @@
       "target_id": "chatbox:persona:introverted-shy",
       "provenance": {
         "source": "spec:robot_spec.yaml",
-        "timestamp": "2026-07-21T07:27:41.646628Z",
+        "timestamp": "2026-07-21T22:31:18.125622Z",
         "confidence": 1.0
       },
       "edge_type": "has_persona",
@@ -123,7 +123,7 @@
       "target_id": "chatbox:role:companion",
       "provenance": {
         "source": "spec:robot_spec.yaml",
-        "timestamp": "2026-07-21T07:27:41.646669Z",
+        "timestamp": "2026-07-21T22:31:18.125663Z",
         "confidence": 1.0
       },
       "edge_type": "has_role",
@@ -135,7 +135,7 @@
       "target_id": "chatbox:capability",
       "provenance": {
         "source": "spec:robot_spec.yaml",
-        "timestamp": "2026-07-21T07:27:41.646689Z",
+        "timestamp": "2026-07-21T22:31:18.125681Z",
         "confidence": 1.0
       },
       "edge_type": "has_capability",
@@ -184,11 +184,11 @@
       "target_id": "ever",
       "provenance": {
         "source": "chatbox",
-        "timestamp": "2026-07-21T07:29:13.904873Z",
+        "timestamp": "2026-07-21T22:31:20.008871Z",
         "confidence": 1.0
       },
       "edge_type": "mood",
-      "value": -0.09042091853916644,
+      "value": 0.023384357667964657,
       "label": "neutral",
       "timescale": "FAST"
     },

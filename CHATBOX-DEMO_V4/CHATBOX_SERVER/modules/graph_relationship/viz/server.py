@@ -192,6 +192,7 @@ def transform(raw: dict) -> dict:
                 obj["label"] = f"{obj['label']} ({len(notes)})"
         elif node_type == "culture_topic":
             obj["category"] = n.get("category", "other")   # robot-owned culture topic
+            obj["facts"] = n.get("facts", []) or []         # shareable cultural facts
         nodes.append(obj)
 
     edges = []

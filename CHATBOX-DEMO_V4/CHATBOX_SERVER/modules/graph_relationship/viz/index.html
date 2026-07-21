@@ -158,7 +158,8 @@
   <div class="legend-section">
     <div class="legend-title">Edge colour → person</div>
     <div id="legend-people"></div>
-    <div class="legend-row"><span class="swatch-line" style="border-color:#4fc3f7"></span>ChatBox (robot)</div>
+    <div class="legend-row"><span class="swatch-line" style="border-color:#ffffff"></span>ChatBox (robot)</div>
+    <div class="legend-row"><span class="swatch-line" style="border-color:#4fc3f7"></span>Korean knowledge (culture)</div>
     <div class="legend-row muted" style="font-size:11px; margin-top:4px">lighter = FAST · darker = SLOW</div>
   </div>
   <div class="legend-section">
@@ -201,7 +202,9 @@ const categoryColor = (c) => CATEGORY_COLOR[c] || CATEGORY_COLOR.other;
 // (FAST = lighter, SLOW = darker, RELATIONSHIP = base). Robot (chatbox) edges
 // are always a single blue. Blue is reserved for the robot, so it is excluded
 // from the person palette.
-const ROBOT_EDGE = "#4fc3f7";  // chatbox edges — single blue
+const ROBOT_EDGE = "#ffffff";  // chatbox edges — white
+const CULTURE_EDGE = "#4fc3f7"; // culture-knowledge edges (knows_culture / culture_prior) — blue
+const CULTURE_EDGE_TYPES = new Set(["knows_culture", "culture_prior"]);
 const PERSON_PALETTE = ["#ff8c42","#e6689c","#9ccc65","#b39ddb","#ffd24a",
                         "#26a69a","#f4694c","#c08457"];
 const personColor = d3.scaleOrdinal(PERSON_PALETTE);   // stable per person id
@@ -226,6 +229,9 @@ function shadeByTimescale(base, ts) {
   return c.formatHex();                                    // RELATIONSHIP = base
 }
 function edgeColor(d) {
+  // Culture-knowledge edges get their own colour so ChatBox's own (white) edges
+  // stay visually distinct from the Korean prior-knowledge subgraph.
+  if (CULTURE_EDGE_TYPES.has(d.type)) return shadeByTimescale(CULTURE_EDGE, d.timescale);
   const s = d.source.id || d.source, t = d.target.id || d.target;
   const owner = nodeOwner(s) || nodeOwner(t);   // source decides; target is fallback
   const base = (owner && owner.kind === "person") ? personColor(owner.id) : ROBOT_EDGE;
@@ -368,10 +374,11 @@ function update(graph) {
       cur.notes = n.notes;                       // topic conversation summaries (if any)
       cur.category = n.category;                 // topic category (Feature-2d)
       cur.topicLabel = n.topicLabel;
+      cur.facts = n.facts;                       // culture-topic facts (if any)
     } else {
       nodeById.set(n.id, {
         id: n.id, type: n.type, label: n.label, turns: n.turns, notes: n.notes,
-        category: n.category, topicLabel: n.topicLabel,
+        category: n.category, topicLabel: n.topicLabel, facts: n.facts,
         x: width/2 + (Math.random()-0.5)*80,
         y: height/2 + (Math.random()-0.5)*80,
       });
@@ -546,6 +553,12 @@ function renderConvo() {
     // Conversation history for this topic — fetched from the transcript DB (RAG).
     html += `<div class="sec-title">conversation history</div>`;
     html += `<div id="topic-history" class="convo-empty">loading…</div>`;
+  }
+
+  // Culture-topic facts — what ChatBox knows and can share about this topic.
+  if (node.facts && node.facts.length) {
+    html += `<div class="sec-title">facts · ${node.facts.length}</div>`;
+    html += node.facts.map(f => `<div class="bubble child">${esc(f)}</div>`).join("");
   }
 
   // Connections — each deletable

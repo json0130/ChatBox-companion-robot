@@ -1,2 +1,10 @@
 *.env
 *.pth
+
+# Python bytecode / caches
+__pycache__/
+*.pyc
+*.pyo
+
+# Local backups / snapshots
+*.bak

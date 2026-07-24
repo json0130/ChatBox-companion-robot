@@ -1,6 +1,7 @@
 # robot.py — Robot client (v6)
 import sys
 import re
+import time
 import logging
 from typing import Optional
 
@@ -9,6 +10,7 @@ from client import BasicClient
 from InputModules.voice_input import VoiceInputModule
 from InputModules.camera_input import CameraInputModule
 from OutputModules.console_output import ConsoleOutputModule
+from OutputModules.face_tracking_output import FaceTrackingOutputModule
 from OutputModules.edge_tts_output import EdgeTTSOutputModule
 from OutputModules.arduino_output import ArduinoOutputModule
 
@@ -92,23 +94,61 @@ class SimpleConcurrentClient(BasicClient):
         if "console_output" in self.output_modules:
             self.output_modules["console_output"].process_output(response_text)
 
-        tts = self.output_modules.get("edge_tts_output")
-        if not tts:
-            if emotion:
-                self.on_emotion_detected(emotion)
-            return
+        # A response arrived: freeze head tracking BEFORE any gesture or audio,
+        # and wait until the tracker confirms it has actually stopped, so the
+        # head never moves mid-sentence. Released in the finally below.
+        tracker = self.output_modules.get("face_tracking_output")
+        if tracker:
+            tracker.request_hold()
+            if not tracker.wait_until_held(timeout=2.0):
+                logger.warning("[FaceTracking] hold not confirmed — proceeding anyway")
 
-        sentences = self._split_sentences(clean_text)
-        if not sentences:
-            return
+        try:
+            tts = self.output_modules.get("edge_tts_output")
+            if not tts:
+                if emotion:
+                    self.on_emotion_detected(emotion)
+                return
 
-        # First sentence carries the emotion callback — fires when audio starts
-        start_cb = (lambda e: lambda: self.on_emotion_detected(e))(emotion) if emotion else None
-        tts.process_output_synced(sentences[0], start_callback=start_cb)
+            sentences = self._split_sentences(clean_text)
+            if not sentences:
+                return
 
-        # Remaining sentences queued individually — TTS plays them back-to-back
-        for sentence in sentences[1:]:
-            tts.process_output(sentence)
+            # First sentence carries the emotion callback — fires when audio starts
+            start_cb = (lambda e: lambda: self.on_emotion_detected(e))(emotion) if emotion else None
+            tts.process_output_synced(sentences[0], start_callback=start_cb)
+
+            # Remaining sentences queued individually — TTS plays them back-to-back
+            for sentence in sentences[1:]:
+                tts.process_output(sentence)
+
+            self._wait_for_speech_end()
+        finally:
+            if tracker:
+                tracker.release_hold()
+
+    def _wait_for_speech_end(self, settle: float = 0.8, timeout: float = 120.0) -> bool:
+        """Block until TTS has been quiet for `settle` seconds.
+
+        is_speaking clears briefly *between* queued sentences, so a plain
+        'not set' check would resume tracking mid-reply — hence the settle
+        window. Returns False if `timeout` was hit first.
+        """
+        if not hasattr(self, "is_speaking"):
+            return True
+        self.is_speaking.wait(timeout=3.0)      # let the first audio start
+        deadline = time.time() + timeout
+        quiet_since = None
+        while time.time() < deadline:
+            if self.is_speaking.is_set():
+                quiet_since = None
+            elif quiet_since is None:
+                quiet_since = time.time()
+            elif time.time() - quiet_since >= settle:
+                return True
+            time.sleep(0.05)
+        logger.warning("[FaceTracking] speech wait timed out — resuming tracking")
+        return False
 
     def on_speech_response(self, data: dict):
         transcription = data.get("transcription", "")
@@ -194,6 +234,16 @@ class SimpleConcurrentClient(BasicClient):
             edge.start()
         else:
             logger.warning("[Setup] Edge TTS failed — check gtts/ffmpeg")
+
+        # ── OUTPUT: Face tracking (state machine, ticked by the main loop) ────
+        if self.config.get("features", {}).get("face_tracking", False):
+            logger.info("[Setup] Face tracking...")
+            ft_cfg = self.config.get("face_tracking_config", {})
+            tracker = FaceTrackingOutputModule("face_tracking_output", ft_cfg)
+            if self.register_output_module(tracker):
+                tracker.start()
+            else:
+                logger.warning("[Setup] Face tracking failed — check camera/serial")
 
         # ── OUTPUT: Arduino (TCP) ─────────────────────────────────────────────
         if self.config.get("features", {}).get("arduino_integration", True):

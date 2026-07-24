@@ -45,6 +45,23 @@
         "reconnect_delay": 1.0,
         "max_reconnect_delay": 30.0
     },
+    "features": {
+        "face_tracking": true,
+        "arduino_integration": true
+    },
+    "face_tracking_config": {
+        "use_realsense": true,
+        "camera_index": 0,
+        "serial_port": null,
+        "baud": 115200,
+        "width": 640,
+        "height": 480,
+        "deadband": 30,
+        "send_interval": 0.05,
+        "keepalive_interval": 1.0,
+        "model_path": "yolov8n.pt",
+        "verbose_commands": false
+    },
     "capabilities": {
         "navigation": false,
         "face_recognition": false,

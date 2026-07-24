@@ -520,8 +520,25 @@ class BasicClient:
             if not self.start():
                 return
             logger.info("[Client] Running — press Ctrl+C to stop")
+
+            # Modules exposing tick() run as state machines driven from here
+            # (rather than their own threads), so they can be gated cleanly
+            # against speech/gestures. Idle at 1 Hz when there are none.
+            tickables = [m for m in list(self.input_modules.values()) +
+                         list(self.output_modules.values())
+                         if callable(getattr(m, "tick", None))]
+            interval = 0.03 if tickables else 1.0
+            if tickables:
+                logger.info(f"[Client] Ticking {len(tickables)} module(s) "
+                            f"at ~{1/interval:.0f} Hz")
+
             while self.running:
-                time.sleep(1)
+                for module in tickables:
+                    try:
+                        module.tick()
+                    except Exception as e:
+                        logger.error(f"[Modules] tick '{module.name}' error: {e}")
+                time.sleep(interval)
         except KeyboardInterrupt:
             logger.info("[Client] Ctrl+C received")
         except Exception as e:

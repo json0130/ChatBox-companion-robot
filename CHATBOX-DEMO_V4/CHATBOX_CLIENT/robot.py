@@ -7,6 +7,7 @@ from typing import Optional
 from client import BasicClient
 
 from InputModules.voice_input import VoiceInputModule
+from InputModules.camera_input import CameraInputModule
 from OutputModules.console_output import ConsoleOutputModule
 from OutputModules.edge_tts_output import EdgeTTSOutputModule
 from OutputModules.arduino_output import ArduinoOutputModule
@@ -160,6 +161,21 @@ class SimpleConcurrentClient(BasicClient):
             voice = VoiceInputModule("voice_input", voice_config)
             self.register_input_module(voice)
             voice.start()
+
+        # ── INPUT: Camera (emotion) ───────────────────────────────────────────
+        # Frames go to the server's emotion processor; the detected emotion then
+        # rides along with the next chat message as "text (happy-0.7)".
+        if "emotion" in self.config.get("modules", []):
+            logger.info("[Setup] Camera input (emotion)...")
+            camera_config = self.config.get("camera_config", {
+                "camera_index": 0, "width": 640, "height": 480,
+                "fps": 30, "send_fps": 5, "jpeg_quality": 85,
+            })
+            camera = CameraInputModule("camera_input", camera_config)
+            if self.register_input_module(camera):
+                camera.start()
+            else:
+                logger.warning("[Setup] Camera failed to register — emotion disabled")
 
         # ── OUTPUT: Console ───────────────────────────────────────────────────
         logger.info("[Setup] Console output...")

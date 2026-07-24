@@ -87,7 +87,10 @@ class EmotionProcessor:
     def __init__(self, model_path=None, config=None):
         # Configuration
         if model_path is None:
-            model_path = os.path.join("models", "efficientnet_HQRAF_improved_withCon.pth")
+            # Default to the local ``model/`` folder next to CHATBOX_SERVER.
+            _server_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            model_path = os.path.join(_server_root, "model",
+                                      "efficientnet_HQRAF_improved_withCon.pth")
         self.model_path = model_path
         self.config = config or {}
         
@@ -100,7 +103,7 @@ class EmotionProcessor:
         self.emotion_window_size = self.config.get('emotion_window_size', 5)
         
         # Model components
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = self._pick_device()
         self.input_size = 224
         self.emotion_labels = ['angry', 'disgust', 'fear', 'happy', 'neutral', 'sad', 'surprise']
         self.cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
@@ -133,6 +136,21 @@ class EmotionProcessor:
         # Initialize emotion tracker
         self.emotion_tracker = EmotionTracker(self.emotion_window_size)
         
+    @staticmethod
+    def _pick_device():
+        """Prefer CUDA, but only if it can actually run a kernel. Newer GPUs
+        (e.g. RTX 5060 / sm_120) are reported as available but crash on inference
+        with the current PyTorch build ('no kernel image available'), so probe a
+        tiny op and fall back to CPU on failure — same reason face_id runs on CPU."""
+        if not torch.cuda.is_available():
+            return torch.device("cpu")
+        try:
+            _ = (torch.zeros(1, device="cuda") + 1).item()  # forces a real kernel
+            return torch.device("cuda")
+        except Exception as e:
+            print(f"⚠️ CUDA present but unusable ({str(e).splitlines()[0]}); using CPU")
+            return torch.device("cpu")
+
     def get_model(self):
         """Load emotion detection model with classifier structure matching training."""
         num_classes = 7

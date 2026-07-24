@@ -39,6 +39,34 @@ class OllamaClient:
         
         return "[DEFAULT]", "[DEFAULT]"
 
+    def _sanitize_tag(self, response: str, allowed_tags: list) -> str:
+        """Guarantee the reply begins with exactly ONE tag from `allowed_tags`.
+
+        The prompt asks the model to only use allowed tags, but that's not a
+        guarantee — so we enforce it here:
+          • normalise allowed tags to bracketed upper-case form
+          • pick the tag: the first [TAG] in the reply if it's allowed,
+            otherwise the first allowed tag (the safe default)
+          • strip EVERY bracketed token from the spoken text, so no stray/extra
+            tag (e.g. the model adding [WAVE] [DANCE]) can leak through
+        Result is always exactly one allowed tag, followed by the spoken text.
+        """
+        allowed = [(t if t.startswith("[") else f"[{t}]").upper()
+                   for t in (allowed_tags or []) if str(t).strip()]
+        if not allowed:
+            allowed = ["[DEFAULT]"]
+        default = allowed[0]
+
+        text = (response or "").strip()
+        m = re.search(r"\[([A-Za-z_]+)\]", text)   # case-insensitive: tolerate [happy]
+        found = f"[{m.group(1).upper()}]" if m else None
+        chosen = found if found in allowed else default
+
+        # Drop ALL bracketed tokens from the body — the contract is ONE tag, up front.
+        body = re.sub(r"\[[^\]]*\]", " ", text)
+        body = re.sub(r"\s{2,}", " ", body).strip()
+        return f"{chosen} {body}".strip()
+
     def ask_model_optimized(self, message: str, user_emotion: str = "neutral", confidence: float = 0.0, allowed_tags: list = None) -> str:
         """Send prompt with conversation history via OpenAI API format."""
 
@@ -55,6 +83,12 @@ class OllamaClient:
             f"Your personality is warm, extremely patient, and deeply empathetic. You act as a safe, comforting friend.\n"
             f"Always use simple language that a young child can easily understand. Never use complex psychological jargon.\n"
             f"Validate their 'big feelings', encourage them, and always make them feel safe, heard, and brave.\n\n"
+
+            f"*** READING THE CHILD'S FEELINGS ***\n"
+            f"Each user message ends with their detected facial emotion and a 0-1 confidence, "
+            f"in the form (emotion-confidence), e.g. \"Hello (happy-0.7)\". "
+            f"Use this as a gentle hint about how they might be feeling — weave in warmth "
+            f"accordingly, but never read the tag back to them or mention numbers.\n\n"
 
             f"*** STRICT MANDATORY FORMATTING RULES ***\n"
             f"1. THE VERY FIRST CHARACTER of your response MUST be an open bracket '['. Never start with a word, greeting, or space.\n"
@@ -74,8 +108,12 @@ class OllamaClient:
             f"Respond to the user's next message following these exact rules."
         )
         
-        # 4. Format the new message from the user
-        current_user_msg = {"role": "user", "content": f"[User Emotion: {user_emotion}] {message}"}
+        # 4. Format the new message from the user, tagging their detected facial
+        #    emotion + confidence inline, e.g.  "Hello (happy-0.7)".
+        #    `confidence` arrives on a 0-100 scale, so scale it to 0-1 for the tag.
+        conf01 = max(0.0, min(1.0, (confidence or 0.0) / 100.0))
+        emotion_tag = f"{user_emotion or 'neutral'}-{conf01:.1f}"
+        current_user_msg = {"role": "user", "content": f"{message} ({emotion_tag})"}
         
         # 5. Add it to ChatBox's memory
         self.history.append(current_user_msg)
@@ -96,7 +134,10 @@ class OllamaClient:
             )
             
             clean_response = response.choices[0].message.content.strip()
-            
+
+            # 7b. Enforce the allowed-tag contract (model may ignore the prompt).
+            clean_response = self._sanitize_tag(clean_response, allowed_tags)
+
             # 8. Save ChatBox's answer to the memory
             self.history.append({"role": "assistant", "content": clean_response})
             

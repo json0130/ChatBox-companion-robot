@@ -5,8 +5,17 @@
     "modules": [
         "gpt",
         "speech",
-        "rag"
+        "rag",
+        "emotion"
     ],
+    "camera_config": {
+        "camera_index": 0,
+        "width": 640,
+        "height": 480,
+        "fps": 30,
+        "send_fps": 5,
+        "jpeg_quality": 85
+    },
     "robot_role": "You are a friendly and helpful robot assistant. You speak warmly, answer questions clearly, and always try to make the person feel comfortable. Keep responses concise and natural.",
     "allowed_tags": [
         "[DEFAULT]",
@@ -39,7 +48,7 @@
     "capabilities": {
         "navigation": false,
         "face_recognition": false,
-        "emotion_understanding": false
+        "emotion_understanding": true
     },
     "personality": {
         "A": 0.9,

@@ -266,7 +266,12 @@ class BasicClient:
         self.server_connection.register_handler("chat_response",   self._default_chat_handler)
         self.server_connection.register_handler("speech_response", self._default_speech_handler)
         self.server_connection.register_handler("emotion_update",  self._default_emotion_handler)
+        self.server_connection.register_handler("frame_result",    self._default_frame_result_handler)
         self.server_connection.register_handler("demo_step",       self._on_demo_step)
+
+        # Last (emotion, confidence) printed — frame_result arrives at send_fps,
+        # so only log when it actually changes to keep the terminal readable.
+        self._last_emotion_print = None
 
         self.input_modules:  Dict[str, InputModule]  = {}
         self.output_modules: Dict[str, OutputModule] = {}
@@ -290,6 +295,32 @@ class BasicClient:
 
     def _default_emotion_handler(self, data: dict):
         pass
+
+    def _default_frame_result_handler(self, data: dict):
+        """Print the server's emotion-recognition result for each camera frame.
+
+        Payload: {'result': {'emotion', 'confidence', 'status', 'distribution'}}.
+        Only logged when the emotion or confidence actually changes, since frames
+        arrive continuously at `send_fps`.
+        """
+        result = (data or {}).get("result", {})
+        if not result:
+            return
+
+        emotion = result.get("emotion", "unknown")
+        conf    = result.get("confidence", 0.0) or 0.0
+        status  = result.get("status", "")
+
+        # 'no_faces' means nobody is in frame — say so once, don't repeat.
+        key = (emotion, round(float(conf)), status == "no_faces")
+        if key == self._last_emotion_print:
+            return
+        self._last_emotion_print = key
+
+        if status == "no_faces":
+            logger.info("[Emotion] no face in frame")
+        else:
+            logger.info(f"[Emotion] {emotion} ({float(conf):.1f}%)")
 
     def _on_demo_step(self, data: dict):
         step_id  = data.get("step_id", "")

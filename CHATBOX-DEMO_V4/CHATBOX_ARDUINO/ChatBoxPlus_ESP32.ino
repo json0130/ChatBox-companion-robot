@@ -68,8 +68,37 @@ String* sequences[] = {
   seq_dance
 };
 
+// ==================== Face-Tracking Pan Servo ==================== //
+// Single pan servo that keeps the tracked face centred. The Jetson streams one
+// integer per line over USB serial: the horizontal pixel error (cx - centre).
+//    error > 0  -> face is RIGHT of centre -> turn head right
+//    error < 0  -> face is LEFT  of centre -> turn head left
+// Because the camera moves with the head this is a closed feedback loop: each
+// error nudges the angle a little, driving the error toward zero.
+//
+// Pin 19 is deliberately outside the expression-servo set (32/33/5/4/16/17 body,
+// 23/27/26/12/13 head) so the head can pan without touching a gesture servo.
+//
+// Gating: panning only happens outside the EXECUTE state, so a gesture and the
+// head never move at once. The Jetson also holds tracking during speech and
+// sends "0" keep-alives — this is the hardware-side half of the same contract.
+#define PAN_PIN 19
+#define PAN_CENTER 90
+#define PAN_MIN 20             // travel limits (degrees)
+#define PAN_MAX 160
+#define PAN_KP 0.03f           // degrees of angle per pixel of error
+#define PAN_DEADBAND 30        // ignore small errors (matches the Jetson side)
+#define PAN_MAX_INPUT_LEN 12
+
+Servo panServo;
+float panAngle = PAN_CENTER;
+String panInput = "";
+unsigned long lastPanMsg = 0;
+
 // ==================== Function Declarations ==================== //
 void servoInit();
+void panServoInit();
+void updatePanTracking();
 bool executeExpression(String expression);
 bool checkValidity(String input);
 bool checkSequenceValidity(String input);
@@ -91,6 +120,7 @@ void setup() {
 
   setCpuFrequencyMhz(80);
   servoInit();
+  panServoInit();
 
   // ── WiFi ──────────────────────────────────────────────────
   WiFi.mode(WIFI_STA);
@@ -147,6 +177,11 @@ void setup() {
 
 // ==================== Main Loop ==================== //
 void loop() {
+  // Face tracking runs every loop EXCEPT during EXECUTE (a gesture is playing).
+  // EXECUTE blocks inside the switch below, so control only reaches here between
+  // commands — panning is naturally paused while a gesture runs.
+  updatePanTracking();
+
   // Accept a new TCP client whenever the previous one drops
   if (!tcpClient || !tcpClient.connected()) {
     WiFiClient c = server.available();
@@ -214,6 +249,49 @@ void loop() {
       while (executeExpression("default"));
       Serial.println("ChatBox: EXECUTE -> IDLE");
       break;
+  }
+}
+
+// ==================== panServoInit ==================== //
+void panServoInit() {
+  panServo.attach(PAN_PIN, 500, 2400);
+  panServo.write(PAN_CENTER);
+  panAngle = PAN_CENTER;
+  lastPanMsg = millis();
+  Serial.println("[FaceTracking] pan servo ready on D" + String(PAN_PIN) +
+                 " — streaming pixel error @ 115200");
+}
+
+// ==================== updatePanTracking ==================== //
+// Reads integer pixel-error lines from USB Serial and eases the pan servo.
+// Non-blocking: parses only what is already buffered, moves at most once per
+// call. Expression commands arrive over TCP, so reading Serial here never
+// competes with them; only complete all-integer lines are treated as errors.
+void updatePanTracking() {
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\n' || c == '\r') {
+      panInput.trim();
+      if (panInput.length() > 0) {
+        int error = panInput.toInt();
+        lastPanMsg = millis();
+        if (abs(error) > PAN_DEADBAND) {
+          // error > 0 (face right) -> turn head right -> DECREASE angle.
+          // If the head turns the wrong way, flip to '+= error * PAN_KP'.
+          panAngle -= error * PAN_KP;
+          panAngle = constrain(panAngle, PAN_MIN, PAN_MAX);
+          panServo.write((int)(panAngle + 0.5f));
+        }
+      }
+      panInput = "";
+    } else if (panInput.length() < PAN_MAX_INPUT_LEN) {
+      panInput += c;
+    }
+  }
+
+  // No data for 2s: hold the current angle (uncomment to recentre instead).
+  if (millis() - lastPanMsg > 2000) {
+    // panServo.write(PAN_CENTER); panAngle = PAN_CENTER;
   }
 }
 

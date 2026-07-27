@@ -1,2 +1,15 @@
+# Secrets / large model weights
 *.env
 *.pth
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Runtime data (per-user RAG indexes, transcript DB, KG snapshots)
+rag_indexes/
+*.faiss
+sessions.db
+kg_state.json
+kg_state*.bak

@@ -139,6 +139,25 @@ def person_culture(store: GraphStore, person_id: str) -> Optional[str]:
     return sorted(cids)[0] if cids else None
 
 
+def person_culture_source(store: GraphStore, person_id: str) -> Optional[str]:
+    """Provenance `source` of the person's belongs_to_culture edge, or None if
+    untagged. Lets a consumer distinguish a background the person STATED themselves
+    (source starts 'self-declared:') from one that was manually/seed-assigned — the
+    former is a recallable fact, the latter only a tentative hint."""
+    cid = person_culture(store, person_id)
+    if cid is None:
+        return None
+    edge = store.get_edge(person_id, cid, "belongs_to_culture")
+    return edge.provenance.source if edge is not None else None
+
+
+def person_culture_self_declared(store: GraphStore, person_id: str) -> bool:
+    """True iff the person's culture tag came from their OWN explicit statement
+    (not a manual/seed assignment or any inference)."""
+    src = person_culture_source(store, person_id)
+    return bool(src) and src.startswith("self-declared")
+
+
 def culture_knowers(store: GraphStore, culture_id: str) -> List[str]:
     """Robot ids that hold this culture as prior knowledge (knows_culture)."""
     return sorted(n.id for _e, n in store.query_neighbors(culture_id, "knows_culture")

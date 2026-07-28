@@ -51,28 +51,33 @@ def interest_id(person_id: str, label: str) -> str:
 def add_person_interest(
     store: GraphStore, person_id: str, interest_label: str,
     topic_labels: Optional[List[str]] = None, *, summary: Optional[str] = None,
-    source: Optional[str] = None,
+    source: Optional[str] = None, affinity: float = 0.5, confidence: float = 1.0,
 ) -> Optional[InterestNode]:
     """Upsert a person's Interest (deterministic id) with has_interest, and an
     about-edge to each shared Topic. Idempotent — re-adding does not duplicate.
 
     If `summary` is given, it is attached as a per-person note on each of the
-    interest's Topic nodes. The person node must already exist.
+    interest's Topic nodes. The person node must already exist. `affinity`
+    (internal [0,1]) and `confidence` are written on each about edge (defaults =
+    neutral / fully-trusted).
     """
     label = str(interest_label).strip()
     if not label:
         return None
+    aff = max(0.0, min(1.0, float(affinity)))
+    conf = max(0.0, min(1.0, float(confidence)))
     inode = InterestNode(id=interest_id(person_id, label), label=label)
     store.upsert_node(inode)
     store.upsert_edge(HasInterestEdge(
-        source_id=person_id, target_id=inode.id, provenance=_prov(source)))
+        source_id=person_id, target_id=inode.id, provenance=_prov(source, conf)))
     for t in topic_labels or []:
         t = str(t).strip()
         if not t:
             continue
         topic = resolve_topic(store, t)
         store.upsert_edge(AboutEdge(
-            source_id=inode.id, target_id=topic.id, provenance=_prov(source)))
+            source_id=inode.id, target_id=topic.id, affinity=aff, confidence=conf,
+            provenance=_prov(source, conf)))
         if summary:
             add_topic_note(store, topic, person_id, summary)
     return inode
@@ -323,6 +328,26 @@ def person_interests(store: GraphStore, person_id: str) -> List[Tuple[InterestNo
     return out
 
 
+def person_topic_affinity(
+    store: GraphStore, person_id: str,
+) -> List[Tuple[TopicNode, float, float]]:
+    """[(TopicNode, affinity, confidence), ...] for one person — the "observed"
+    evidence read by BOTH the preference BN (affinity → signed clamp) and the
+    person-memory prompt (affinity → like/neutral/dislike word, confidence →
+    hedge). Reads affinity/confidence straight off the person Interest --about-->
+    Topic edge; edges written before this feature report the schema defaults
+    (0.5 neutral / 1.0 confident). Pure O(neighbours) read."""
+    out: List[Tuple[TopicNode, float, float]] = []
+    for interest in _neighbors_of_type(store, person_id, "has_interest", "interest"):
+        for edge, topic in store.query_neighbors(interest.id, "about"):
+            if topic.node_type != "topic":
+                continue
+            aff = float(getattr(edge, "affinity", 0.5))
+            conf = float(getattr(edge, "confidence", 1.0))
+            out.append((topic, aff, conf))
+    return out
+
+
 def person_topics(store: GraphStore, person_id: str) -> List[Tuple[str, str]]:
     """[(topic_label, category), ...] for one person — the distinct topics they
     reach via any interest. Pure store read (no LLM); used to condition the
@@ -341,17 +366,23 @@ def person_topics(store: GraphStore, person_id: str) -> List[Tuple[str, str]]:
 def add_person_topic(
     store: GraphStore, person_id: str, label: str, category=None, *,
     source: Optional[str] = None, confidence: float = 1.0,
-    summary: Optional[str] = None,
+    affinity: float = 0.5, summary: Optional[str] = None,
 ) -> Optional[TopicNode]:
     """Wire a NEW typed topic into the person's Interest layer:
         person --has_interest--> Interest(category) --about--> Topic(label, category)
     The interest node is the topic's category (e.g. 'music'), so typed topics group
     under their category. Idempotent (deterministic ids + upsert). Optional `summary`
-    is attached as a per-person topic note."""
+    is attached as a per-person topic note.
+
+    `affinity` (internal [0,1]: 0 dislike / 0.5 neutral / 1 like) and `confidence`
+    are written onto the about edge — the "observed" evidence the BN and the memory
+    prompt read. Re-adding OVERWRITES both with the new reading (EWMA blending of
+    successive readings is future work)."""
     label = str(label).strip()
     if not label:
         return None
     conf = max(0.0, min(1.0, float(confidence)))
+    aff = max(0.0, min(1.0, float(affinity)))
     topic = resolve_topic(store, label, category=category)
     interest_label = _cat_value(category)
     inode = InterestNode(id=interest_id(person_id, interest_label), label=interest_label)
@@ -359,7 +390,8 @@ def add_person_topic(
     store.upsert_edge(HasInterestEdge(
         source_id=person_id, target_id=inode.id, provenance=_prov(source, conf)))
     store.upsert_edge(AboutEdge(
-        source_id=inode.id, target_id=topic.id, provenance=_prov(source, conf)))
+        source_id=inode.id, target_id=topic.id, affinity=aff, confidence=conf,
+        provenance=_prov(source, conf)))
     if summary:
         add_topic_note(store, topic, person_id, summary)
     return topic
@@ -368,23 +400,28 @@ def add_person_topic(
 def reinforce_person_topic(
     store: GraphStore, person_id: str, label: str, *,
     source: Optional[str] = None, confidence: float = 1.0,
-    summary: Optional[str] = None,
+    affinity: float = 0.5, summary: Optional[str] = None,
 ) -> Optional[TopicNode]:
     """Refresh an EXISTING person→interest→topic path (re-stamp provenance) without
     creating any new node. Returns the topic if a path was found, else None. Used
-    for topics the LLM reports as already-known (existing_topics_discussed)."""
+    for topics the LLM reports as already-known (existing_topics_discussed).
+
+    Overwrites the about edge's `affinity`/`confidence` with the new reading (simple
+    overwrite for now; EWMA blending is future work)."""
     tid = topic_id(label)
     topic = store.get_node(tid)
     if topic is None or topic.node_type != "topic":
         return None
     conf = max(0.0, min(1.0, float(confidence)))
+    aff = max(0.0, min(1.0, float(affinity)))
     refreshed = False
     for interest, topics in person_interests(store, person_id):
         if any(t.id == tid for t in topics):
             store.upsert_edge(HasInterestEdge(
                 source_id=person_id, target_id=interest.id, provenance=_prov(source, conf)))
             store.upsert_edge(AboutEdge(
-                source_id=interest.id, target_id=tid, provenance=_prov(source, conf)))
+                source_id=interest.id, target_id=tid, affinity=aff, confidence=conf,
+                provenance=_prov(source, conf)))
             refreshed = True
     if summary:
         add_topic_note(store, topic, person_id, summary)

@@ -26,6 +26,7 @@ from typing import Callable, List, Optional, Tuple
 import math
 
 from modules.graph_relationship.schema import TOPIC_CATEGORIES
+from modules.graph_relationship.scales import aff01_from_10
 from modules.graph_relationship.topics import (
     add_person_topic,
     link_related_topic,
@@ -62,13 +63,21 @@ def build_system_prompt(existing: List[Tuple[str, str]]) -> str:
         "Return exactly this JSON:\n"
         '{"existing_topics_discussed": ['
         '{"label": "<COPY VERBATIM from the list above>", '
+        '"sentiment": <0-10>, '
         '"confidence": <0.0-1.0>, "summary": "<optional one short sentence>"}], '
         '"new_topics": ['
         '{"label": "<short canonical noun phrase, lowercase>", '
         f'"category": "<one of: {cats}>", '
+        '"sentiment": <0-10>, '
         '"confidence": <0.0-1.0>, "summary": "<optional one short sentence>"}], '
         '"relations": [{"a": "<specific topic label>", "b": "<broader topic label>"}]}\n\n'
         "Rules:\n"
+        "- For each topic, rate the person's sentiment 0-10 (0 = clearly dislikes, "
+        "5 = neutral or unclear, 10 = clearly likes). Use 5 when it isn't stated. "
+        "Use the FULL range — anchors: \"hate it\"/\"can't stand it\" → 0-1; "
+        "\"don't really like it\"/\"not a fan\" → 2-3; \"it's okay\"/no opinion → 5; "
+        "\"used to like it\"/\"liked it\"/\"pretty good\" → 7-8; \"love it\"/"
+        "\"my favourite\" → 9-10.\n"
         "- Prefer reusing an existing label over a near-duplicate: if \"jazz\" is "
         "known and the child says \"jazz music\", REUSE \"jazz\".\n"
         "- Put a topic in new_topics ONLY if it is genuinely distinct from EVERY "
@@ -110,6 +119,20 @@ def _conf(v) -> float:
         return 0.0
 
 
+def _affinity(v) -> float:
+    """Map an LLM `sentiment` (human 0-10 scale) to internal [0,1] affinity.
+
+    Missing or out-of-range sentiment is treated as 5 (neutral) → 0.5 affinity;
+    the item is NOT dropped for that alone (a bad sentiment is not a bad topic)."""
+    try:
+        s = float(v)
+    except (TypeError, ValueError):
+        return 0.5
+    if not (0.0 <= s <= 10.0):
+        return 0.5
+    return aff01_from_10(s)
+
+
 def _summary(v) -> Optional[str]:
     if not v:
         return None
@@ -139,9 +162,9 @@ def extract_and_apply_topics(
     added: list = []
     dropped: list = []
 
-    def _reinforce(canon_label, conf, summary):
-        node = reinforce_person_topic(store, person_id, canon_label,
-                                      source=source, confidence=conf, summary=summary)
+    def _reinforce(canon_label, conf, affinity, summary):
+        node = reinforce_person_topic(store, person_id, canon_label, source=source,
+                                      confidence=conf, affinity=affinity, summary=summary)
         if node:
             reinforced.append((canon_label, conf))
         else:
@@ -153,6 +176,7 @@ def extract_and_apply_topics(
             dropped.append(("existing", item, "not_object")); continue
         label = str(item.get("label", "")).strip()
         conf = _conf(item.get("confidence"))
+        affinity = _affinity(item.get("sentiment"))   # missing/oob → 0.5, item kept
         summary = _summary(item.get("summary"))
         norm = normalize_label(label)
         if not norm:
@@ -163,7 +187,7 @@ def extract_and_apply_topics(
             # Hallucinated 'existing' topic (not in the list we provided). It has no
             # category, so it cannot become a valid new topic → drop.
             dropped.append(("existing", label, "not_in_provided_list")); continue
-        _reinforce(existing_norm[norm][0], conf, summary)   # reuse canonical label
+        _reinforce(existing_norm[norm][0], conf, affinity, summary)  # reuse canonical label
 
     # ── new_topics ────────────────────────────────────────────────────────────
     for item in (obj.get("new_topics") or []):
@@ -171,6 +195,7 @@ def extract_and_apply_topics(
             dropped.append(("new", item, "not_object")); continue
         label = str(item.get("label", "")).strip()
         conf = _conf(item.get("confidence"))
+        affinity = _affinity(item.get("sentiment"))   # missing/oob → 0.5, item kept
         summary = _summary(item.get("summary"))
         cat = str(item.get("category", "")).strip().lower()
         norm = normalize_label(label)
@@ -185,9 +210,9 @@ def extract_and_apply_topics(
             dropped.append(("new", label, f"bad_category:{cat}")); continue
         if norm in existing_norm:
             # LLM put a known topic under new_topics → reinforce, do not duplicate.
-            _reinforce(existing_norm[norm][0], conf, summary); continue
-        node = add_person_topic(store, person_id, label, cat,
-                                source=source, confidence=conf, summary=summary)
+            _reinforce(existing_norm[norm][0], conf, affinity, summary); continue
+        node = add_person_topic(store, person_id, label, cat, source=source,
+                                confidence=conf, affinity=affinity, summary=summary)
         if node:
             added.append((label, cat, conf))
 

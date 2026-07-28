@@ -65,7 +65,7 @@ def test_propagation():
     # kpop has a LOW culture prior (0.30) so propagation from kdrama can raise it.
     s = _base_store({"kdrama": 0.65, "kpop": 0.30, "taekwondo": 0.45})
     # person observes kdrama; person-topic nodes for kdrama + kpop; related link.
-    add_person_interest(s, _PERSON, "media", ["kdrama"])
+    add_person_interest(s, _PERSON, "media", ["kdrama"], affinity=0.9)
     resolve_topic(s, "kpop")                       # unobserved person topic node
     link_related_topic(s, topic_id("kdrama"), topic_id("kpop"), 0.65)
 
@@ -84,7 +84,7 @@ def test_propagation():
 
 def test_observed_excluded():
     s = _base_store({"kdrama": 0.65, "kpop": 0.30})
-    add_person_interest(s, _PERSON, "media", ["kdrama"])
+    add_person_interest(s, _PERSON, "media", ["kdrama"], affinity=0.9)
     resolve_topic(s, "kpop")
     link_related_topic(s, topic_id("kdrama"), topic_id("kpop"), 0.65)
     labels = [s.get_node(i).label for i, _ in rank_suggestions(s, _PERSON, k=9, floor=0.0)]
@@ -96,7 +96,7 @@ def test_observed_excluded():
 
 def test_read_only():
     s = _base_store({"kimchi": 0.80, "kpop": 0.30, "kdrama": 0.65})
-    add_person_interest(s, _PERSON, "media", ["kdrama"])
+    add_person_interest(s, _PERSON, "media", ["kdrama"], affinity=0.9)
     resolve_topic(s, "kpop")
     link_related_topic(s, topic_id("kdrama"), topic_id("kpop"), 0.65)
 
@@ -115,7 +115,7 @@ def test_read_only():
 
 def test_determinism():
     s = _base_store({"kimchi": 0.80, "kpop": 0.50, "kdrama": 0.65, "bibimbap": 0.65})
-    add_person_interest(s, _PERSON, "media", ["kdrama"])
+    add_person_interest(s, _PERSON, "media", ["kdrama"], affinity=0.9)
     resolve_topic(s, "kpop")
     link_related_topic(s, topic_id("kdrama"), topic_id("kpop"), 0.60)
     a = rank_suggestions(s, _PERSON, k=4)
@@ -129,7 +129,7 @@ def test_determinism():
 
 def test_graceful_degradation():
     s = _base_store({"kimchi": 0.80, "kpop": 0.30, "kdrama": 0.65})
-    add_person_interest(s, _PERSON, "media", ["kdrama"])
+    add_person_interest(s, _PERSON, "media", ["kdrama"], affinity=0.9)
     resolve_topic(s, "kpop")
     link_related_topic(s, topic_id("kdrama"), topic_id("kpop"), 0.65)
     # delete ALL related_topic edges

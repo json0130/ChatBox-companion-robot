@@ -215,13 +215,18 @@ class LLMClient:
 
     def respond(self, system_prompt: str, user_msg: str,
                 history: list[tuple[str, str]] | None = None,
-                max_tokens: int = 140) -> str:
+                max_tokens: int = 140, json_mode: bool = False) -> str:
         """
         Args:
             history: list of (user_text, assistant_text) pairs from previous turns.
                      Injected as alternating user/assistant messages before user_msg.
             max_tokens: reply budget. 140 suits a short spoken reply; JSON extraction
                      (topics/closeness) needs far more or the JSON truncates mid-object.
+            json_mode: for extraction calls — request a strict JSON object
+                     (response_format), temperature 0, and DROP the spoken-reply stop
+                     strings. This near-eliminates the prose-wrapper / truncation
+                     misfires that otherwise silently drop a whole turn's topics, and
+                     makes extraction deterministic. Not used for spoken replies.
         """
         if not self.available or self._client is None:
             return "[LLM not connected — run with --llm]"
@@ -231,16 +236,27 @@ class LLMClient:
                 messages.append({"role": "user",      "content": u})
                 messages.append({"role": "assistant", "content": b})
             messages.append({"role": "user", "content": user_msg})
-            resp = self._client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=0.7,
+            kwargs: dict = {
+                "model": self.model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+            }
+            if json_mode:
+                kwargs["temperature"] = 0.0
+                kwargs["response_format"] = {"type": "json_object"}
+            else:
+                kwargs["temperature"] = 0.7
                 # Stop if the model tries to continue past its turn / open a new one
-                # (qwen sometimes leaks ChatML tokens or a fake "user:" turn).
-                stop=["<|im_start|>", "<|im_end|>", "\nuser", "\nUser", "\nassistant"],
-            )
-            return _clean_reply(resp.choices[0].message.content)
+                # (qwen sometimes leaks ChatML tokens or a fake "user:" turn). NOT
+                # applied in json_mode — a stray "\nassistant" inside JSON would
+                # truncate a valid object.
+                kwargs["stop"] = ["<|im_start|>", "<|im_end|>",
+                                  "\nuser", "\nUser", "\nassistant"]
+            resp = self._client.chat.completions.create(**kwargs)
+            content = resp.choices[0].message.content
+            # In json_mode the content is a clean JSON object — skip _clean_reply so
+            # it can never trim JSON that happens to contain a leak-marker substring.
+            return (content or "").strip() if json_mode else _clean_reply(content)
         except Exception as exc:
             return f"[LLM error: {exc}]"
 
@@ -961,23 +977,28 @@ class WebcamKGLoop:
         if not pid:
             return ""
         from modules.graph_relationship.topics import (
-            person_interests, related_common_ground, person_related_pairs,
-            topic_related,
+            person_interests, person_topic_affinity, related_common_ground,
+            person_related_pairs, topic_related,
         )
+        from modules.affinity_phrasing import topic_memory_line
         interests = person_interests(self.store, pid)
         lines: list[str] = []
 
         if interests:
-            # Richer interests (more topics) first, then cap.
+            # Render each observed topic as a SIGNED, HEDGED line: affinity picks the
+            # verb (like / dislike / neutral) and confidence the hedge (clearly /
+            # probably / possibly). Dislikes carry an explicit "avoid raising it" so
+            # the robot steers away. Richer interests (more topics) still lead; cap
+            # the number of interests and topics-per-interest as before.
+            aff_by_topic = {t.id: (a, c) for t, a, c in person_topic_affinity(self.store, pid)}
             ranked = sorted(interests, key=lambda it: len(it[1]), reverse=True)
-            parts = []
-            for interest, topics in ranked[:self._MAX_INTERESTS]:
-                if topics:
-                    labels = [t.label for t in topics][:self._MAX_TOPICS_PER_INTEREST]
-                    parts.append(f"{interest.label} ({', '.join(labels)})")
-                else:
-                    parts.append(interest.label)
-            lines.append("Interests: " + " · ".join(parts))
+            feeling_lines: list[str] = []
+            for _interest, topics in ranked[:self._MAX_INTERESTS]:
+                for t in topics[:self._MAX_TOPICS_PER_INTEREST]:
+                    aff, conf = aff_by_topic.get(t.id, (0.5, 1.0))
+                    feeling_lines.append("  – " + topic_memory_line(t.label, aff, conf))
+            if feeling_lines:
+                lines.append("How they feel about topics:\n" + "\n".join(feeling_lines))
 
         # Common ground — direct + RELATED bridges (Feature-2c, point 2): a topic
         # they like that relates to something the robot knows counts as connection.
@@ -1042,12 +1063,19 @@ class WebcamKGLoop:
         return "\n".join(lines)
 
     def _culture_block(self, pid: str) -> str:
-        """A weak 'Cultural background' hint for `pid`, or "" if they have no
+        """A 'Cultural background' block for `pid`, or "" if they have no
         BelongsToCultureEdge. Offers up to 4 highest-prior culture topics that the
         person does NOT already have an interest in (those are in memory already).
-        Applies the mood-weighting lesson: tentative, content-first, never asserts
-        what they like. Culture assignment is manual — never auto-detected."""
-        from modules.graph_relationship.cultures import person_culture
+        Content-first, never asserts what they like.
+
+        Two framings depending on WHERE the tag came from (provenance):
+          * self-declared (the person told us) → a recallable FACT the robot may
+            state back if asked ("you mentioned you're Korean");
+          * manual/seed-assigned → a tentative HINT, never asserted (anti-stereotyping).
+        Either way the robot must not ASSUME preferences from the background — ask."""
+        from modules.graph_relationship.cultures import (
+            person_culture, person_culture_self_declared,
+        )
         from modules.preference_model import rank_suggestions
         cid = person_culture(self.store, pid)
         if not cid:
@@ -1055,6 +1083,7 @@ class WebcamKGLoop:
         cnode = self.store.get_node(cid)
         if cnode is None:
             return ""
+        self_declared = person_culture_self_declared(self.store, pid)
 
         # Bayesian preference overlay (Command B): rank what to bring up by
         # posterior (culture priors + propagation from what they already like over
@@ -1070,11 +1099,17 @@ class WebcamKGLoop:
             fact = (getattr(node, "facts", None) or [""])[0]
             offers.append((node.label, fact))
 
-        lines = [
-            "━━━ CULTURAL BACKGROUND ━━━",
-            f"Cultural background hint: {cnode.label}. This is a starting guess "
-            "about their background, not a fact about them as a person.",
-        ]
+        if self_declared:
+            header = (
+                f"Background (they told you themselves): {cnode.label}. They stated "
+                f"this in an earlier conversation, so you CAN recall it as a fact if "
+                f"they ask — e.g. \"you mentioned you're {cnode.label}\". Don't assume "
+                "what they like from it, though — ask.")
+        else:
+            header = (
+                f"Cultural background hint: {cnode.label}. This is a starting guess "
+                "about their background, not a fact about them as a person.")
+        lines = ["━━━ CULTURAL BACKGROUND ━━━", header]
         if offers:
             offer_lines = "\n".join(
                 (f"  – {label}: {fact}" if fact else f"  – {label}")
@@ -1244,8 +1279,9 @@ class WebcamKGLoop:
 
             # JSON extraction needs a big token budget or the response truncates
             # mid-object and every topic in it is silently lost (chat default is 140).
+            # json_mode → strict JSON object, temp 0, no spoken-reply stop strings.
             def _json_llm(sysp, usr):
-                return self.llm.respond(sysp, usr, max_tokens=900)
+                return self.llm.respond(sysp, usr, max_tokens=900, json_mode=True)
 
             # (a) Graph-aware typed topics (reuse existing / add genuinely new).
             ts = extract_and_apply_topics(

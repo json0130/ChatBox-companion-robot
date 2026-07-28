@@ -400,6 +400,7 @@ function update(graph) {
     .map(e => ({
       source: nodeById.get(e.source), target: nodeById.get(e.target),
       type: e.type, timescale: e.timescale, weight: e.weight, elabel: e.elabel,
+      affinity10: e.affinity10, confidence: e.confidence,
     }));
 
   const maxW = d3.max(links, d => Math.abs(d.weight)) || 1;
@@ -423,7 +424,12 @@ function render(nodes) {
     .attr("stroke", d => edgeColor(d))
     .attr("stroke-width", d => weightScale(Math.abs(d.weight)))
     .transition().duration(400).attr("stroke-opacity", 0.55);
-  gLinks.selectAll("line").select("title").text(d => `${d.type} = ${d.weight}`);
+  gLinks.selectAll("line").select("title").text(d => {
+    // person interest→topic 'about' edges carry an affinity (0–10) + confidence.
+    if (d.type === "about" && d.affinity10 != null)
+      return `about · affinity ${d.affinity10}/10 · confidence ${d.confidence}`;
+    return `${d.type} = ${d.weight}`;
+  });
 
   // edge weight labels
   const wl = gLabels.selectAll("text").data(links, d => d.source.id + "→" + d.target.id + d.type);

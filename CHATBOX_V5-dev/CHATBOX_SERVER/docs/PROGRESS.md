@@ -6,6 +6,95 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## fix: self-declared culture is a recallable fact, not just a tentative hint  *(branch `feature/cultural-awareness`)*
+
+**User point:** jay said *"i am from korea"* in a session, yet next time the robot answered *"I'm not sure if
+I can remember that."* Investigation: the graph DID hold `jay --belongs_to_culture--> Korean` (provenance
+`self-declared:<sid>`, confidence 1.0), and the prompt DID include it — but `_culture_block` worded EVERY
+culture tag as *"a starting guess about their background, not a fact about them as a person"* + *"Never
+assert…"*, so the LLM correctly refused to state it. The anti-stereotyping framing (right for an INFERRED
+culture) was being applied to a background the child had EXPLICITLY stated.
+
+**Fix (Approach A — graph-driven, no new data/mechanism):** branch the framing on the belongs_to_culture
+edge's existing PROVENANCE.
+- New pure reads in `graph_relationship/cultures.py`: `person_culture_source()` (the edge's `source`) and
+  `person_culture_self_declared()` (True iff `source` starts `self-declared`).
+- `_culture_block` now emits: self-declared → *"Background (they told you themselves): Korean… you CAN recall
+  it as a fact if they ask — e.g. 'you mentioned you're Korean'. Don't assume what they like from it — ask."*;
+  manual/seed-assigned → unchanged tentative hint. Either way it still never ASSUMES preferences from the
+  background. Provenance was already stored (self-declaration writes `self-declared:<sid>`, manual writes
+  `culture-seed`) — A just reads it.
+
+**Verified:** `test_culture_seed.py` new case 5b — self-declared person gets recall-as-fact wording (no
+"starting guess"); manually-assigned person keeps the tentative hint (no recall permission); neither assumes
+preferences. Existing cases 1–5 + purity still green (cultures.py still imports only schema/store/topics).
+Live: jay's rebuilt block now reads *"Background (they told you themselves): Korean…"*.
+
+**Deferred (Approach B, later):** a general biographical-facts memory (origin/age/family/pet…) separate from
+topics/culture, so first-person facts beyond culture also persist and are recallable.
+
+---
+
+## feat: continuous affinity (0–10) + confidence hedging — Approach 1, STEP 1  *(branch `feature/cultural-awareness`)*
+
+**Goal:** replace the flat "observed = positive" assumption with a SIGNED, graded signal per topic, feeding
+two consumers side by side: the preference BN (affinity → signed clamp) and the person-memory prompt
+(affinity → like/neutral/dislike word, confidence → "clearly/probably/possibly" hedge). Human-facing scale
+is 0–10; stored internally as `affinity ∈ [0,1]` (0 dislike / 0.5 neutral / 1 like) so it drops into the BN
+clamp with no conversion. Confidence is model-agnostic and (this step) affects prompt wording ONLY — it does
+NOT weight the BN clamp yet (deferred).
+
+**What was built:**
+- **Schema (pure, `graph_relationship/schema.py`):** `AboutEdge` gains `affinity: float = 0.5` and
+  `confidence: float = 1.0` (both `[0,1]`). Backward-compat: old `kg_state.json` about edges load as
+  neutral/fully-trusted. Robot capability→topic about edges just carry the unused defaults.
+- **Boundary helpers (pure, `graph_relationship/scales.py`, new):** exactly `aff01_from_10` / `aff10_from_01`
+  — the ONLY place the 0–10 ↔ [0,1] conversion happens.
+- **topics.py:** `add_person_topic` / `reinforce_person_topic` / `add_person_interest` now accept + write
+  `affinity`/`confidence` on the about edge (re-mention = simple overwrite; EWMA blending noted as future
+  work). New pure read `person_topic_affinity(store, pid) → [(TopicNode, affinity, confidence)]` — the
+  shared "observed evidence" reader for BOTH consumers.
+- **Extraction (`modules/kg_extraction.py`):** prompt asks for a per-topic `sentiment` 0–10 (5 = neutral/
+  unstated) alongside the existing `confidence`; mapped via `aff01_from_10`. NEW guard: missing/out-of-range
+  sentiment → 0.5 (item KEPT, not dropped); all existing drops (bad JSON/category/hallucination/conf<0.6)
+  unchanged.
+- **BN clamp (`modules/preference_model.py`):** the flat `_OBSERVED_P = 0.90` clamp is gone — an observed
+  topic now clamps at its stored affinity. Propagation is signed: a LIKED neighbour raises others (noisy-OR,
+  as before); a DISLIKED one (below neutral) pulls related neighbours DOWN toward its low clamp, scaled by
+  `0.8·weight`. Observed nodes stay fixed and remain excluded from suggestions. Still read-only, 2-round, no
+  BN library, no confidence-weighting.
+- **Prompt (`modules/affinity_phrasing.py`, new + `_person_memory`):** learned topics render as signed,
+  hedged lines — "They clearly like jazz." / "They probably dislike baseball — avoid raising it." / "They may
+  be neutral on pasta." The old flat `Interests:` summary is replaced by a `How they feel about topics:`
+  block; specific notes still lead.
+- **Viz (minimal):** person interest→topic about edges expose `affinity` (shown 0–10) + `confidence` in the
+  edge tooltip.
+
+**Verified — `test_affinity.py` (headless, fake LLM), 6/6:** (1) real `kg_state.json` copy loads with every
+about edge neutral/fully-trusted, save→load→save byte-identical; (2) sentiment mapping love-jazz→1.0,
+can't-stand-baseball→0.1, unstated-pasta & oob→0.5 kept, idempotent; (3) helpers round-trip exact at
+0/5/10; (4) disliked topic drags a `related_topic` neighbour BELOW prior, liked one lifts ABOVE, both
+observed excluded, read-only + deterministic; (5) verb×hedge wording correct; (6) `graph_relationship/`
+purity (no LLM/PAD/app/embedding imports). Existing `test_preference_model.py` updated to pass `affinity=0.9`
+for its observed-positive topic (preserves the 0.468 propagation number) — still green; culture-seed/
+culture-extraction and the `graph_relationship` pytest suite still green.
+
+**Didn't do (out of scope for STEP 1, per plan):** cross-namespace bridges, confidence-weighting of the BN
+clamp, style hint / communication-policy vector, EWMA blending of re-mentions, any PAD change.
+
+**Live-smoke follow-up (extraction robustness):** first real run surfaced two issues, both fixed:
+1. *Intermittent "LLM JSON parse failed"* — the extraction call reused the spoken-reply settings (temp 0.7 +
+   ChatML `stop` strings + greedy first-`{`/last-`}` slicing), so qwen2.5:7b occasionally wrapped the JSON in
+   prose or truncated it, silently dropping the whole turn's topics (and thus all affinity). Added a
+   `json_mode` path to `LLMClient.respond`: `response_format={"type":"json_object"}`, temperature 0, no stop
+   strings, and skips `_clean_reply`; the extraction wrapper (`_json_llm`) now uses it. Live: 10/10 parses OK
+   (was intermittent).
+2. *Timid sentiment* — qwen rated "used to like the spicy beef soup" as 5 (neutral). Added full-range anchors
+   to the sentiment rule in `build_system_prompt` ("hate it"→0-1 … "love it"→9-10). Live: the same utterance
+   now scores 7 → affinity 0.70 → "like"; "don't really like sushi" → 3 → 0.30 → "dislike".
+
+---
+
 ## fix: tag a person's culture ONLY on explicit self-declaration  *(branch `feature/cultural-awareness`)*
 
 **User point:** jay shouldn't be connected to Korean "at first place unless jay said he is korean" — the demo

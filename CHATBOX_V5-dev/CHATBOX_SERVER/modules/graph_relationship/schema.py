@@ -394,9 +394,23 @@ class AboutEdge(EdgeBase):
 
     `label` records which capability produced a robot→topic link, e.g.
     'knows jazz'. Left None for a person Interest → Topic edge.
+
+    On a person's Interest → Topic edge this is the "observed" evidence the
+    preference BN and the person-memory prompt both read:
+      * `affinity`   — how positively the person feels about the topic, stored
+        internally in [0,1] (0.0 dislike / 0.5 neutral / 1.0 like) so it drops
+        straight into the BN clamp. The human-facing scale is 0–10; convert ONLY
+        at the boundary via scales.aff01_from_10 / aff10_from_01. Default 0.5
+        (neutral) so pre-existing edges load as neutral.
+      * `confidence` — how sure the reading is, in [0,1]. Feeds prompt hedging
+        ("clearly" vs "possibly"); does NOT weight the BN clamp in this step.
+        Default 1.0 (fully trusted) so pre-existing edges load unchanged.
+    Robot Capability → Topic edges simply carry the neutral defaults (unused).
     """
     edge_type: Literal["about"] = "about"
     label: Optional[str] = None
+    affinity: float = Field(default=0.5, ge=0.0, le=1.0)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     timescale: Timescale = Timescale.SLOW
 
 

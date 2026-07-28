@@ -146,7 +146,9 @@ def test_prompt_block_and_ownership():
     assert offers[0] == "kimchi", offers
     # each offered culture topic carries a fact
     assert "fermented" in block, "kimchi fact missing from prompt"
-    assert prompt.index("Interests:") < prompt.index("CULTURAL BACKGROUND")
+    # The learned-memory block (now rendered as signed, hedged topic lines) still
+    # leads before the weak cultural-background hint.
+    assert prompt.index("How they feel about topics:") < prompt.index("CULTURAL BACKGROUND")
     os.remove(tmp)
     print(f"4. prompt+ownership: ChatBox owns Korean; block present, offers={offers} "
           "(≤4, kpop excluded, memory leads) ✓")
@@ -178,6 +180,40 @@ def test_hj_decoupled():
     assert person_culture(s, "HJ") is None
     print("5. HJ decoupled: shares 'hiking' label but has zero culture edges; "
           "ck:korean:hiking ≠ topic:hiking ✓")
+
+
+# ── 5b. Self-declared culture is recallable; manual stays a tentative hint ────
+
+def test_self_declared_vs_manual_framing():
+    from modules.face_webcam.webcam_loop import WebcamKGLoop
+    from modules.graph_relationship.cultures import person_culture_self_declared
+
+    s = _robot_store()
+    seed_korean_demo(s, robot_id=_ROBOT)
+    s.upsert_node(PersonNode(id="dec", display_name="dec"))
+    s.upsert_node(PersonNode(id="man", display_name="man"))
+    # dec said it themselves; man was seed/manually assigned.
+    assign_person_culture(s, "dec", "Korean", source="self-declared:sess-1")
+    assign_person_culture(s, "man", "Korean")               # default 'culture-seed'
+    assert person_culture_self_declared(s, "dec") is True
+    assert person_culture_self_declared(s, "man") is False
+
+    loop = WebcamKGLoop.__new__(WebcamKGLoop)
+    loop.store = s; loop.robot_id = _ROBOT; loop._robot_display = "ChatBox"
+
+    dec_block = loop._culture_block("dec")
+    man_block = loop._culture_block("man")
+    # self-declared → recallable fact wording, NOT the tentative hedge.
+    assert "they told you themselves" in dec_block.lower(), dec_block
+    assert "recall it as a fact" in dec_block.lower(), dec_block
+    assert "starting guess" not in dec_block, dec_block
+    # manual → tentative hint wording, NOT the recall permission.
+    assert "starting guess" in man_block and "not a fact about them" in man_block, man_block
+    assert "recall it as a fact" not in man_block.lower(), man_block
+    # both still refuse to ASSUME preferences from the background.
+    assert "ask" in dec_block.lower() and "ask" in man_block.lower()
+    print("5b. framing: self-declared culture recallable as fact; manual stays a "
+          "tentative hint; neither assumes preferences ✓")
 
 
 # ── 6. Purity — graph_relationship pure modules stay clean ────────────────────
@@ -214,5 +250,6 @@ if __name__ == "__main__":
     test_no_person_topic_coupling_on_real_kg()
     test_prompt_block_and_ownership()
     test_hj_decoupled()
+    test_self_declared_vs_manual_framing()
     test_purity()
     print("\nALL CULTURE-SEED TESTS PASSED")

@@ -215,6 +215,16 @@ def transform(raw: dict) -> dict:
         }
         if e.get("label"):          # capability→topic 'knows jazz' etc.
             obj["elabel"] = str(e["label"])
+        if et == "about":           # person interest→topic affinity/confidence
+            # affinity is stored internally in [0,1]; show it on the human 0–10 scale
+            # (display-only mirror of scales.aff10_from_01, kept inline so this
+            # self-contained viz server needs no package import).
+            aff = e.get("affinity")
+            if aff is not None:
+                obj["affinity10"] = round(max(0.0, min(1.0, float(aff))) * 10)
+            conf = e.get("confidence")
+            if conf is not None:
+                obj["confidence"] = round(float(conf), 2)
         edges.append(obj)
 
     return {"nodes": nodes, "edges": edges}

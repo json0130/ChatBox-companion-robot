@@ -1,7 +1,9 @@
 # robot.py — Robot client (v6)
+import argparse
 import sys
 import re
 import logging
+from enum import Enum
 from typing import Optional
 
 from client import BasicClient
@@ -23,7 +25,47 @@ EMOTION_MAP = {
     "SAD":      "sad",      "SLEEP":  "sleep",     "DEFAULT":  "default",
     "POSE":     "pose",     "HAPPY":  "greeting",  "FEAR":     "sad",
     "SURPRISE": "confused", "NEUTRAL": "default",
+    "HANDS_CLAP": "hands_clap",
+    "EARS_WIGGLE": "ears_wiggle",
 }
+
+
+# ── Pepeha (te reo Māori introduction) ────────────────────────────────────────
+# Asking for an intro puts the robot in AWAITING_CONSENT: it offers to introduce
+# itself in te reo Māori and waits for the next utterance to be yes/no.
+
+class PepehaState(Enum):
+    IDLE             = "idle"
+    AWAITING_CONSENT = "awaiting_consent"
+
+
+INTRO_PATTERN = re.compile(
+    r'\b(introduce\s+(yourself|you)|introduction|intro\b|who\s+are\s+you|'
+    r'tell\s+me\s+about\s+yourself|what(?:\'s| is)\s+your\s+name|'
+    r'pepeha|mihi\b|k[oō]rero)',
+    re.IGNORECASE
+)
+YES_PATTERN = re.compile(
+    r'\b(yes|yeah|yep|sure|[aā]e|okay|ok|please|go ahead|absolutely|of course)\b',
+    re.IGNORECASE
+)
+NO_PATTERN = re.compile(
+    r'\b(no|nah|nope|don\'?t|k[aā]o|english|skip|maybe later)\b',
+    re.IGNORECASE
+)
+
+CONSENT_QUESTION = "Would it be okay if I introduced myself in te reo Māori?"
+
+# Spelled phonetically — the English TTS voice mispronounces the macronised
+# spelling, and "Chat Box" as two words stops it reading the name as letters.
+PEPEHA_LINES = [
+    "Tena kotoh, kahtoa.",
+    "Ko Rangitoto te maunga.",
+    "Ko Waitemata te moana.",
+    "Ko Tamaki Makoh-ro, toku ka-inga.",
+    "Ko Chat Box, toku ingoah.",
+    "Tena kotoh, tena kotoh, tena kotoh kahtoa.",
+]
 
 
 class SimpleConcurrentClient(BasicClient):
@@ -32,11 +74,19 @@ class SimpleConcurrentClient(BasicClient):
 
     • Parses [EMOTION] tags from chat_response and forwards to Arduino.
     • Handles persona_update event from server → updates TTS voice config live.
+    • With --pepeha, intercepts intro requests and offers the Māori pepeha.
     """
 
-    def __init__(self, config_file: str = "client_config.json"):
+    def __init__(self, config_file: str = "client_config.json",
+                 pepeha: bool = False):
         super().__init__(config_file)
         self.arduino_module: Optional[ArduinoOutputModule] = None
+
+        # Off unless --pepeha was passed. Nothing else can turn it on.
+        self.pepeha_enabled = bool(pepeha)
+        self._pepeha_state = PepehaState.IDLE
+        logger.info(f"[Pepeha] Māori intro {'enabled' if self.pepeha_enabled else 'disabled'}")
+
         self.setup_all_modules()
         self._register_custom_event_handlers()
 
@@ -80,7 +130,59 @@ class SimpleConcurrentClient(BasicClient):
         parts = re.split(r'(?<=[.!?])\s+', text.strip())
         return [s.strip() for s in parts if len(s.strip()) > 2]
 
+    # ── Pepeha pipeline ───────────────────────────────────────────────────────
+
+    def _build_english_intro_context(self) -> str:
+        name = self.config.get("robot_name", "ChatBox")
+        role = self.config.get("robot_role", "a friendly companion robot")
+        return (
+            f"Introduce yourself. Your name is {name}. {role} "
+            f"Give a warm, natural self-introduction in 1-2 sentences."
+        )
+
+    def _trigger_pepeha_pipeline(self):
+        """Ask for consent before switching into te reo Māori."""
+        self._pepeha_state = PepehaState.AWAITING_CONSENT
+        logger.info("[Pepeha] Awaiting consent")
+        tts = self.output_modules.get("edge_tts_output")
+        if tts:
+            tts.process_output(CONSENT_QUESTION)
+        self.on_emotion_detected("GREETING")
+
+    def _handle_pepeha_consent(self, transcription: str):
+        tts = self.output_modules.get("edge_tts_output")
+
+        # "no" is checked first — a decline often carries a polite "please"/"ok"
+        # that would otherwise match YES_PATTERN ("no thanks, English please").
+        if NO_PATTERN.search(transcription):
+            self._pepeha_state = PepehaState.IDLE
+            logger.info("[Pepeha] Declined — English intro via LLM")
+            self.on_emotion_detected("GREETING")
+            self.send_to_server("chat", self._build_english_intro_context())
+        elif YES_PATTERN.search(transcription):
+            self._pepeha_state = PepehaState.IDLE
+            logger.info("[Pepeha] Delivering pepeha")
+            self.on_emotion_detected("GREETING")
+            if tts:
+                for line in PEPEHA_LINES:
+                    tts.process_output(line)
+        else:
+            logger.info(f"[Pepeha] Unclear consent ('{transcription}') — re-asking")
+            if tts:
+                tts.process_output(
+                    "Sorry, I didn't catch that. "
+                    "Would you like me to introduce myself in Māori?"
+                )
+
+    # ── Chat / speech handlers ────────────────────────────────────────────────
+
     def on_chat_response(self, data: dict):
+        # While waiting on consent, drop server chatter so it can't talk over
+        # the consent question or the pepeha.
+        if self._pepeha_state != PepehaState.IDLE:
+            logger.debug("[Pepeha] Suppressed chat_response while awaiting consent")
+            return
+
         response_text = data.get("response", "")
         if not response_text:
             return
@@ -114,6 +216,15 @@ class SimpleConcurrentClient(BasicClient):
         transcription = data.get("transcription", "")
         if transcription:
             logger.info(f"[STT] '{transcription}'")
+
+        if self._pepeha_state == PepehaState.AWAITING_CONSENT:
+            self._handle_pepeha_consent(transcription)
+            return
+
+        if self.pepeha_enabled and transcription and INTRO_PATTERN.search(transcription):
+            self._trigger_pepeha_pipeline()
+            return
+
         if data.get("response"):
             self.on_chat_response(data)
 
@@ -219,6 +330,7 @@ class SimpleConcurrentClient(BasicClient):
         print(f"  ID       : {self.config.get('client_id', 'Unknown')}")
         print(f"  Server   : {self.config.get('server_url', 'Unknown')}")
         print(f"  Modules  : {', '.join(self.config.get('modules', []))}")
+        print(f"  Pepeha   : {'on' if self.pepeha_enabled else 'off (use --pepeha)'}")
         print()
         print("  Input modules :")
         for n in self.input_modules:   print(f"    {n}")
@@ -231,9 +343,23 @@ class SimpleConcurrentClient(BasicClient):
         print("=" * 60 + "\n")
 
 
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="ChatBox robot client")
+    parser.add_argument(
+        "--pepeha", action="store_true",
+        help="offer the te reo Māori pepeha when asked for an introduction",
+    )
+    parser.add_argument(
+        "--config", default="client_config.json",
+        help="path to the client config (default: client_config.json)",
+    )
+    return parser.parse_args(argv)
+
+
 def main():
+    args = parse_args()
     try:
-        client = SimpleConcurrentClient("client_config.json")
+        client = SimpleConcurrentClient(args.config, pepeha=args.pepeha)
         client.print_startup_info()
         client.run()
         return 0

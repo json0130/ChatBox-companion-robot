@@ -158,6 +158,17 @@ def person_culture_self_declared(store: GraphStore, person_id: str) -> bool:
     return bool(src) and src.startswith("self-declared")
 
 
+def person_culture_style_hint(store: GraphStore, person_id: str) -> str:
+    """The STATIC manner/'how to talk' hint of the culture this person is tagged with,
+    or "" if untagged / the culture has no hint. Same string for every interaction —
+    no tier/affect/situation variation (that is Approach 2)."""
+    cid = person_culture(store, person_id)
+    if cid is None:
+        return ""
+    node = store.get_node(cid)
+    return getattr(node, "style_hint", "") or "" if node is not None else ""
+
+
 def culture_knowers(store: GraphStore, culture_id: str) -> List[str]:
     """Robot ids that hold this culture as prior knowledge (knows_culture)."""
     return sorted(n.id for _e, n in store.query_neighbors(culture_id, "knows_culture")

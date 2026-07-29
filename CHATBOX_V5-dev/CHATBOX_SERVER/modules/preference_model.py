@@ -30,8 +30,14 @@ Signed evidence (Approach-1 Step 1): an observed topic is clamped at its stored
 `affinity` (internal [0,1]: 0 dislike / 0.5 neutral / 1 like) rather than a flat
 positive constant. A LIKED topic clamps HIGH and pushes neighbours up (noisy-OR, as
 before); a DISLIKED topic clamps LOW and pulls related neighbours DOWN (symmetric).
-Confidence is deliberately NOT used to weight the clamp in this step (deferred).
 Observed topics — liked OR disliked — are still excluded from returned suggestions.
+
+Confidence-weighted clamp (Approach-1 Step 3): the clamp is now
+`0.5 + (affinity - 0.5) * confidence`, so an UNCERTAIN observation is pulled toward
+neutral and moves the posterior less — a shaky signal can't stomp a strong culture
+prior, and the BN agrees with the prompt's Step-1 hedge word. confidence 1.0 →
+clamp == affinity (identical to Step 2). This only changes the clamp VALUE; rounds
+(2), damping (0.8), floor, bridge traversal, and the candidate set are untouched.
 """
 
 from __future__ import annotations
@@ -48,6 +54,19 @@ _DEFAULT_PRIOR = 0.30   # unobserved concept with no culture prior
 _NEUTRAL       = 0.50   # affinity midpoint — below this an observation pulls DOWN
 _DAMPING       = 0.80   # noisy-OR edge damping w
 _ROUNDS        = 2      # propagation rounds over related_topic edges
+
+
+def clamp_from(affinity: float, confidence: float) -> float:
+    """Confidence-weighted observed-topic clamp (Approach-1 Step 3):
+
+        clamp = 0.5 + (affinity - 0.5) * confidence
+
+    Pull the affinity toward neutral (0.5) by how UNSURE the reading is:
+      * confidence 1.0 → clamp == affinity (identical to Step 2);
+      * confidence 0   → clamp == 0.5 (the observation barely moves the posterior);
+      * neutral (0.5) is a fixed point at any confidence.
+    Symmetric — a confident dislike still pins low; an unsure one sits nearer 0.5."""
+    return _NEUTRAL + (affinity - _NEUTRAL) * confidence
 
 
 def rank_suggestions(
@@ -69,14 +88,20 @@ def rank_suggestions(
             ck_id_by_slug.setdefault(s, ck_id)
 
     # ── observed evidence: the person's own interest topics (clamped) ─────────
-    # Each observed topic clamps at its stored affinity (signed): liked → high,
-    # disliked → low, neutral → 0.5. Confidence is NOT used to weight this clamp
-    # in this step (deferred).
-    observed_aff: dict = {}          # slug -> affinity clamp
+    # Step 3 — CONFIDENCE-WEIGHTED clamp:  clamp = 0.5 + (affinity - 0.5) * confidence
+    # The 0.6 extraction gate is binary (once past it, 0.61 and 0.99 look alike), so
+    # a shaky "jazz is okay I guess" (affinity 1.0, conf 0.62) used to clamp exactly
+    # like a rock-solid "I love jazz" (conf 0.95). Folding confidence in pulls an
+    # uncertain observation toward neutral (0.5), shrinking how far it moves the
+    # posterior — so a weak signal can't stomp a strong culture prior, and the BN's
+    # number now agrees with the prompt's Step-1 hedge word. Calibration, not a new
+    # model: confidence 1.0 → clamp == affinity (identical to Step 2). Signed &
+    # symmetric: a confident dislike still pins low; an unsure one sits nearer 0.5.
+    observed_aff: dict = {}          # slug -> confidence-weighted affinity clamp
     topic_id_by_slug: dict = {}
-    for topic, aff, _conf in person_topic_affinity(store, person_id):
+    for topic, aff, conf in person_topic_affinity(store, person_id):
         s = normalize_label(topic.label)
-        observed_aff[s] = aff        # simple last-wins on duplicate slugs
+        observed_aff[s] = clamp_from(aff, conf)   # last-wins on duplicate slugs
         topic_id_by_slug.setdefault(s, topic.id)
     observed: set = set(observed_aff)
 

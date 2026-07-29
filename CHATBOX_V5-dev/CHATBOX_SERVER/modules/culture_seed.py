@@ -28,6 +28,17 @@ from modules.graph_relationship.store import GraphStore
 _CULTURE_LABEL = "Korean"
 _DEFAULT_ROBOT = "chatbox"
 
+# HAND-WRITTEN DEMO SEED — the static "how to talk" manner hint for this culture, NOT
+# a research claim. Same text for every interaction (no tier/affect/situation
+# variation — that is Approach 2). Injected into HOW-TO-REPLY as soft, secondary
+# guidance when a person is tagged to this culture.
+_KOREAN_STYLE_HINT = (
+    "Be polite, warm, and a little formal, especially early on. Addressing elders or "
+    "new acquaintances respectfully is valued. Compliments are sometimes deflected out "
+    "of modesty — offer them once and don't insist. Sharing food and small gestures of "
+    "care read as friendly."
+)
+
 # (label, category, DUMMY prior in [0,1], [facts...]) — demo placeholders, not
 # research claims. `facts` are short, shareable bits the robot can mention when it
 # brings the topic up (kept general and light, never asserted about the person).
@@ -80,6 +91,10 @@ def seed_korean_demo(store: GraphStore, *, robot_id: str = _DEFAULT_ROBOT,
     Returns {'culture', 'robot', 'topics': N, 'priors': N}.
     """
     cnode = ensure_culture(store, _CULTURE_LABEL)
+    # Set/overwrite the static manner hint idempotently (same text every seed).
+    if cnode.style_hint != _KOREAN_STYLE_HINT:
+        cnode = cnode.model_copy(update={"style_hint": _KOREAN_STYLE_HINT})
+        store.upsert_node(cnode)
     if store.get_node(robot_id) is not None:
         knows_culture(store, robot_id, cnode.id, source=source)
     for label, category, prior, facts in _KOREAN_DEMO:

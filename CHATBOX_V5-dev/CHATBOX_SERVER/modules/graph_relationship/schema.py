@@ -230,9 +230,16 @@ class CultureNode(BaseModel):
 
     Deterministic id `culture:<normalized-label>` (same slug as TopicNode) so
     re-seeding the same culture resolves to the SAME node.
+
+    `style_hint` is a single short, STATIC "how to talk" paragraph (manner/politeness)
+    for this culture — hand-written seed data, the same for every interaction. It is
+    the manner half of cultural adaptation (the topic priors are the content half).
+    Default "" → old graphs load unchanged and inject nothing. Deliberately dumb: no
+    tier/affect/situation variation (that is Approach 2's policy vector).
     """
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     label: str
+    style_hint: str = ""
     node_type: Literal["culture"] = "culture"
 
 

@@ -193,6 +193,8 @@ def transform(raw: dict) -> dict:
         elif node_type == "culture_topic":
             obj["category"] = n.get("category", "other")   # robot-owned culture topic
             obj["facts"] = n.get("facts", []) or []         # shareable cultural facts
+        elif node_type == "culture":
+            obj["styleHint"] = n.get("style_hint", "") or ""  # static manner hint
         nodes.append(obj)
 
     edges = []

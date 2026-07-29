@@ -1149,6 +1149,21 @@ class WebcamKGLoop:
         interests = person_interests(self.store, pid)
         lines: list[str] = []
 
+        # Self-declared facts FIRST, as plain recallable facts (not a tentative
+        # culture hint). The origin/background is the one people ask "do you
+        # remember where I'm from?" about — keep it at the top so the model treats
+        # it as known memory, not something to hedge on. Only when self-declared.
+        from modules.graph_relationship.cultures import (
+            person_culture, person_culture_self_declared,
+        )
+        if person_culture_self_declared(self.store, pid):
+            cnode = self.store.get_node(person_culture(self.store, pid))
+            if cnode is not None:
+                lines.append(
+                    "Facts they told you about themselves (you KNOW these — state "
+                    f"them plainly if asked): they're {cnode.label} / that's where "
+                    "they're from.")
+
         if interests:
             # Render each observed topic as a SIGNED, HEDGED line: affinity picks the
             # verb (like / dislike / neutral) and confidence the hedge (clearly /
@@ -1360,21 +1375,43 @@ class WebcamKGLoop:
         blocks.append("\n".join(ident))
 
         # ── HOW TO REPLY ──
-        blocks.append(
+        how_to_reply = (
             "━━━ HOW TO REPLY ━━━\n"
             "• Reply in ENGLISH, in one or two short, warm, spoken sentences. Output "
             "ONLY your single reply — never write the user's next turn.\n"
             "• Begin every reply with an emotion tag in square brackets, e.g. "
             "[HAPPY], [CURIOUS].\n"
-            "• ANSWER what they actually ask. If they ask about something they told "
-            "you before (a favourite player, song, etc.) and it IS in the memory "
-            "below, answer DIRECTLY and state the name — don't say you forgot. If it "
-            "is NOT in the memory below, say you don't remember it — NEVER invent or "
-            "guess a name.\n"
+            "• ANSWER what they actually ask. Anything in the memory below — a "
+            "favourite player/song, or a fact they told you about themselves (where "
+            "they're from / their background) — is something you KNOW: answer "
+            "DIRECTLY and state it, never say you forgot. Only say you don't remember "
+            "when it is genuinely NOT in the memory below — and even then, NEVER "
+            "invent or guess a name.\n"
+            "• Do NOT state a specific fact — a name, number, title, place, or a 'did "
+            "you know…' claim — unless it appears in the memory below (including the "
+            "cultural facts). You may chat about a topic in general terms, but never "
+            "make up specifics to sound knowledgeable; if you don't have a concrete "
+            "fact, say so plainly or ask.\n"
+            "• Stay on the topic they actually referenced. If they say 'tell me more "
+            "about it', continue the SAME thing from the previous turn — do not switch "
+            "to an unrelated topic, and do not force a connection between unrelated "
+            "topics.\n"
             "• Weave memories in naturally — don't list them back.\n"
             "• Reply to what they actually said or asked. Do not comment on how they "
             "seem to feel or offer emotional support unless they bring up their "
             "feelings themselves.")
+        # Step 4: static per-culture MANNER hint (how to talk), appended to HOW TO
+        # REPLY as soft, secondary guidance — separate from the content topic-offer
+        # block. Only when the person is tagged to a culture with a non-empty hint;
+        # identical text regardless of tier/affect/situation (no dynamics — Approach 2).
+        if pid:
+            from modules.graph_relationship.cultures import person_culture_style_hint
+            _hint = person_culture_style_hint(self.store, pid)
+            if _hint:
+                how_to_reply += (
+                    "\n• Cultural manner (soft guidance, secondary to answering their "
+                    f"actual question): {_hint}")
+        blocks.append(how_to_reply)
 
         # ── WHO YOU'RE TALKING TO ──
         if pid:

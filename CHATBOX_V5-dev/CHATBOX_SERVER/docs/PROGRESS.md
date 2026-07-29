@@ -6,6 +6,72 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## feat: thin per-culture static style hint — Approach 1, STEP 4 (final)  *(branch `feature/cultural-awareness`)*
+
+**What:** the "how to talk" half of cultural adaptation — a single short, STATIC manner paragraph per culture,
+injected into HOW-TO-REPLY when a person is tagged to that culture. Deliberately dumb: hand-written seed
+data, identical for every interaction; NO tier/affect/situation/dynamics (that is Approach 2's policy vector,
+kept a clean separable step-up).
+
+**Change:**
+- **schema** (`CultureNode`): one optional field `style_hint: str = ""` — default "" so old graphs load
+  unchanged and inject nothing.
+- **seed** (`culture_seed`): Korean CultureNode gets a hand-written `_KOREAN_STYLE_HINT` (polite/warm/slightly
+  formal; deflected compliments; food as friendliness). Set/overwritten idempotently on seed; counts & hint
+  unchanged on re-seed.
+- **prompt** (`_build_system_prompt`): if the person is tagged to a culture with a non-empty hint, append
+  `"• Cultural manner (soft guidance, secondary to answering their actual question): <hint>"` to HOW-TO-REPLY
+  — SEPARATE from the content topic-offer block (which stays in the WHO/CULTURAL BACKGROUND section). Pure read
+  `cultures.person_culture_style_hint`. Untagged / empty hint → injects nothing (no leakage, no empty header).
+- **viz**: CultureNode carries `styleHint` for its tooltip (optional).
+
+**Static by construction:** the injected text depends ONLY on which culture the person is tagged with — same
+string for a "visitor" vs a "close" person (verified).
+
+**Verified — `test_style_hint.py` 6/6:** backward-compat (pre-feature culture → `style_hint=""`, round-trip
+byte-identical); seed sets it, re-seed idempotent (counts + hint unchanged); injected when tagged &
+manner/offer blocks stay separate; not injected when untagged; empty hint injects nothing; static across
+tiers. Existing suites green: test_soft_evidence, test_cross_namespace, test_affinity, test_preference_model,
+test_culture_seed, test_culture_extraction, + graph_relationship pytest (47). `graph_relationship/` purity
+unchanged.
+
+**This completes the four Approach-1 upgrades** (continuous affinity + hedging · cross-namespace bridges ·
+confidence-weighted clamp · static style hint). Approach 2 (communication-policy vector / tier-driven,
+dynamic manner) is the separable next milestone.
+
+---
+
+## feat: confidence-weighted BN clamp — Approach 1, STEP 3  *(branch `feature/cultural-awareness`)*
+
+**Problem:** an observed topic clamped to its `affinity` alone, so a rock-solid "I love jazz" (aff 1.0,
+conf 0.95) and a hedged "jazz is okay I guess" (aff 1.0, conf 0.62) clamped to the SAME value and
+propagated equally hard across the bridges — the BN conflated *how much they like it* with *how sure we
+are they said it*. The 0.6 extraction gate is binary (0.61 and 0.99 look alike once past it).
+
+**Change (calibration, not a new model — `modules/preference_model.py` only):** the observed-topic clamp is
+now `clamp_from(affinity, confidence) = 0.5 + (affinity - 0.5) * confidence`. An uncertain observation is
+pulled toward neutral (0.5) so it moves the posterior less; confidence 1.0 → clamp == affinity (identical to
+Step 2). Signed & symmetric (a confident dislike still pins low; an unsure one sits nearer 0.5). This is the
+ONLY change — rounds (2), damping (0.8), floor, bridge traversal, and the candidate set are untouched, and
+observed topics stay excluded from suggestions. Now the BN's number agrees with the prompt's Step-1 hedge
+word (both treat a shaky observation as shaky).
+
+**Verified — `test_soft_evidence.py` 6/6:** (1) full trust reproduces the EXACT Step-2 lift (clamp 1.0 →
+kpop 0.4960); (2) uncertainty shrinks the lift (conf 0.6 → 0.3968 < 0.4960); (3) confident dislike still
+drags a neighbour down; (4) a weak low-confidence dislike (clamp 0.47) leaves a strong culture prior (0.60)
+above the 0.35 floor while a confident one (clamp 0.40) moves it more; (5) neutral (0.5) is a fixed point at
+any confidence; (6) read-only/deterministic/graceful. Existing suites green: test_cross_namespace,
+test_affinity, test_preference_model (confidence=1.0 → unchanged), test_culture_seed, test_culture_extraction,
++ graph_relationship pytest (47). `graph_relationship/` purity unchanged.
+
+**Live-KG copy demo:** same 0.9 "like" on `football_player` bridged to `ck:korean:baseball` (prior 0.30) →
+posterior 0.459 (conf 1.00), 0.448 (0.95), 0.357 (0.50), 0.300 (0.20) — lower confidence lifts it less; a
+very-unsure signal barely moves it off the prior.
+
+**Deferred (Step 4, untouched):** style hint.
+
+---
+
 ## perf: thread the chat pipeline + async topic label + debounced saves  *(branch `feature/cultural-awareness`)*
 
 **Problem:** the webcam loop felt unresponsive — the OpenCV window froze during every reply. Investigation:

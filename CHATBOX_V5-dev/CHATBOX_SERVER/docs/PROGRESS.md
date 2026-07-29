@@ -6,6 +6,80 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## perf: thread the chat pipeline + async topic label + debounced saves  *(branch `feature/cultural-awareness`)*
+
+**Problem:** the webcam loop felt unresponsive — the OpenCV window froze during every reply. Investigation:
+vision (face/emotion/demographics) already runs in a daemon thread on CPU (forced off the RTX-5060/sm_120
+GPU), but the **whole chat turn ran synchronously on the display thread** — 3 serialized Ollama round-trips
+(RAG embed + qwen reply + a 2nd qwen call for the live-topic label) plus a full-graph `store.save()` — so the
+display couldn't read frames until the LLM finished. Disabling emotion didn't help (it's off the chat path).
+
+**Fixes (one at a time, agreed order):**
+- **Option B — async live-topic label.** The 2nd LLM call (`_detect_topic`, a metadata label, NOT the reply)
+  moved to a background thread. The turn is recorded immediately; the label is backfilled to the session DB
+  (`SessionStore.set_turn_topics`, thread-safe) and handed to the main thread via a queue to update the
+  conversation node. Zero reply-quality loss (still LLM-generated), just off the critical path.
+- **#2 — threaded chat pipeline.** RAG + prompt build + reply now run on a dedicated `chat-worker` daemon
+  thread; the display shows `…` and keeps rendering. The `InMemoryGraphStore` isn't thread-safe, so a single
+  `RLock` serialises the worker's *fast* prompt-build read against every main-thread store mutation/save
+  (per-tick, chat-apply, topic-drain, hotkeys, shutdown). **All store writes stay on the main thread**; the
+  lock is never held across the slow LLM/RAG calls. Verified: 40 concurrent chats + a thread hammering
+  store writes/saves → 0 errors, no corruption.
+- **#3 — debounced persistence.** The frequent per-tick/chat mutations now just mark the graph dirty; the
+  loop flushes `kg_state.json` at most once/second (or forced on shutdown), instead of rewriting the whole
+  file every tick (which produced the "8 saves per turn" churn).
+
+**Also (data tuning):** lowered the Korean demo culture priors ~0.20 (`culture_seed._KOREAN_DEMO`) into a
+0.25–0.60 band, so a person's liked interest bridging to a culture topic (Step 2) can actually lift it above
+the 0.35 suggestion floor instead of being capped by an already-high prior.
+
+**Still TODO:** #4 — GPU for vision (needs a torch build with sm_120/Blackwell support; deferred because
+vision is already threaded and would contend with Ollama on the GPU). Thread model now: main/display +
+detection-worker + chat-worker + short-lived topic-detect threads.
+
+---
+
+## feat: cross-namespace culture↔person bridges — Approach 1, STEP 2  *(branch `feature/cultural-awareness`)*
+
+**Problem:** culture priors live on `ck:<culture>:<slug>` CultureTopic nodes; person interests live on
+`topic:<slug>` nodes. These were disconnected islands — only a label-join, no edge — so a person's OBSERVED
+interest could never propagate to a culturally-adjacent culture topic and the BN degraded to a base-rate
+lookup. Step 2 adds `related_topic` BRIDGE edges across the namespaces so the existing 2-round noisy-OR
+carries person evidence into culture topics (observed `topic:jazz` lifts `ck:korean:kpop` above its prior).
+
+**What was built (bridges only — propagation math untouched):**
+- **topics.py** `link_related_cross()` — same `related_topic` edge/storage as `link_related_topic`, but each
+  endpoint may be a `topic` OR a `culture_topic` node. A relatedness LINK only: never merges, never changes
+  identity — a `ck:` node and a same-slug `topic:` node stay two DISTINCT nodes, now traversable.
+- **kg_extraction.py** `link_cross_namespace_bridges()` — two idempotent, LLM-free passes: (1) exact-slug
+  bridges (weight 1.0) for a person `topic:<slug>` whose slug equals a `ck:<culture>:<slug>`; (2) embedding
+  bridges in the same `[0.60, 0.86)` related band, `same_category_only`, exact-slug pairs excluded. Reuses the
+  existing `_embed`/`_pairs`/`_same_category` machinery pointed at the cross-namespace pair set.
+- **preference_model.py** — the ONE traversal change: when gathering a person topic's `related_topic`
+  neighbours, accept `culture_topic` neighbours too (they resolve into the same slug space). No change to
+  rounds, damping (0.8), floor, or the signed clamp — only which neighbours the existing walk may visit.
+- **Wiring:** the bridge pass runs wherever related-linking already runs — `--mode consolidate` and the
+  auto-consolidate path.
+- **Viz:** cross-namespace bridges render as `related_topic` with a dashed stroke + "culture bridge" tooltip.
+
+**Finding (reported honestly):** the BN joins by SLUG, so an EXACT-slug bridge (`topic:hiking ~
+ck:korean:hiking`, same slug) is a self-loop in slug space and does not by itself move a distinct node — it
+is created/idempotent/merge-safe and makes the join an explicit traversable edge, but the measurable
+cross-namespace LIFT comes from DISTINCT-slug (embedding) bridges. Carrying an exact-slug bridge two hops
+(person→ck:hiking→ck:kpop) would need a hop-count change, which this step deliberately scoped out.
+
+**Verified — `test_cross_namespace.py` (synthetic store, fake embed) 6/6:** (1) embedding bridge lifts kpop
+0.30→0.496, delete→0.30 fallback; (2) exact-slug bridge created/idempotent/merge-safe/traversable; (3) merge
+invariant — consolidation never merges ck↔topic, per-namespace counts unchanged, only +1 related edge; (4)
+dislike crosses — disliked jazz pulls kpop 0.30→0.151 (Step-1 signed clamp composes with Step-2 bridge); (5)
+read-only + deterministic + graceful degradation; (6) embedding-band linker creates the bridge idempotently.
+Existing suites still green: test_affinity, test_preference_model, test_culture_seed, test_culture_extraction,
+and the graph_relationship pytest suite (47). `graph_relationship/` purity unchanged.
+
+**Deferred (Steps 3–4, untouched):** confidence-weighting the BN clamp; style hint.
+
+---
+
 ## fix: self-declared culture is a recallable fact, not just a tentative hint  *(branch `feature/cultural-awareness`)*
 
 **User point:** jay said *"i am from korea"* in a session, yet next time the robot answered *"I'm not sure if

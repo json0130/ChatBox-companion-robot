@@ -29,6 +29,7 @@ from modules.graph_relationship.schema import TOPIC_CATEGORIES
 from modules.graph_relationship.scales import aff01_from_10
 from modules.graph_relationship.topics import (
     add_person_topic,
+    link_related_cross,
     link_related_topic,
     merge_topics,
     normalize_label,
@@ -269,6 +270,16 @@ def _topic_nodes(store) -> List[tuple]:
     return out
 
 
+def _culture_topic_nodes(store) -> List[tuple]:
+    """[(id, label, category_str), ...] for every CultureTopicNode (`ck:…`)."""
+    out = []
+    for n in getattr(store, "_nodes", {}).values():
+        if getattr(n, "node_type", None) == "culture_topic":
+            cat = n.category.value if hasattr(n.category, "value") else str(n.category)
+            out.append((n.id, n.label, cat))
+    return out
+
+
 class _UnionFind:
     def __init__(self, ids):
         self.parent = {i: i for i in ids}
@@ -422,3 +433,81 @@ def link_related_topics(
         if not dry_run:
             link_related_topic(store, a, b, sim, source=source)
     return report
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 2 — cross-namespace culture↔person bridges (app layer; injected embed_fn)
+# ─────────────────────────────────────────────────────────────────────────────
+# Culture priors live on `ck:<culture>:<slug>` CultureTopic nodes; person interests
+# live on `topic:<slug>` nodes. Today these two namespaces are disconnected islands
+# — they only label-join, with no edge between them — so a person's OBSERVED interest
+# can never propagate to a culturally-adjacent culture topic, and the BN degrades to
+# a base-rate lookup. This pass adds `related_topic` bridge edges ACROSS the
+# namespaces so the existing 2-round noisy-OR can carry person evidence into culture
+# topics (e.g. observed `topic:jazz` lifts `ck:korean:kpop` above its raw prior).
+#
+# Bridges are the SAME related_topic edge type (no new type, no merge): a `ck:` node
+# and a same-slug `topic:` node remain two DISTINCT nodes, now linked. Two idempotent
+# sources, embedding-only or exact-string (NO LLM):
+#   1. exact-slug (weight 1.0): topic:<slug> whose slug == a ck:<culture>:<slug>;
+#   2. embedding band [0.60, 0.86): same "related but not near-dup" band as the
+#      within-namespace related links, same_category_only, exact-slug pairs excluded.
+
+def link_cross_namespace_bridges(
+    store, embed_fn: EmbedFn, *,
+    related_floor: float = RELATED_FLOOR, merge_floor: float = CONSOLIDATE_FLOOR,
+    same_category_only: bool = True, dry_run: bool = False, source: str = "bridge",
+) -> dict:
+    """Link person `topic:` nodes to culture `ck:` CultureTopic nodes so the BN can
+    propagate across the namespaces. Returns
+    {"exact": [(topic_label, ck_label, 1.0)], "links": [(topic_label, ck_label, sim)],
+     "existing": int, "dry_run": bool}. Idempotent — re-running adds nothing."""
+    topics = _topic_nodes(store)                    # (id, label, category)
+    ck = _culture_topic_nodes(store)                # (id, label, category)
+    if not topics or not ck:
+        return {"exact": [], "links": [], "existing": 0, "dry_run": dry_run}
+
+    label_of = {i: l for i, l, _c in topics}
+    label_of.update({i: l for i, l, _c in ck})
+    exact: List[Tuple[str, str, float]] = []
+    existing = 0
+
+    # ── 1. exact-slug bridges (weight 1.0) ────────────────────────────────────
+    topic_by_slug = {normalize_label(l): i for i, l, _c in topics}
+    for ck_id, ck_lbl, _c in ck:
+        tid = topic_by_slug.get(normalize_label(ck_lbl))
+        if tid is None:
+            continue
+        if store.get_edge(*sorted((tid, ck_id)), "related_topic") is not None:
+            existing += 1
+            continue
+        exact.append((label_of[tid], label_of[ck_id], 1.0))
+        if not dry_run:
+            link_related_cross(store, tid, ck_id, 1.0, source=source)
+
+    # ── 2. embedding bridges in [related_floor, merge_floor) ──────────────────
+    # Reuse the existing _embed / _pairs / _same_category machinery, pointed at the
+    # combined id set with an `ok` that keeps ONLY cross-namespace pairs (one topic,
+    # one ck) that are not already linked (exact-slug from step 1 wins).
+    cat_of = {i: c for i, _l, c in topics}
+    cat_of.update({i: c for i, _l, c in ck})
+    is_ck = {i for i, _l, _c in ck}
+    all_items = [(i, l) for i, l, _c in topics] + [(i, l) for i, l, _c in ck]
+    ids = [i for i, _l in all_items]
+    vecs = _embed(all_items, embed_fn)
+    same_cat = _same_category(cat_of, same_category_only)
+
+    def _ok(a: str, b: str) -> bool:
+        if (a in is_ck) == (b in is_ck):        # both topic or both ck → not a bridge
+            return False
+        if not same_cat(a, b):
+            return False
+        return store.get_edge(*sorted((a, b)), "related_topic") is None
+
+    links: List[Tuple[str, str, float]] = []
+    for a, b, sim in _pairs(ids, vecs, lo=related_floor, hi=merge_floor, ok=_ok):
+        links.append((label_of[a], label_of[b], sim))
+        if not dry_run:
+            link_related_cross(store, a, b, sim, source=source)
+
+    return {"exact": exact, "links": links, "existing": existing, "dry_run": dry_run}

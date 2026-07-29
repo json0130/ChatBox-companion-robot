@@ -215,6 +215,9 @@ def transform(raw: dict) -> dict:
         }
         if e.get("label"):          # capability→topic 'knows jazz' etc.
             obj["elabel"] = str(e["label"])
+        if et == "related_topic" and (
+                str(src).startswith("ck:") != str(tgt).startswith("ck:")):
+            obj["cross"] = True     # Step-2 person topic: ↔ culture ck: bridge
         if et == "about":           # person interest→topic affinity/confidence
             # affinity is stored internally in [0,1]; show it on the human 0–10 scale
             # (display-only mirror of scales.aff10_from_01, kept inline so this

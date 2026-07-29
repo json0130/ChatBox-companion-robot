@@ -17,6 +17,15 @@ Namespace join (post-redesign): culture priors live on `culture_topic` nodes
 nodes. So the model works in a unified SLUG space — a culture prior for "kimchi"
 and a person topic "kimchi" are the same concept, joined by normalized label.
 
+Cross-namespace bridges (Step 2): a bare label-join is not traversable — a person's
+OBSERVED interest could never propagate to a culturally-adjacent culture topic, so
+the BN degraded to a base-rate lookup. `related_topic` BRIDGE edges (built by
+kg_extraction.link_cross_namespace_bridges) now connect `topic:` ↔ `ck:` nodes, and
+this read simply lets the SAME 2-round noisy-OR follow them: when gathering a
+person topic's `related_topic` neighbours we now accept `culture_topic` neighbours
+too (they resolve into the same slug space). No change to rounds, damping, floor, or
+the signed clamp — only which neighbours the existing walk is allowed to visit.
+
 Signed evidence (Approach-1 Step 1): an observed topic is clamped at its stored
 `affinity` (internal [0,1]: 0 dislike / 0.5 neutral / 1 like) rather than a flat
 positive constant. A LIKED topic clamps HIGH and pushes neighbours up (noisy-OR, as
@@ -93,7 +102,10 @@ def rank_suggestions(
     seen: set = set()
     for s, tid in list(topic_id_by_slug.items()):
         for edge, nb in store.query_neighbors(tid, "related_topic"):
-            if nb.node_type != "topic":
+            # Accept culture_topic neighbours too — this is how a person interest's
+            # evidence crosses a Step-2 bridge into a `ck:` culture topic. Both node
+            # types resolve into the shared slug space below.
+            if nb.node_type not in ("topic", "culture_topic"):
                 continue
             bs = slug_by_id.get(nb.id) or normalize_label(nb.label)
             if bs not in p:                    # neighbour-of-neighbour: add candidate

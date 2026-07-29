@@ -91,6 +91,17 @@ class SessionStore:
             self._conn.commit()
             return int(cur.lastrowid)
 
+    def set_turn_topics(self, row_id: int, topics: Optional[List[str]]) -> None:
+        """Set the `topics` label on an already-inserted turn (by row id). Used when
+        the live topic label is computed asynchronously, after the turn is recorded.
+        Thread-safe (holds the store lock)."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE turns SET topics = ? WHERE id = ?",
+                (json.dumps(topics) if topics else None, int(row_id)),
+            )
+            self._conn.commit()
+
     def mark_extracted(self, person_id: str) -> int:
         """Mark all of a person's un-extracted turns as extracted. Returns count."""
         with self._lock:

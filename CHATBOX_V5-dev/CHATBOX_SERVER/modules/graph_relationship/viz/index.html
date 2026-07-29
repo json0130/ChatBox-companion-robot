@@ -400,7 +400,7 @@ function update(graph) {
     .map(e => ({
       source: nodeById.get(e.source), target: nodeById.get(e.target),
       type: e.type, timescale: e.timescale, weight: e.weight, elabel: e.elabel,
-      affinity10: e.affinity10, confidence: e.confidence,
+      affinity10: e.affinity10, confidence: e.confidence, cross: e.cross,
     }));
 
   const maxW = d3.max(links, d => Math.abs(d.weight)) || 1;
@@ -423,11 +423,15 @@ function render(nodes) {
   linkEnter.merge(link)
     .attr("stroke", d => edgeColor(d))
     .attr("stroke-width", d => weightScale(Math.abs(d.weight)))
+    // Step-2 cross-namespace bridges (person topic ↔ culture ck) get a dash so the
+    // bridge is visible; all other edges stay solid.
+    .attr("stroke-dasharray", d => d.cross ? "5,4" : null)
     .transition().duration(400).attr("stroke-opacity", 0.55);
   gLinks.selectAll("line").select("title").text(d => {
     // person interest→topic 'about' edges carry an affinity (0–10) + confidence.
     if (d.type === "about" && d.affinity10 != null)
       return `about · affinity ${d.affinity10}/10 · confidence ${d.confidence}`;
+    if (d.cross) return `culture bridge · ${d.type} = ${d.weight}`;
     return `${d.type} = ${d.weight}`;
   });
 

@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import os
+import queue
 import re
 import socket
 import sys
@@ -850,6 +851,171 @@ class WebcamKGLoop:
         )
         self._last_pad_result: Optional[dict] = None
 
+        # Option B: the live topic label (a 2nd, non-reply LLM call) is computed OFF
+        # the main/display thread. Worker threads compute it and hand the result back
+        # here; the main loop drains this and applies the store write itself (the
+        # InMemoryGraphStore is single-threaded — only the main loop mutates it).
+        # Items: (person_id, robot_id, topic_or_None).
+        self._pending_topics: "queue.Queue" = queue.Queue()
+
+        # #2: the whole chat pipeline (RAG + prompt build + LLM reply) runs on a
+        # dedicated worker thread so the display never freezes while the robot
+        # "thinks". The InMemoryGraphStore is NOT thread-safe, so a single RLock
+        # serialises every store access that can overlap the worker; the worker holds
+        # it ONLY for the fast prompt-build read, never for the slow LLM/RAG calls.
+        # Requests/results cross threads via queues; all store WRITES stay on the
+        # main thread (_apply_chat_result).
+        self._store_lock = threading.RLock()
+        self._chat_requests: "queue.Queue" = queue.Queue()
+        self._chat_results:  "queue.Queue" = queue.Queue()
+
+        # #3: debounced graph persistence. The frequent per-tick/chat mutations mark
+        # the graph dirty; the loop flushes to kg_state.json at most once per
+        # _save_min_interval, instead of rewriting the whole file every tick.
+        self._kg_dirty = False
+        self._last_save_t = 0.0
+        self._save_min_interval = 1.0   # seconds between debounced saves
+
+    def _spawn_topic_detect(self, msg: str, verbal: str, person_id: str,
+                            robot_id: str, turn_row_id: Optional[int]) -> None:
+        """Run the live-topic LLM label OFF the critical path. Records the topic on
+        the (thread-safe) session store, then hands it to the main loop to update the
+        conversation node. Never touches self.store from this thread."""
+        def _work():
+            try:
+                topic = self._detect_topic(msg, verbal)
+            except Exception:  # noqa: BLE001 — a label failure must never crash chat
+                topic = None
+            if topic and turn_row_id is not None:
+                try:
+                    self._session_store.set_turn_topics(turn_row_id, [topic])
+                except Exception:  # noqa: BLE001
+                    pass
+            self._pending_topics.put((person_id, robot_id, topic))
+        threading.Thread(target=_work, name="topic-detect", daemon=True).start()
+
+    def _drain_pending_topics(self) -> None:
+        """Apply any completed async topic labels to the live conversation node.
+        Runs on the MAIN thread each loop iteration; the store write is guarded by
+        the store lock so it can't corrupt a concurrent chat-worker prompt read."""
+        from modules.graph_relationship.topics import update_conversation
+        drained = False
+        while True:
+            try:
+                pid, robot_id, topic = self._pending_topics.get_nowait()
+            except queue.Empty:
+                break
+            if not topic:
+                continue
+            with self._store_lock:
+                conv = update_conversation(self.store, pid, robot_id, topic=topic,
+                                           create=False, source="live-topic")
+            if conv is not None:
+                print(f"  [topic]  recent → {', '.join(conv.topics)}")
+                drained = True
+        if drained:
+            self._mark_kg_dirty()
+
+    # ── #3: debounced graph persistence ───────────────────────────────────────
+
+    def _mark_kg_dirty(self) -> None:
+        """Flag that the graph changed; the loop's _flush_kg debounces the write."""
+        self._kg_dirty = True
+
+    def _flush_kg(self, *, force: bool = False) -> None:
+        """Persist kg_state.json at most once per _save_min_interval, and only when
+        something changed (or `force`). Called every loop iteration on the MAIN
+        thread; the actual write holds the store lock so it can't race the chat
+        worker. Replaces the old per-tick/per-turn full-graph rewrites."""
+        if not self.kg_path or not (self._kg_dirty or force):
+            return
+        now = time.time()
+        if not force and (now - self._last_save_t) < self._save_min_interval:
+            return
+        with self._store_lock:
+            self.store.save(self.kg_path)
+        self._kg_dirty = False
+        self._last_save_t = now
+
+    # ── #2: threaded chat pipeline ────────────────────────────────────────────
+
+    def _chat_worker_loop(self) -> None:
+        """Persistent chat worker: RAG search + prompt build + LLM reply, OFF the
+        display thread. Store WRITES are NOT done here — the result is handed back to
+        the main thread (_apply_chat_result), which owns the store. The store lock is
+        held only for the fast prompt-build read, never across the slow LLM call."""
+        while True:
+            req = self._chat_requests.get()
+            if req is None:                       # shutdown sentinel
+                break
+            try:
+                msg, pid, history = req["msg"], req["pid"], req["history"]
+                rag_hits = []
+                if self._session_rag and pid:
+                    try:
+                        rag_hits = self._session_rag.search(
+                            msg, top_k=5, person_id=pid)
+                    except Exception:  # noqa: BLE001
+                        rag_hits = []
+                with self._store_lock:
+                    if self._pad_enabled and self._last_pad_result:
+                        sys_prompt = self._last_pad_result["system_prompt"]
+                    else:
+                        sys_prompt = self._build_system_prompt(pid, rag_hits=rag_hits)
+                    if self._debug_prompt and pid:
+                        self._debug_prompt_dump(pid, msg, rag_hits)
+                raw_reply = self.llm.respond(sys_prompt, msg, history=history)
+                tag, verbal = _parse_llm_response(raw_reply)
+                self._chat_results.put({**req, "verbal": verbal, "tag": tag})
+            except Exception as exc:  # noqa: BLE001 — never let the worker die
+                self._chat_results.put({**req, "verbal": None, "tag": "",
+                                        "error": str(exc)})
+
+    def _apply_chat_result(self, res: dict) -> Optional[str]:
+        """MAIN thread: print the reply, update history + KG (under the store lock),
+        and kick off async topic detection. Returns the spoken reply text (or None)."""
+        if res.get("error"):
+            print(f"  [chat] LLM error: {res['error']}\n")
+            return None
+        msg, pid = res["msg"], res["pid"]
+        verbal, tag = res["verbal"], res["tag"]
+        emotion = res.get("emotion")
+        if tag:
+            print(f"  [tag]   [{tag}]")
+            if self._esp32_host:
+                expr = _TAG_TO_ESP32.get(tag)
+                if expr:
+                    _send_esp32(expr, self._esp32_host, self._esp32_port)
+                else:
+                    print(f"  [ESP32] no mapping for [{tag}]")
+        print(f"  [{self._robot_display}]  \"{verbal}\"\n")
+        pid_key = pid or "__unknown__"
+        if pid_key not in self._chat_history:
+            self._chat_history[pid_key] = deque(maxlen=5)
+        self._chat_history[pid_key].append((msg, verbal))
+        if pid:
+            from modules.graph_relationship.interactions import set_interaction_count
+            from modules.graph_relationship.topics import update_conversation
+            with self._store_lock:
+                sid = self._run_session_id(pid)
+                row_id = self._session_store.append_turn(
+                    session_id=sid, person_id=pid, robot_id=self.robot_id,
+                    emotion=(emotion if self._emotion_enabled else None),
+                    child=msg, reply=verbal, topics=None)
+                set_interaction_count(
+                    self.store, pid, self.robot_id,
+                    self._session_store.person_turn_count(pid, self.robot_id),
+                    source="session-store")
+                update_conversation(
+                    self.store, pid, self.robot_id,
+                    mood=self._last_mood.get(pid, (None,))[0],
+                    emotion=(emotion if self._emotion_enabled else None),
+                    create=True, source="live-topic")
+                self._mark_kg_dirty()
+            # topic label is a further async step (Option B) — off the main thread.
+            self._spawn_topic_detect(msg, verbal, pid, self.robot_id, row_id)
+        return verbal
+
     def _adapter(self) -> PADPipelineAdapter:
         if self.robot_id not in self._adapters:
             self._adapters[self.robot_id] = PADPipelineAdapter(self.robot_id)
@@ -899,8 +1065,7 @@ class WebcamKGLoop:
         if sid is None:
             sid = str(uuid.uuid4())
             self._run_sessions[pid] = sid
-            if self.kg_path:
-                self.store.save(self.kg_path)   # persist the new interaction once
+            self._mark_kg_dirty()   # persist the new interaction (debounced)
         return sid
 
     def _kg_tick(self, pid: str) -> tuple[str, float, float]:
@@ -1320,8 +1485,7 @@ class WebcamKGLoop:
                 print("      (topic extraction skipped — LLM JSON parse failed)")
         # Consolidate near-duplicate topics + interests after EVERY extraction.
         self._auto_consolidate()
-        if self.kg_path:
-            self.store.save(self.kg_path)
+        self._mark_kg_dirty()
 
     def _auto_consolidate(self) -> None:
         """Merge near-duplicate topics + interests after every extraction session.
@@ -1330,6 +1494,7 @@ class WebcamKGLoop:
             return
         from modules.kg_extraction import (
             consolidate_topics, consolidate_interests, link_related_topics,
+            link_cross_namespace_bridges,
         )
         merges = (consolidate_topics(self.store, self._embed_fn, source="auto-consolidate")["merges"]
                   + consolidate_interests(self.store, self._embed_fn, source="auto-consolidate")["merges"])
@@ -1345,6 +1510,13 @@ class WebcamKGLoop:
             print(f"[WebcamLoop] related-topic links (+{len(links)}):")
             for a, b, sim in links:
                 print(f"    '{a}' ~ '{b}'  ({sim})")
+        # Step 2: bridge person topic: ↔ culture ck: nodes so evidence can propagate.
+        br = link_cross_namespace_bridges(self.store, self._embed_fn, source="auto-bridge")
+        bridges = br["exact"] + br["links"]
+        if bridges:
+            print(f"[WebcamLoop] culture bridges (+{len(bridges)}):")
+            for a, b, w in bridges:
+                print(f"    '{a}' ~ '{b}'  ({w})")
 
     def _consolidate_preview(self) -> None:
         """Dry-run: print near-duplicate topics that WOULD merge (non-destructive).
@@ -1401,6 +1573,11 @@ class WebcamKGLoop:
         )
         worker.start()
 
+        # ── Chat worker (RAG + prompt + LLM reply) — keeps the display live ───
+        chat_thread = threading.Thread(
+            target=self._chat_worker_loop, name="chat-worker", daemon=True)
+        chat_thread.start()
+
         # ── KG state — updated every tick, survives between ticks ─────────────
         # person_id -> {tier, pad_state, descriptors, rapport, trust}
         _kg_state: dict[str, dict] = {}
@@ -1445,6 +1622,22 @@ class WebcamKGLoop:
                 if not ok:
                     print("[WebcamLoop] Frame read failed — camera disconnected?")
                     break
+
+                # Apply any finished chat replies + async topic labels on the main
+                # thread (store writes stay single-threaded). Both are cheap and
+                # non-blocking when their queues are empty.
+                while True:
+                    try:
+                        _res = self._chat_results.get_nowait()
+                    except queue.Empty:
+                        break
+                    _verbal = self._apply_chat_result(_res)
+                    if _verbal is not None:
+                        last_verbal   = _verbal
+                        chat_expire_t = time.time() + 45.0
+                self._drain_pending_topics()
+                # #3: debounced persistence — writes at most once/second when dirty.
+                self._flush_kg()
 
                 # FPS tracking
                 fps_frames += 1
@@ -1533,54 +1726,57 @@ class WebcamKGLoop:
                     tick_n += 1
                     mood_dirty = False
 
-                    for d in raw_dets:
-                        pid = d["person_id"]
-                        if pid is None:
-                            continue
-                        if self._pad_enabled:
-                            bi, pad = self._pipeline_tick(pid, d["emotion"], va=d.get("va"))
-                            r, t    = _read_rapport_trust(self.store, pid, self.robot_id)
-                            _kg_state[pid] = {
-                                "tier":        bi.tier,
-                                "pad_state":   pad["pad_state"],
-                                "descriptors": pad["descriptors"],
-                                "rapport":     r,
-                                "trust":       t,
-                            }
-                            if pid == last_person_id:
-                                self._last_pad_result = pad
-                                last_tier        = bi.tier
-                                last_pad_state   = pad["pad_state"]
-                                last_descriptors = pad["descriptors"]
-                                last_rapport     = r
-                                last_trust       = t
-                        else:
-                            # KG-only tick: ensure session, refresh overlay state.
-                            tier, r, t = self._kg_tick(pid)
-                            _kg_state[pid] = {
-                                "tier":        tier,
-                                "pad_state":   None,
-                                "descriptors": None,
-                                "rapport":     r,
-                                "trust":       t,
-                            }
-                            # Emotion drives the FAST MoodEdge only (no PAD).
-                            if self._emotion_enabled and self._mood_tick(
-                                    pid, d.get("emotion"), d.get("va")):
-                                mood_dirty = True
-                            if pid == last_person_id:
-                                last_tier    = tier
-                                last_rapport = r
-                                last_trust   = t
+                    # The per-tick KG reads/writes share the store with the chat
+                    # worker, so hold the store lock for the whole tick (fast: µs–ms).
+                    with self._store_lock:
+                        for d in raw_dets:
+                            pid = d["person_id"]
+                            if pid is None:
+                                continue
+                            if self._pad_enabled:
+                                bi, pad = self._pipeline_tick(pid, d["emotion"], va=d.get("va"))
+                                r, t    = _read_rapport_trust(self.store, pid, self.robot_id)
+                                _kg_state[pid] = {
+                                    "tier":        bi.tier,
+                                    "pad_state":   pad["pad_state"],
+                                    "descriptors": pad["descriptors"],
+                                    "rapport":     r,
+                                    "trust":       t,
+                                }
+                                if pid == last_person_id:
+                                    self._last_pad_result = pad
+                                    last_tier        = bi.tier
+                                    last_pad_state   = pad["pad_state"]
+                                    last_descriptors = pad["descriptors"]
+                                    last_rapport     = r
+                                    last_trust       = t
+                            else:
+                                # KG-only tick: ensure session, refresh overlay state.
+                                tier, r, t = self._kg_tick(pid)
+                                _kg_state[pid] = {
+                                    "tier":        tier,
+                                    "pad_state":   None,
+                                    "descriptors": None,
+                                    "rapport":     r,
+                                    "trust":       t,
+                                }
+                                # Emotion drives the FAST MoodEdge only (no PAD).
+                                if self._emotion_enabled and self._mood_tick(
+                                        pid, d.get("emotion"), d.get("va")):
+                                    mood_dirty = True
+                                if pid == last_person_id:
+                                    last_tier    = tier
+                                    last_rapport = r
+                                    last_trust   = t
 
-                    # Persist after the tick so the live viz server
-                    # (modules.graph_relationship.viz.server) can poll it within ~1s.
-                    # PAD mode mutates every tick; the KG-only path otherwise saves
-                    # on session creation + each chat turn, so we only add a per-tick
-                    # save when the FAST mood actually changed (mood_dirty).
-                    if (self.kg_path and (self._pad_enabled or mood_dirty)
-                            and any(d["person_id"] for d in raw_dets)):
-                        self.store.save(self.kg_path)
+                        # Persist after the tick so the live viz server
+                        # (modules.graph_relationship.viz.server) can poll it within ~1s.
+                        # PAD mode mutates every tick; the KG-only path otherwise saves
+                        # on session creation + each chat turn, so we only add a per-tick
+                        # save when the FAST mood actually changed (mood_dirty).
+                        if ((self._pad_enabled or mood_dirty)
+                                and any(d["person_id"] for d in raw_dets)):
+                            self._mark_kg_dirty()
 
                 # Clear stale chat
                 if last_user_msg and time.time() > chat_expire_t:
@@ -1641,89 +1837,19 @@ class WebcamKGLoop:
                                 chat_expire_t  = time.time() + 45.0
                                 print(f"\n  [you]  \"{msg}\"")
                                 if self.llm and self.llm.available:
+                                    # Dispatch the whole chat turn (RAG + prompt build +
+                                    # LLM reply) to the chat worker so the display never
+                                    # freezes; the reply is applied on the main thread
+                                    # when ready (see the _chat_results drain near the
+                                    # top of the loop). History is snapshotted now — only
+                                    # the main thread mutates self._chat_history.
                                     hist = list(self._chat_history.get(
-                                        last_person_id or "", []
-                                    ))
-                                    # Current mood (valence) + instantaneous emotion
-                                    # label. Both feed the LLM: the mood line sits in
-                                    # the prompt context (stable), the emotion label is
-                                    # tagged on this user turn (per-moment) — so a wrong
-                                    # RAG: relevant past turns for this message.
-                                    rag_hits = []
-                                    if self._session_rag and last_person_id:
-                                        try:
-                                            rag_hits = self._session_rag.search(
-                                                msg, top_k=5, person_id=last_person_id)
-                                        except Exception:  # noqa: BLE001
-                                            rag_hits = []
-                                    # PAD off → build the system prompt from the KG
-                                    # (persona + retrieved person memory + RAG). Mood is
-                                    # tracked on the graph/viz only, not injected here.
-                                    if self._pad_enabled and self._last_pad_result:
-                                        sys_prompt = self._last_pad_result["system_prompt"]
-                                    else:
-                                        sys_prompt = self._build_system_prompt(
-                                            last_person_id, rag_hits=rag_hits)
-                                    if self._debug_prompt and last_person_id:
-                                        self._debug_prompt_dump(
-                                            last_person_id, msg, rag_hits)
-                                    raw_reply = self.llm.respond(sys_prompt, msg, history=hist)
-                                    tag, verbal = _parse_llm_response(raw_reply)
-                                    last_verbal = verbal
-                                    if tag:
-                                        print(f"  [tag]   [{tag}]")
-                                        if self._esp32_host:
-                                            expr = _TAG_TO_ESP32.get(tag)
-                                            if expr:
-                                                _send_esp32(expr, self._esp32_host,
-                                                            self._esp32_port)
-                                            else:
-                                                print(f"  [ESP32] no mapping for [{tag}]")
-                                    print(f"  [{self._robot_display}]  \"{verbal}\"\n")
-                                    # Save to per-person history
-                                    pid_key = last_person_id or "__unknown__"
-                                    if pid_key not in self._chat_history:
-                                        self._chat_history[pid_key] = deque(maxlen=5)
-                                    self._chat_history[pid_key].append((msg, verbal))
-                                    # Record the turn (recognized persons only). The
-                                    # transcript goes to the SQLite session store, NOT
-                                    # the graph; the graph keeps only Interaction count.
-                                    if last_person_id:
-                                        from modules.graph_relationship.interactions import (
-                                            set_interaction_count,
-                                        )
-                                        from modules.graph_relationship.topics import (
-                                            update_conversation,
-                                        )
-                                        sid = self._run_session_id(last_person_id)
-                                        topic = self._detect_topic(msg, verbal)
-                                        self._session_store.append_turn(
-                                            session_id=sid, person_id=last_person_id,
-                                            robot_id=self.robot_id,
-                                            emotion=(last_emotion
-                                                     if self._emotion_enabled else None),
-                                            child=msg, reply=verbal,
-                                            topics=[topic] if topic else None)
-                                        # interaction_count now comes from the store.
-                                        set_interaction_count(
-                                            self.store, last_person_id, self.robot_id,
-                                            self._session_store.person_turn_count(
-                                                last_person_id, self.robot_id),
-                                            source="session-store")
-                                        # Live conversation-status node (rolling topics + mood).
-                                        conv = update_conversation(
-                                            self.store, last_person_id, self.robot_id,
-                                            topic=topic,
-                                            mood=self._last_mood.get(
-                                                last_person_id, (None,))[0],
-                                            emotion=(last_emotion
-                                                     if self._emotion_enabled else None),
-                                            create=True, source="live-topic")
-                                        if topic:
-                                            print(f"  [topic]  recent → "
-                                                  f"{', '.join(conv.topics)}")
-                                        if self.kg_path:
-                                            self.store.save(self.kg_path)
+                                        last_person_id or "", []))
+                                    self._chat_requests.put({
+                                        "msg": msg, "pid": last_person_id,
+                                        "emotion": last_emotion, "history": hist,
+                                    })
+                                    last_verbal = "…"   # 'thinking' until the reply lands
                                 else:
                                     last_verbal = "[LLM not enabled — run with --llm]"
                                     print("  [chat] LLM not connected. Run with --llm.\n")
@@ -1770,18 +1896,21 @@ class WebcamKGLoop:
                         input_text  = ""
                         input_error = ""
                     elif key in (ord("k"), ord("K")):
-                        _dump_kg(self.store, self.robot_id)
+                        with self._store_lock:
+                            _dump_kg(self.store, self.robot_id)
                     elif key in (ord("x"), ord("X")):
-                        self._extract_session()   # run extraction mid-session (testing)
+                        with self._store_lock:
+                            self._extract_session()   # run extraction mid-session (testing)
                     elif key in (ord("c"), ord("C")):
-                        self._consolidate_preview()   # dry-run: preview topic merges
+                        with self._store_lock:
+                            self._consolidate_preview()   # dry-run: preview topic merges
                     elif key in (ord("b"), ord("B")) and last_person_id:
-                        _update_rapport_trust(
-                            self.store, last_person_id, self.robot_id,
-                            delta=0.15, verbose=True,
-                        )
-                        if self.kg_path:
-                            self.store.save(self.kg_path)
+                        with self._store_lock:
+                            _update_rapport_trust(
+                                self.store, last_person_id, self.robot_id,
+                                delta=0.15, verbose=True,
+                            )
+                            self._mark_kg_dirty()
                     elif key in (ord("s"), ord("S")):
                         self.face_id.save(self.faces_path)
 
@@ -1790,14 +1919,19 @@ class WebcamKGLoop:
         finally:
             worker.stop()
             worker.join(timeout=2.0)
+            # Stop the chat worker before touching the store at shutdown, so
+            # end-of-session extraction can't race a chat-worker prompt read.
+            self._chat_requests.put(None)
+            chat_thread.join(timeout=2.0)
             if self.face_id.known_people():
                 self.face_id.save(self.faces_path)
             # End-of-session knowledge extraction → update the graph.
             try:
-                self._extract_session()
+                with self._store_lock:
+                    self._extract_session()
             except Exception as exc:  # noqa: BLE001 — never fail on shutdown
                 print(f"[WebcamLoop] extraction failed: {exc}")
-            self.store.save(self.kg_path)
+            self._flush_kg(force=True)   # final flush regardless of debounce
             self._session_store.close()
             cap.release()
             if self.show_window:
@@ -1841,19 +1975,26 @@ def run_consolidate_mode(kg_path: str, embed_model: str,
         return
     from modules.kg_extraction import (
         consolidate_topics, consolidate_interests, link_related_topics,
+        link_cross_namespace_bridges,
     )
     merges = (consolidate_topics(store, embed_fn, floor=merge_floor, dry_run=dry_run)["merges"]
               + consolidate_interests(store, embed_fn, floor=merge_floor, dry_run=dry_run)["merges"])
     links = link_related_topics(store, embed_fn, merge_floor=merge_floor, dry_run=dry_run)["links"]
-    if not merges and not links:
-        print(f"[consolidate] no near-duplicate or related topics/interests (floor {merge_floor})")
+    # Step 2: cross-namespace culture↔person bridges (exact-slug + embedding band).
+    br = link_cross_namespace_bridges(store, embed_fn, merge_floor=merge_floor, dry_run=dry_run)
+    bridges = br["exact"] + br["links"]
+    if not merges and not links and not bridges:
+        print(f"[consolidate] no near-duplicate/related topics or culture bridges (floor {merge_floor})")
         return
     tag = "DRY RUN — no changes written" if dry_run else "APPLIED"
-    print(f"[consolidate] {len(merges)} merge(s), {len(links)} related-link(s) — {tag}:")
+    print(f"[consolidate] {len(merges)} merge(s), {len(links)} related-link(s), "
+          f"{len(bridges)} culture-bridge(s) — {tag}:")
     for canon, dup in merges:
         print(f"    merge  '{dup}'  →  '{canon}'")
     for a, b, sim in links:
         print(f"    link   '{a}' ~ '{b}'  ({sim})")
+    for a, b, w in bridges:
+        print(f"    bridge '{a}' ~ '{b}'  ({w})")
     if not dry_run:
         store.save(kg_path)
         print(f"[consolidate] saved → {kg_path}")

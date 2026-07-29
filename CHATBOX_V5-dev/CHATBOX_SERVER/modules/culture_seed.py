@@ -32,40 +32,40 @@ _DEFAULT_ROBOT = "chatbox"
 # research claims. `facts` are short, shareable bits the robot can mention when it
 # brings the topic up (kept general and light, never asserted about the person).
 _KOREAN_DEMO: List[Tuple[str, str, float, List[str]]] = [
-    ("kimchi",        "food",     0.80, [
+    ("kimchi",        "food",     0.60, [
         "Korea's iconic fermented vegetable dish, usually napa cabbage with chilli.",
         "There are hundreds of varieties and it's served with almost every meal."]),
-    ("korean bbq",    "food",     0.70, [
+    ("korean bbq",    "food",     0.50, [
         "Meat grilled right at your table — a social, shared way to eat.",
         "Often wrapped in lettuce with garlic and side dishes (banchan)."]),
-    ("kpop",          "music",    0.70, [
+    ("kpop",          "music",    0.50, [
         "Korean pop music known for polished songs and synchronised dance.",
         "Groups like BTS, BLACKPINK, TWICE and NewJeans have huge global fandoms."]),
-    ("kdrama",        "media",    0.65, [
+    ("kdrama",        "media",    0.45, [
         "Korean TV dramas with big international followings via streaming.",
         "Genres span romance, thriller and historical (sageuk)."]),
-    ("bibimbap",      "food",     0.65, [
+    ("bibimbap",      "food",     0.45, [
         "A rice bowl topped with seasoned vegetables, egg and gochujang.",
         "You mix everything together before eating."]),
-    ("hiking",        "activity", 0.60, [
+    ("hiking",        "activity", 0.40, [
         "Extremely popular in Korea — mountains are everywhere, even in Seoul.",
         "Weekend hiking clubs and well-marked trails are common."]),
-    ("son heung-min", "person",   0.55, [
+    ("son heung-min", "person",   0.35, [
         "Korean footballer, a captain at Tottenham Hotspur and a national hero.",
         "One of the Premier League's standout forwards."]),
-    ("noraebang",     "activity", 0.55, [
+    ("noraebang",     "activity", 0.35, [
         "Korean karaoke — private singing rooms rented by the hour.",
         "A staple social outing with friends or after dinner."]),
-    ("chuseok",       "activity", 0.50, [
+    ("chuseok",       "activity", 0.30, [
         "Korea's harvest/thanksgiving holiday, a major family gathering.",
         "People share songpyeon (rice cakes) and honour ancestors."]),
-    ("esports",       "activity", 0.50, [
+    ("esports",       "activity", 0.30, [
         "Korea is the heart of competitive gaming — StarCraft and League of Legends.",
         "Pro leagues, star players and PC bangs (gaming cafés) are part of the culture."]),
-    ("baseball",      "sport",    0.50, [
+    ("baseball",      "sport",    0.30, [
         "One of Korea's most popular sports, with the lively KBO league.",
         "Games are famous for organised cheering, chants and fan songs."]),
-    ("taekwondo",     "sport",    0.45, [
+    ("taekwondo",     "sport",    0.25, [
         "A Korean martial art and the national sport, now an Olympic event.",
         "Known for fast, high kicks."]),
 ]

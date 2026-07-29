@@ -282,6 +282,35 @@ def link_related_topic(
     return True
 
 
+def link_related_cross(
+    store: GraphStore, node_a_id: str, node_b_id: str, weight: float, *,
+    source: Optional[str] = None,
+) -> bool:
+    """Undirected `related_topic` edge that MAY span namespaces — a person
+    `topic:<slug>` and a culture `ck:<culture>:<slug>` CultureTopic node.
+
+    Same edge type / storage as link_related_topic (endpoints sorted, weight is the
+    similarity, idempotent), but each endpoint may be a `topic` OR a `culture_topic`
+    node. This is a relatedness LINK only: it NEVER merges or changes node identity,
+    so a `ck:` node and a `topic:` node with the same slug stay two DISTINCT nodes,
+    now traversable by the preference BN's existing propagation. Pure — no
+    embeddings/LLM. Returns True iff a new edge was written."""
+    _CROSS = ("topic", "culture_topic")
+    if node_a_id == node_b_id:
+        return False
+    a, b = sorted((node_a_id, node_b_id))
+    na, nb = store.get_node(a), store.get_node(b)
+    if (na is None or na.node_type not in _CROSS
+            or nb is None or nb.node_type not in _CROSS):
+        return False
+    if store.get_edge(a, b, "related_topic") is not None:
+        return False
+    store.upsert_edge(RelatedTopicEdge(
+        source_id=a, target_id=b, weight=max(0.0, min(1.0, float(weight))),
+        provenance=_prov(source)))
+    return True
+
+
 def merge_interests(
     store: GraphStore, canonical_id: str, duplicate_id: str, *,
     source: Optional[str] = None,

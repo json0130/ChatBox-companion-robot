@@ -69,18 +69,26 @@ def clamp_from(affinity: float, confidence: float) -> float:
     return _NEUTRAL + (affinity - _NEUTRAL) * confidence
 
 
+_USE_PERSON_CULTURE = object()   # sentinel: default = derive culture from the person
+
+
 def rank_suggestions(
     store, person_id: str, k: int = 3, floor: float = 0.35,
+    *, culture_id=_USE_PERSON_CULTURE,
 ) -> List[Tuple[str, float]]:
     """Top-k UNOBSERVED topics to tentatively suggest, as [(node_id, posterior)].
 
     Deterministic. Degrades gracefully to prior-only ranking when there are no
     `related_topic` links. Returns [] when there is nothing to suggest.
+
+    `culture_id` selects which culture's priors to use: default → the person's own
+    `belongs_to_culture`; pass an explicit id to use that culture instead (the
+    active-culture override), or None to use NO culture priors (generic).
     """
     # ── base rates: culture priors, keyed by slug ─────────────────────────────
     prior_by_slug: dict = {}
     ck_id_by_slug: dict = {}
-    cid = person_culture(store, person_id)
+    cid = person_culture(store, person_id) if culture_id is _USE_PERSON_CULTURE else culture_id
     if cid:
         for ck_id, label, prior in culture_priors(store, cid):
             s = normalize_label(label)

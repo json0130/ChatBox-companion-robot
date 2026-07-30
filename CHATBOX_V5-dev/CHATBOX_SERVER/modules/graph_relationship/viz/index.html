@@ -69,6 +69,10 @@
   .node-shape { fill: var(--node); stroke: var(--node-brd); stroke-width: 1.5px; }
   .node-shape.conversation { fill: var(--fast); stroke: #ffd8b0; stroke-width: 2px; }
   .node.dim .node-shape { opacity: 0.15; }
+  /* culture focus: the ACTIVE culture/person stays lit; everything else dims */
+  .link.inactive { stroke-opacity: 0.05; }
+  .node.inactive .node-shape { opacity: 0.10; }
+  .node.inactive .node-label { opacity: 0.18; }
   .node.selected .node-shape { stroke: #ffd24a; stroke-width: 3px; }
   .node-label { fill: var(--text); font-size: 11px; pointer-events: none;
                 paint-order: stroke; stroke: var(--bg); stroke-width: 3px; stroke-linejoin: round; }
@@ -363,7 +367,9 @@ document.getElementById("ctrl-reset").addEventListener("click", () => {
 const weightScale = d3.scaleSqrt().domain([0, 1]).range([1, 7]).clamp(true);
 
 // ---- diff + apply new graph ----------------------------------------------
+let activeState = {};   // {person, culture} — the loop's current focus (viz highlight)
 function update(graph) {
+  activeState = graph.active || {};
   // nodes: keep existing (position preserved), add new near centre, drop removed
   const incoming = new Set(graph.nodes.map(n => n.id));
   for (const n of graph.nodes) {
@@ -486,6 +492,7 @@ function render(nodes) {
 
   document.getElementById("n-count").textContent = nodes.length;
   document.getElementById("e-count").textContent = links.length;
+  applyCultureFocus();   // dim the non-active culture + other people
 }
 
 function ticked() {
@@ -496,6 +503,58 @@ function ticked() {
     .attr("x", d => (d.source.x + d.target.x)/2)
     .attr("y", d => (d.source.y + d.target.y)/2 - 3);
   gNodes.selectAll("g.node").attr("transform", d => `translate(${d.x},${d.y})`);
+}
+
+// ---- focus on the recognised person + their active culture -----------------
+// The loop reports (from face recognition) the CURRENT person + their resolved
+// active culture. We light: the robot, the current person's OWN subgraph
+// (interests → topics → their bridges), and the ACTIVE culture cluster; everything
+// else dims. So switching who's in front detaches the previous person's bridges,
+// while a second person of the SAME culture keeps the culture nodes lit and only
+// dims the previous person's own bridges. Display-only — no graph mutation.
+function computeLit() {
+  const lit = new Set();
+  const culture = activeState.culture;                 // "culture:korean" | null
+  const slug = culture ? culture.slice("culture:".length) : null;
+  const person = activeState.person || null;
+  // anchors: robot(s) always, the active culture node + its ck topics
+  nodeById.forEach((n, id) => { if (n.type === "Robot") lit.add(id); });
+  if (culture) lit.add(culture);
+  if (slug) nodeById.forEach((n, id) => {
+    if (id.startsWith("ck:" + slug + ":")) lit.add(id); });
+  // The current person's OWN subgraph only — namespaced by interest id
+  // (interest:<person>:…) so shared topics can NEVER leak the highlight to another
+  // person. So when ChatBox sees someone else, jay's node/interests/exclusive
+  // bridges all dim; a topic both share stays lit (it's the current person's too).
+  if (person && nodeById.has(person)) {
+    lit.add(person);
+    const adj = new Map();
+    const add = (a, b) => { if (!adj.has(a)) adj.set(a, []); adj.get(a).push(b); };
+    links.forEach(l => { add(l.source.id, l.target.id); add(l.target.id, l.source.id); });
+    for (const nb of (adj.get(person) || [])) {
+      const nn = nodeById.get(nb);
+      if (!nn) continue;
+      if (nn.type === "Interest" && nb.startsWith("interest:" + person + ":")) {
+        lit.add(nb);                                 // this person's own interest
+        for (const t of (adj.get(nb) || [])) {       // → its topics (about edges)
+          const tn = nodeById.get(t);
+          if (tn && tn.type === "Topic") lit.add(t);
+        }
+      } else if (nn.type === "Conversation" || nn.type === "Interaction") {
+        lit.add(nb);                                 // their live status / relationship
+      }
+    }
+  }
+  return lit;
+}
+function applyCultureFocus() {
+  // computeLit() lights the robot + the recognised person's own subgraph + their
+  // active culture. With no recognised person (nobody, or an UNKNOWN face on camera)
+  // only ChatBox stays lit and everyone else — jay included — dims.
+  const lit = computeLit();
+  gNodes.selectAll("g.node").classed("inactive", d => !lit.has(d.id));
+  gLinks.selectAll("line").classed("inactive",
+    d => !(lit.has(d.source.id) && lit.has(d.target.id)));
 }
 
 // ---- hover highlight ------------------------------------------------------

@@ -132,8 +132,10 @@ def test_prompt_block_and_ownership():
     prompt = loop._build_system_prompt("jay")
 
     assert "CULTURAL BACKGROUND" in prompt
-    assert "Cultural background hint: Korean" in prompt
-    assert "starting guess" in prompt and "not a fact about them" in prompt
+    # jay is MANUALLY assigned (not self-declared) here → the robot's knowledge-lens
+    # framing (active-culture model), never asserted as a fact about them.
+    assert "Cultural knowledge lens: Korean" in prompt
+    assert "not a fact about them" in prompt
     assert "may politely offer ONE" in prompt and "Never assert what they like" in prompt
 
     import re
@@ -206,9 +208,9 @@ def test_self_declared_vs_manual_framing():
     # self-declared → recallable fact wording, NOT the tentative hedge.
     assert "they told you themselves" in dec_block.lower(), dec_block
     assert "recall it as a fact" in dec_block.lower(), dec_block
-    assert "starting guess" not in dec_block, dec_block
+    assert "knowledge lens" not in dec_block.lower(), dec_block
     # manual → tentative hint wording, NOT the recall permission.
-    assert "starting guess" in man_block and "not a fact about them" in man_block, man_block
+    assert "knowledge lens" in man_block.lower() and "not a fact about them" in man_block, man_block
     assert "recall it as a fact" not in man_block.lower(), man_block
     # both still refuse to ASSUME preferences from the background.
     assert "ask" in dec_block.lower() and "ask" in man_block.lower()

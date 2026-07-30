@@ -81,32 +81,107 @@ _KOREAN_DEMO: List[Tuple[str, str, float, List[str]]] = [
         "Known for fast, high kicks."]),
 ]
 
+# HAND-WRITTEN DEMO SEED for Māori — placeholder data for prompt/plumbing testing,
+# NOT research claims about any group. Written respectfully and kept general.
+_MAORI_STYLE_HINT = (
+    "Be warm and relational — connection and hospitality (manaakitanga) matter, and "
+    "so does respect for elders (kaumātua). A friendly greeting like 'kia ora' is "
+    "welcome, and acknowledging where someone is from helps build trust. Value "
+    "humility over boasting, and share generously."
+)
 
-def seed_korean_demo(store: GraphStore, *, robot_id: str = _DEFAULT_ROBOT,
-                     source: str = "culture-seed") -> dict:
-    """Seed the Korean culture as `robot_id`'s prior knowledge + its demo topic
-    priors (robot-owned CultureTopic nodes). Idempotent. Does NOT touch any person
-    or any shared person-interest topic.
+_MAORI_DEMO: List[Tuple[str, str, float, List[str]]] = [
+    ("haka",          "activity", 0.55, [
+        "A ceremonial group posture dance for welcome, respect, or challenge.",
+        "Famously performed by the All Blacks before matches."]),
+    ("kapa haka",     "activity", 0.50, [
+        "Māori performing arts — group song, dance, and haka.",
+        "Regional and national competitions are a big deal."]),
+    ("waiata",        "music",    0.50, [
+        "Māori song, often sung together to support a speaker or share feeling.",
+        "Waiata frequently follow speeches on the marae."]),
+    ("marae",         "place",    0.55, [
+        "A communal meeting ground — the heart of a Māori community.",
+        "Visitors are welcomed with a pōwhiri (welcome ceremony)."]),
+    ("te reo maori",  "other",    0.55, [
+        "The Māori language; everyday words like 'kia ora' are widely used.",
+        "It's an official language of Aotearoa New Zealand."]),
+    ("hangi",         "food",     0.50, [
+        "A feast cooked in an earth oven with heated stones.",
+        "Shared kai (food) is central to hospitality."]),
+    ("kai",           "food",     0.45, [
+        "Kai means food — sharing it is a core part of manaakitanga (care).",
+        "Seafood (kaimoana) features a lot."]),
+    ("rugby",         "sport",    0.55, [
+        "Hugely popular in Aotearoa; the All Blacks are iconic.",
+        "Many communities are built around local clubs."]),
+    ("pounamu",       "other",    0.40, [
+        "Greenstone/jade — a treasure (taonga), often worn or gifted.",
+        "Different shapes carry different meanings."]),
+    ("pepeha",        "other",    0.45, [
+        "A way of introducing yourself through your mountain, river, and people.",
+        "It places you in relationship to others and the land."]),
+    ("kumara",        "food",     0.35, [
+        "Sweet potato — a staple food.",
+        "A traditional crop grown for centuries."]),
+    ("matariki",      "activity", 0.35, [
+        "The Māori new year, marked by the rising of the Matariki star cluster.",
+        "A time to remember those who've passed and plan for the year ahead."]),
+]
 
-    Returns {'culture', 'robot', 'topics': N, 'priors': N}.
-    """
-    cnode = ensure_culture(store, _CULTURE_LABEL)
+# Registry of demo cultures: label -> (topic rows, style hint).
+_CULTURES: dict = {
+    "Korean": (_KOREAN_DEMO, _KOREAN_STYLE_HINT),
+    "Maori":  (_MAORI_DEMO,  _MAORI_STYLE_HINT),
+}
+
+
+def _seed_culture(store: GraphStore, label: str, demo, style_hint: str, *,
+                  robot_id: str = _DEFAULT_ROBOT, source: str = "culture-seed") -> dict:
+    """Generic culture seeder: seed `label` as `robot_id`'s prior knowledge + its demo
+    topic priors + its static style_hint. Idempotent. Touches no person / no shared
+    person-interest topic. Returns {'culture','robot','topics','priors'}."""
+    cnode = ensure_culture(store, label)
     # Set/overwrite the static manner hint idempotently (same text every seed).
-    if cnode.style_hint != _KOREAN_STYLE_HINT:
-        cnode = cnode.model_copy(update={"style_hint": _KOREAN_STYLE_HINT})
+    if cnode.style_hint != style_hint:
+        cnode = cnode.model_copy(update={"style_hint": style_hint})
         store.upsert_node(cnode)
     if store.get_node(robot_id) is not None:
         knows_culture(store, robot_id, cnode.id, source=source)
-    for label, category, prior, facts in _KOREAN_DEMO:
-        ct = ensure_culture_topic(store, cnode.id, label, category=category,
+    for topic_label, category, prior, facts in demo:
+        ct = ensure_culture_topic(store, cnode.id, topic_label, category=category,
                                   facts=facts)
         set_culture_prior(store, cnode.id, ct.id, prior, source=source)
     return {
         "culture": cnode.id,
         "robot":   robot_id if store.get_node(robot_id) is not None else None,
-        "topics":  len(_KOREAN_DEMO),
-        "priors":  len(_KOREAN_DEMO),
+        "topics":  len(demo),
+        "priors":  len(demo),
     }
+
+
+def seed_korean_demo(store: GraphStore, *, robot_id: str = _DEFAULT_ROBOT,
+                     source: str = "culture-seed") -> dict:
+    """Seed the Korean culture demo (see _seed_culture). Idempotent."""
+    return _seed_culture(store, "Korean", _KOREAN_DEMO, _KOREAN_STYLE_HINT,
+                         robot_id=robot_id, source=source)
+
+
+def seed_maori_demo(store: GraphStore, *, robot_id: str = _DEFAULT_ROBOT,
+                    source: str = "culture-seed") -> dict:
+    """Seed the Māori culture demo (see _seed_culture). Idempotent."""
+    return _seed_culture(store, "Maori", _MAORI_DEMO, _MAORI_STYLE_HINT,
+                         robot_id=robot_id, source=source)
+
+
+def seed_all_cultures(store: GraphStore, *, robot_id: str = _DEFAULT_ROBOT,
+                      source: str = "culture-seed") -> dict:
+    """Seed EVERY demo culture the robot knows (Korean + Māori). Idempotent.
+    Returns {label: seed_info}. The robot knows all of them; which one is ACTIVE for a
+    given person is resolved at prompt time (override → person's tag → generic)."""
+    return {label: _seed_culture(store, label, demo, hint,
+                                 robot_id=robot_id, source=source)
+            for label, (demo, hint) in _CULTURES.items()}
 
 
 def assign_person_culture(store: GraphStore, person_id: str, culture_label: str,

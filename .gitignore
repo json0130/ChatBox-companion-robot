@@ -14,3 +14,6 @@ rag_indexes/
 *.faiss
 sessions.db
 kg_state.json
+# Culture selector runtime sidecars (written by the loop/viz, not source)
+active_state.json
+culture_override.json

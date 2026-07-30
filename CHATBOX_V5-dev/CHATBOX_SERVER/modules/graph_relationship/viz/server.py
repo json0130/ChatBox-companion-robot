@@ -253,7 +253,21 @@ class GraphState:
             return self._last_good_raw
 
     def read(self) -> dict:
-        return transform(self._raw())
+        g = transform(self._raw())
+        g["active"] = self.read_active_state()   # {person, culture} for viz highlight
+        return g
+
+    def read_active_state(self) -> dict:
+        """The loop's current (person, active-culture) sidecar — display-only, used to
+        highlight the active culture/person and dim the rest. {} when absent."""
+        p = os.path.join(os.path.dirname(os.path.abspath(self.kg_path)),
+                         "active_state.json")
+        try:
+            with open(p, "r", encoding="utf-8") as fh:
+                d = json.load(fh)
+            return {"person": d.get("person"), "culture": d.get("culture")}
+        except (FileNotFoundError, json.JSONDecodeError, ValueError, OSError):
+            return {}
 
     def _read_fresh(self) -> dict:
         """Read the file directly (no cache) for a read-modify-write delete."""
@@ -264,6 +278,34 @@ class GraphState:
         with open(self.kg_path, "w", encoding="utf-8") as fh:
             json.dump(raw, fh, indent=2, default=str)
         self._last_good_raw = raw
+
+    # ── culture override (testing knob shared with the webcam loop) ───────────
+    # A tiny sidecar file next to kg_state.json: the loop reads it each turn to
+    # force the ACTIVE culture ('korean'/'maori'), turn culture off ('generic'), or
+    # follow the person ('auto'). Kept OUT of kg_state.json so the two processes
+    # never fight over that file.
+
+    def _override_path(self) -> str:
+        return os.path.join(os.path.dirname(os.path.abspath(self.kg_path)),
+                            "culture_override.json")
+
+    def get_culture_override(self) -> str:
+        try:
+            with open(self._override_path(), "r", encoding="utf-8") as fh:
+                return (json.load(fh).get("active_culture") or "auto").strip().lower()
+        except (FileNotFoundError, json.JSONDecodeError, ValueError, OSError):
+            return "auto"
+
+    def set_culture_override(self, value: str) -> str:
+        v = (value or "auto").strip().lower()
+        with open(self._override_path(), "w", encoding="utf-8") as fh:
+            json.dump({"active_culture": v}, fh)
+        return v
+
+    def culture_labels(self) -> list:
+        """Labels of CultureNodes the robot knows — the choices for the selector."""
+        return sorted(n.get("label", "") for n in self._raw().get("nodes", [])
+                      if n.get("node_type") == "culture" and n.get("label"))
 
     def delete_node(self, node_id: str) -> dict:
         """Remove a node and every edge touching it. Returns removed counts."""
@@ -362,16 +404,27 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None)
                 turns = history.history(topic, person) if history else []
                 self._send(200, json.dumps({"topic": topic, "turns": turns}).encode(),
                            "application/json")
+            elif path == "/culture":
+                # Current override + the cultures the robot knows (selector choices).
+                body = json.dumps({"active": state.get_culture_override(),
+                                   "cultures": state.culture_labels()}).encode()
+                self._send(200, body, "application/json")
             else:
                 self._send(404, b"not found", "text/plain")
 
         def do_POST(self):
-            if self.path.split("?", 1)[0] != "/delete":
-                self._send(404, b"not found", "text/plain")
-                return
+            path = self.path.split("?", 1)[0]
             try:
                 length = int(self.headers.get("Content-Length", 0))
                 body = json.loads(self.rfile.read(length) or b"{}")
+                if path == "/culture":
+                    active = state.set_culture_override(str(body.get("active_culture", "auto")))
+                    self._send(200, json.dumps({"ok": True, "active": active}).encode(),
+                               "application/json")
+                    return
+                if path != "/delete":
+                    self._send(404, b"not found", "text/plain")
+                    return
                 kind = body.get("kind")
                 if kind == "node":
                     removed = state.delete_node(str(body["id"]))

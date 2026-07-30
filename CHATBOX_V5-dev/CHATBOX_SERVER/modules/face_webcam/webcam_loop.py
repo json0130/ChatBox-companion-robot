@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import os
 import queue
 import re
@@ -857,6 +858,15 @@ class WebcamKGLoop:
         # InMemoryGraphStore is single-threaded — only the main loop mutates it).
         # Items: (person_id, robot_id, topic_or_None).
         self._pending_topics: "queue.Queue" = queue.Queue()
+        # Mid-session culture auto-attach: async self-declaration detections hand
+        # (person_id, culture_label, session_id) back to the main thread to tag.
+        self._pending_culture: "queue.Queue" = queue.Queue()
+        # Last (person, culture) written to active_state.json for the viz highlight,
+        # plus a STICKY current person so brief face-reco dropouts don't make the
+        # highlight (and the dimmed culture nodes) flicker on/off.
+        self._last_active_written = None
+        self._active_person = None
+        self._active_person_t = 0.0
 
         # #2: the whole chat pipeline (RAG + prompt build + LLM reply) runs on a
         # dedicated worker thread so the display never freezes while the robot
@@ -914,6 +924,62 @@ class WebcamKGLoop:
                 print(f"  [topic]  recent → {', '.join(conv.topics)}")
                 drained = True
         if drained:
+            self._mark_kg_dirty()
+
+    # ── mid-session culture auto-attach (self-declaration only) ────────────────
+
+    # Light pre-filter: only bother the LLM when the message plausibly states an
+    # origin/background — keeps this to (rare) declaring turns, not every turn.
+    _CULTURE_CUES = (
+        "i am ", "i'm ", "im ", "from ", "my parents", "my family", "my culture",
+        "my background", "my heritage", "grew up", "born in", "descent", "korean",
+        "maori", "māori",
+    )
+
+    def _spawn_culture_detect(self, msg: str, pid: str, sid: str) -> None:
+        """If `pid` is not yet culture-tagged and the message looks like it may state
+        an origin, run self-declaration detection OFF the main thread and hand any
+        result back to the main loop to tag. Self-declaration ONLY — never inferred
+        from face/name/appearance. Once tagged, we stop checking (it persists)."""
+        if not (self.llm and self.llm.available):
+            return
+        from modules.graph_relationship.cultures import person_culture
+        if person_culture(self.store, pid) is not None:
+            return                                   # already attached — stop checking
+        low = (msg or "").lower()
+        if not any(cue in low for cue in self._CULTURE_CUES):
+            return                                   # no origin cue → skip the LLM call
+
+        def _work():
+            try:
+                from modules.culture_extraction import detect_self_declared_culture
+                label = detect_self_declared_culture([{"child": msg}], self.llm.respond)
+            except Exception:  # noqa: BLE001
+                label = None
+            if label:
+                self._pending_culture.put((pid, label, sid))
+        threading.Thread(target=_work, name="culture-detect", daemon=True).start()
+
+    def _drain_pending_culture(self) -> None:
+        """Apply completed self-declaration detections on the MAIN thread: tag the
+        person (belongs_to_culture) so the culture attaches for the REST of the
+        session. Idempotent — skips anyone already tagged (first attachment wins)."""
+        from modules.graph_relationship.cultures import person_culture
+        from modules.culture_seed import assign_person_culture
+        changed = False
+        while True:
+            try:
+                pid, label, sid = self._pending_culture.get_nowait()
+            except queue.Empty:
+                break
+            with self._store_lock:
+                if person_culture(self.store, pid) is not None:
+                    continue                          # already tagged — first wins
+                assign_person_culture(self.store, pid, label,
+                                      source=f"self-declared:{sid}")
+            print(f"      culture: {pid} self-identified as {label} → attached (this session)")
+            changed = True
+        if changed:
             self._mark_kg_dirty()
 
     # ── #3: debounced graph persistence ───────────────────────────────────────
@@ -1014,6 +1080,8 @@ class WebcamKGLoop:
                 self._mark_kg_dirty()
             # topic label is a further async step (Option B) — off the main thread.
             self._spawn_topic_detect(msg, verbal, pid, self.robot_id, row_id)
+            # mid-session culture auto-attach (only while untagged; self-declaration).
+            self._spawn_culture_detect(msg, pid, sid)
         return verbal
 
     def _adapter(self) -> PADPipelineAdapter:
@@ -1242,37 +1310,113 @@ class WebcamKGLoop:
 
         return "\n".join(lines)
 
-    def _culture_block(self, pid: str) -> str:
-        """A 'Cultural background' block for `pid`, or "" if they have no
-        BelongsToCultureEdge. Offers up to 4 highest-prior culture topics that the
-        person does NOT already have an interest in (those are in memory already).
-        Content-first, never asserts what they like.
+    def _culture_override_path(self) -> Optional[str]:
+        kg = getattr(self, "kg_path", None)
+        if not kg:
+            return None
+        return os.path.join(os.path.dirname(kg), "culture_override.json")
 
-        Two framings depending on WHERE the tag came from (provenance):
-          * self-declared (the person told us) → a recallable FACT the robot may
-            state back if asked ("you mentioned you're Korean");
-          * manual/seed-assigned → a tentative HINT, never asserted (anti-stereotyping).
-        Either way the robot must not ASSUME preferences from the background — ask."""
+    def _read_culture_override(self) -> Optional[str]:
+        """Testing knob (set by the viz culture button): force the robot's ACTIVE
+        culture to a culture name (e.g. 'korean'/'maori') or 'generic' (culture off),
+        or None/'auto' to follow the person. Read from culture_override.json (next to
+        kg_state.json) each turn so it can be flipped live; no kg_path or
+        missing/invalid file → None (auto). Never raises."""
+        path = self._culture_override_path()
+        if not path:
+            return None
+        try:
+            with open(path) as fh:
+                v = json.load(fh).get("active_culture")
+        except Exception:  # noqa: BLE001 — missing/invalid → auto
+            return None
+        if not v:
+            return None
+        v = str(v).strip().lower()
+        return None if v in ("", "auto") else v
+
+    def _active_culture_id(self, pid: Optional[str]) -> Optional[str]:
+        """Resolve the ACTIVE culture id for this turn (the culture that shapes the
+        prompt): override → the current person's belongs_to_culture → generic (None).
+        The override 'generic' forces culture OFF (A/B control); a culture name forces
+        that culture; otherwise the person's own tag drives it (auto-attach / detach as
+        the recognised person changes)."""
+        from modules.graph_relationship.cultures import culture_id, person_culture
+        ov = self._read_culture_override()
+        if ov in ("generic", "none"):
+            return None
+        if ov:
+            return culture_id(ov)          # forced culture (testing override)
+        return person_culture(self.store, pid) if pid else None
+
+    _ACTIVE_GRACE = 5.0   # seconds to hold the last person through a face-reco dropout
+
+    def _write_active_state(self, pid: Optional[str], present: bool = False) -> None:
+        """Write the CURRENT person + resolved active culture to a sidecar so the viz
+        can HIGHLIGHT the active culture/person and dim the rest (display only — no
+        graph mutation).
+
+        Sticky, but only through a TRUE dropout: if a recognised person is seen we
+        latch them; if a DIFFERENT/unknown face is on camera (`present` but pid=None)
+        we drop the latched person IMMEDIATELY (so the viz shows ChatBox only, not the
+        previous person); if NO face is present we keep the last person for
+        _ACTIVE_GRACE seconds so a missed frame doesn't flicker. Debounced + atomic."""
+        kg = getattr(self, "kg_path", None)
+        if not kg:
+            return
+        now = time.time()
+        if pid is not None:
+            self._active_person = pid
+            self._active_person_t = now
+        elif present:
+            self._active_person = None          # someone else is here → drop at once
+        elif (self._active_person is not None
+              and now - self._active_person_t > self._ACTIVE_GRACE):
+            self._active_person = None          # no face for a while → clear
+        eff = self._active_person
+        with self._store_lock:
+            cid = self._active_culture_id(eff)
+        state = (eff, cid)
+        if state == self._last_active_written:
+            return
+        self._last_active_written = state
+        try:
+            path = os.path.join(os.path.dirname(kg), "active_state.json")
+            tmp = path + ".tmp"
+            with open(tmp, "w") as fh:
+                json.dump({"person": eff, "culture": cid}, fh)
+            os.replace(tmp, path)               # atomic swap — no partial reads
+        except Exception:  # noqa: BLE001 — display-only, never fail the loop
+            pass
+
+    def _culture_block(self, pid: str) -> str:
+        """The CULTURAL BACKGROUND content block (topic offers) for the ACTIVE culture,
+        or "" when generic. The active culture = override → person's tag → generic
+        (see _active_culture_id). Content-first; never asserts what they like.
+
+        Framing: recall-as-fact ONLY when the active culture matches what the person
+        actually SELF-DECLARED; otherwise it's the robot's knowledge lens (a manual tag
+        or the testing override) — a starting point, never a fact about them."""
         from modules.graph_relationship.cultures import (
             person_culture, person_culture_self_declared,
         )
         from modules.preference_model import rank_suggestions
-        cid = person_culture(self.store, pid)
+        cid = self._active_culture_id(pid)
         if not cid:
             return ""
         cnode = self.store.get_node(cid)
         if cnode is None:
             return ""
-        self_declared = person_culture_self_declared(self.store, pid)
+        # recall-as-fact only if the ACTIVE culture is the one THEY told us about.
+        self_declared = (cid == person_culture(self.store, pid)
+                         and person_culture_self_declared(self.store, pid))
 
         # Bayesian preference overlay (Command B): rank what to bring up by
-        # posterior (culture priors + propagation from what they already like over
-        # related_topic links). rank_suggestions already returns UNOBSERVED topics
-        # only, so observed interests are excluded automatically. Read-only.
-        # Each offer carries ONE cultural fact (from the CultureTopicNode) so the
-        # robot has something real to say, not just a bare label.
+        # posterior (ACTIVE culture priors + propagation from what they already like
+        # over related_topic links). rank_suggestions returns UNOBSERVED topics only.
+        # Each offer carries ONE cultural fact so the robot has something real to say.
         offers: list[tuple[str, str]] = []   # (label, one_fact_or_"")
-        for node_id, _post in rank_suggestions(self.store, pid, k=4):
+        for node_id, _post in rank_suggestions(self.store, pid, k=4, culture_id=cid):
             node = self.store.get_node(node_id)
             if node is None:
                 continue
@@ -1287,8 +1431,9 @@ class WebcamKGLoop:
                 "what they like from it, though — ask.")
         else:
             header = (
-                f"Cultural background hint: {cnode.label}. This is a starting guess "
-                "about their background, not a fact about them as a person.")
+                f"Cultural knowledge lens: {cnode.label} — background knowledge you can "
+                "draw on for this conversation. A starting point, not a fact about them "
+                "as a person; ask, don't assume.")
         lines = ["━━━ CULTURAL BACKGROUND ━━━", header]
         if offers:
             offer_lines = "\n".join(
@@ -1405,8 +1550,9 @@ class WebcamKGLoop:
         # block. Only when the person is tagged to a culture with a non-empty hint;
         # identical text regardless of tier/affect/situation (no dynamics — Approach 2).
         if pid:
-            from modules.graph_relationship.cultures import person_culture_style_hint
-            _hint = person_culture_style_hint(self.store, pid)
+            _cid = self._active_culture_id(pid)   # override → person's tag → generic
+            _node = self.store.get_node(_cid) if _cid else None
+            _hint = getattr(_node, "style_hint", "") if _node else ""
             if _hint:
                 how_to_reply += (
                     "\n• Cultural manner (soft guidance, secondary to answering their "
@@ -1615,6 +1761,10 @@ class WebcamKGLoop:
             target=self._chat_worker_loop, name="chat-worker", daemon=True)
         chat_thread.start()
 
+        # Start DEACTIVATED: no active person/culture until a face is recognised, so
+        # the viz doesn't show a stale/phantom culture as active at startup.
+        self._write_active_state(None)
+
         # ── KG state — updated every tick, survives between ticks ─────────────
         # person_id -> {tier, pad_state, descriptors, rapport, trust}
         _kg_state: dict[str, dict] = {}
@@ -1673,6 +1823,10 @@ class WebcamKGLoop:
                         last_verbal   = _verbal
                         chat_expire_t = time.time() + 45.0
                 self._drain_pending_topics()
+                self._drain_pending_culture()   # mid-session culture auto-attach
+                # viz highlight (debounced). `present` = a face (even unknown) is on
+                # camera, so an unrecognised person drops the highlight to ChatBox only.
+                self._write_active_state(last_person_id, present=bool(last_all_detections))
                 # #3: debounced persistence — writes at most once/second when dirty.
                 self._flush_kg()
 
@@ -2042,19 +2196,21 @@ def run_consolidate_mode(kg_path: str, embed_model: str,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_seed_culture_demo(kg_path: str, robot_id: str = _DEFAULT_ROBOT) -> None:
-    """Seed the Korean culture DEMO layer as `robot_id`'s prior knowledge (dummy
+    """Seed ALL demo cultures (Korean + Māori) as `robot_id`'s prior knowledge (dummy
     priors, robot-owned culture-topic nodes) into an existing KG. Idempotent; does
-    NOT touch any person or any shared person-interest topic."""
+    NOT touch any person or any shared person-interest topic. Which culture is ACTIVE
+    for a person is resolved at prompt time (override → person's tag → generic)."""
     store = InMemoryGraphStore()
     if not (os.path.exists(kg_path) and store.load(kg_path)):
         print(f"[seed-culture] no KG at '{kg_path}' — starting fresh")
-    from modules.culture_seed import seed_korean_demo
-    info = seed_korean_demo(store, robot_id=robot_id)
+    from modules.culture_seed import seed_all_cultures
+    infos = seed_all_cultures(store, robot_id=robot_id)
     store.save(kg_path)
-    print(f"[seed-culture] culture={info['culture']}  robot={info['robot'] or '—'}  "
-          f"topics={info['topics']}  priors={info['priors']}")
+    for label, info in infos.items():
+        print(f"[seed-culture] culture={info['culture']}  robot={info['robot'] or '—'}  "
+              f"topics={info['topics']}  priors={info['priors']}")
     print(f"[seed-culture] saved → {kg_path}")
-    print("[seed-culture] tag someone with: --assign-culture <person> Korean")
+    print("[seed-culture] tag someone with: --assign-culture <person> Korean|Maori")
 
 
 def run_assign_culture(kg_path: str, person_id: str, culture_label: str) -> None:

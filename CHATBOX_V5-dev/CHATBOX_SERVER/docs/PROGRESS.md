@@ -6,6 +6,49 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## feat: multi-culture selector — Māori added + active-culture (auto-attach) + viz toggle  *(branch `feature/cultural-awareness`)*
+
+**Goal (research/testing):** let the robot hold MULTIPLE cultures (Korean + Māori) and adapt to whoever it's
+talking to, with a viz toggle to A/B "robot has cultural knowledge" vs "generic" — to see if cultural
+grounding improves UX.
+
+**What was built:**
+- **Māori seed** (`culture_seed`): refactored the Korean seeder into a generic `_seed_culture`; added
+  `_MAORI_DEMO` (12 topics: haka, marae, waiata, te reo, hangi, rugby, pepeha…) + `_MAORI_STYLE_HINT`
+  (manaakitanga/whanaungatanga, respect for kaumātua, humility). `seed_maori_demo` + `seed_all_cultures`;
+  `--mode seed-culture-demo` now seeds BOTH. Demo data, not research claims. The person-driven culture path
+  was already generic, so a Māori-tagged person "just works" once seeded.
+- **Active-culture resolver** (`webcam_loop._active_culture_id`): the culture that shapes the prompt =
+  **override → the current person's `belongs_to_culture` → generic**. So the active lens auto-attaches to /
+  detaches from whoever is recognised, and the persistent per-person tag never flips. `rank_suggestions`
+  gained an optional `culture_id`; `_culture_block` + the style-hint injection now use the ACTIVE culture.
+  Framing: recall-as-fact only when the active culture is what the person SELF-DECLARED, else it reads as the
+  robot's "knowledge lens" (a starting point, never a fact about them).
+- **Mid-session auto-attach**: on self-declaration ("I'm Korean"), the culture attaches IMMEDIATELY (async
+  detection off the main thread, guarded by a cheap origin-cue filter + "only while untagged"), so it shapes
+  the rest of that session. Self-declaration/manual ONLY — never inferred from face/name/appearance.
+- **Override backend (A/B, dormant)**: `GET/POST /culture` on the viz server writes a `culture_override.json`
+  sidecar (kept OUT of kg_state.json); the loop reads it each turn. `auto` (person-driven) · `generic`
+  (culture off, the A/B control) · a culture name (force Korean/Māori). The UI selector button was REMOVED —
+  culture is now fully automatic (driven by the recognised person) — but the endpoint/file remain so A/B is
+  still possible via curl/file without cluttering the page.
+- **Viz active-highlight (display-only attach/detach, face-driven)**: the loop writes the current
+  (face-recognised) person + resolved active culture to `active_state.json`; the viz server folds it into
+  `/graph.json` as `active`. The page lights the robot + that person's OWN subgraph (BFS through their
+  interests → topics → bridges) + the ACTIVE culture cluster, and dims everything else (`.inactive` CSS). So
+  switching who's in front detaches the previous person's bridges; a SECOND person of the same culture keeps
+  the culture nodes lit and only dims the previous person's own bridges (shared topics stay lit). Purely
+  visual — `knows_culture` and graph data are never mutated (seeded prior knowledge stays true).
+
+**Verified — `test_multi_culture.py` 5/5:** both cultures seeded + idempotent; person-driven lens+manner per
+person with no cross-leak; resolver auto→person / forced / generic-off + viz labels; mid-session attach
+(cue+untagged→attach, tagged→skip, no-cue→skip); viz round-trip flips the loop's prompt. Existing suites
+green: test_style_hint, test_soft_evidence, test_cross_namespace, test_affinity, test_preference_model,
+test_culture_seed (headers updated to the knowledge-lens wording), test_culture_extraction, +
+graph_relationship pytest (47). `graph_relationship/` purity unchanged.
+
+---
+
 ## feat: thin per-culture static style hint — Approach 1, STEP 4 (final)  *(branch `feature/cultural-awareness`)*
 
 **What:** the "how to talk" half of cultural adaptation — a single short, STATIC manner paragraph per culture,

@@ -102,6 +102,19 @@ class SessionStore:
             )
             self._conn.commit()
 
+    def rename_person(self, old_person_id: str, new_person_id: str) -> int:
+        """Re-key a person's transcript rows (e.g. 'guest_3' -> 'jay' once they tell
+        us their name). Returns the number of turns re-pointed."""
+        if old_person_id == new_person_id:
+            return 0
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE turns SET person_id = ? WHERE person_id = ?",
+                (new_person_id, old_person_id),
+            )
+            self._conn.commit()
+            return cur.rowcount
+
     def mark_extracted(self, person_id: str) -> int:
         """Mark all of a person's un-extracted turns as extracted. Returns count."""
         with self._lock:

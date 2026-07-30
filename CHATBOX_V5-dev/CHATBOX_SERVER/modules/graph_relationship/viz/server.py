@@ -446,9 +446,9 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None)
 
 def main():
     ap = argparse.ArgumentParser(description="Live browser visualizer for the KG.")
-    ap.add_argument("--kg-path", default="kg_state.json",
-                    help="Path to kg_state.json written by InMemoryGraphStore.save "
-                         "(default: kg_state.json in the current directory)")
+    ap.add_argument("--kg-path", default="kg_culture.json",
+                    help="Path to the KG JSON written by InMemoryGraphStore.save "
+                         "(default: kg_culture.json — the culture branch's isolated KG)")
     ap.add_argument("--port", type=int, default=8765, help="HTTP port (default 8765)")
     ap.add_argument("--host", default="127.0.0.1", help="Bind host (default 127.0.0.1)")
     ap.add_argument("--sessions-db", default="sessions.db",

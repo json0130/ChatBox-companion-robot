@@ -95,7 +95,10 @@ except ImportError:
 # ─────────────────────────────────────────────────────────────────────────────
 
 _DEFAULT_FACES   = "faces.npz"
-_DEFAULT_KG      = "kg_state.json"
+# Isolated KG file for the culture branch — kept separate from the shared
+# kg_state.json so migration/consolidation tools on OTHER branches can't clobber
+# the culture graph. Override with --kg.
+_DEFAULT_KG      = "kg_culture.json"
 _DEFAULT_ROBOT   = "chatbox"
 _DEFAULT_TICK    = 1.0
 _DEFAULT_THRESH  = 0.75
@@ -186,6 +189,42 @@ def _send_esp32(expression: str, host: str, port: int = 8888,
         print(f"[ESP32] → {expression!r}")
     except OSError as exc:
         print(f"[ESP32] send failed ({host}:{port}): {exc}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# First-impression: name learning (auto-enrol unknown faces → learn their name)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_NAME_RE = re.compile(
+    r"\b(?:my name is|my name's|i am|i'm|im|call me|this is|name is|name's|names)"
+    r"\s+([A-Za-z][A-Za-z'\-]{1,19})",
+    re.IGNORECASE,
+)
+# Words that follow the trigger phrases but are NOT names — avoids "I'm fine" /
+# "I am not sure" being read as the name "fine" / "not".
+_NAME_STOPWORDS = frozenset({
+    "not", "sorry", "fine", "good", "great", "okay", "ok", "here", "just",
+    "really", "so", "very", "doing", "the", "a", "an", "sure", "happy", "sad",
+    "tired", "hungry", "back", "done", "trying", "going", "feeling", "glad",
+    "curious", "bored", "excited", "confused", "afraid", "scared", "korean", "maori",
+})
+
+
+def _extract_name(text: Optional[str]) -> Optional[str]:
+    """Pull a first name out of a self-introduction, or None. Rejects obvious
+    non-names (feelings/filler) via a small stoplist."""
+    m = _NAME_RE.search(text or "")
+    if not m:
+        return None
+    raw = m.group(1).strip("-'")
+    if len(raw) < 2 or raw.lower() in _NAME_STOPWORDS:
+        return None
+    return raw
+
+
+def _slug_name(name: str) -> str:
+    """Lowercase single-token id from a captured name (faces keyed 'jay', 'alice')."""
+    return re.sub(r"[^a-z0-9]", "", name.lower())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -867,6 +906,8 @@ class WebcamKGLoop:
         self._last_active_written = None
         self._active_person = None
         self._active_person_t = 0.0
+        # First-impression: sequence for provisional 'guest_N' ids (unknown faces).
+        self._guest_seq = 0
 
         # #2: the whole chat pipeline (RAG + prompt build + LLM reply) runs on a
         # dedicated worker thread so the display never freezes while the robot
@@ -1178,6 +1219,52 @@ class WebcamKGLoop:
                                 mood=valence, emotion=emotion, create=False,
                                 source="live-mood")
         return changed
+
+    # ── First impression: auto-enrol an unknown face + learn their name ────────
+
+    def _next_guest_id(self) -> str:
+        """Next free provisional id ('guest_1', 'guest_2', …) not already in the face
+        DB — so re-runs don't collide with earlier guests."""
+        known = set(self.face_id.known_people())
+        self._guest_seq += 1
+        while f"guest_{self._guest_seq}" in known:
+            self._guest_seq += 1
+        return f"guest_{self._guest_seq}"
+
+    def _auto_enroll(self, frame: np.ndarray) -> Optional[str]:
+        """Enrol the face in `frame` under a fresh provisional id and persist the face
+        DB. Returns the new id, or None if no face was captured. A guest_N is a normal
+        PersonNode, so the full culture/interest pipeline runs on them from here."""
+        gid = self._next_guest_id()
+        if not self.face_id.enroll(gid, frame):
+            self._guest_seq -= 1          # release the id we reserved
+            return None
+        self.face_id.save(self.faces_path)
+        print(f"[FirstImpression] new face → saved as '{gid}'")
+        return gid
+
+    def _learn_name(self, old_id: str, new_id: str, display: str) -> bool:
+        """Re-key a provisional guest to their real name across the face DB, the graph,
+        the transcript store and this run's in-memory maps. Graph writes are held under
+        the store lock (the chat worker may be reading concurrently)."""
+        if not self.face_id.rename(old_id, new_id):
+            return False
+        self.face_id.save(self.faces_path)
+        try:
+            from modules.graph_relationship.rename import rename_person
+            with self._store_lock:
+                rename_person(self.store, old_id, new_id, self.robot_id,
+                              display_name=display)
+        except Exception as exc:  # noqa: BLE001 — never crash the loop on rename
+            print(f"[FirstImpression] graph rename failed: {exc}")
+        self._session_store.rename_person(old_id, new_id)
+        # Re-key this run's in-memory per-person maps.
+        for d in (self._run_sessions, self._last_mood, self._chat_history):
+            if old_id in d:
+                d[new_id] = d.pop(old_id)
+        self._mark_kg_dirty()
+        print(f"[FirstImpression] learned name: '{old_id}' → '{new_id}'")
+        return True
 
     def _detect_topic(self, user_msg: str, reply: str = "") -> Optional[str]:
         """Best-effort 1–3 word label of what's being discussed, via the LLM.
@@ -2027,6 +2114,27 @@ class WebcamKGLoop:
                                 last_user_msg  = msg
                                 chat_expire_t  = time.time() + 45.0
                                 print(f"\n  [you]  \"{msg}\"")
+
+                                # ── First impression: meet a stranger ──────────
+                                # (1) Unknown face in view → auto-enrol as guest_N so
+                                #     THIS turn is attributed to them and the full
+                                #     culture/interest pipeline builds their profile.
+                                if last_person_id is None and last_box is not None:
+                                    gid = self._auto_enroll(frame)
+                                    if gid:
+                                        last_person_id = gid
+                                        last_tier      = "visitor"
+                                # (2) Did they introduce themselves? Re-key the
+                                #     provisional guest id to their real name.
+                                if last_person_id and last_person_id.startswith("guest_"):
+                                    nm   = _extract_name(msg)
+                                    slug = _slug_name(nm) if nm else ""
+                                    if slug and slug != last_person_id and \
+                                            self._learn_name(last_person_id, slug, nm):
+                                        if last_person_id in _kg_state:
+                                            _kg_state[slug] = _kg_state.pop(last_person_id)
+                                        last_person_id = slug
+
                                 if self.llm and self.llm.available:
                                     # Dispatch the whole chat turn (RAG + prompt build +
                                     # LLM reply) to the chat worker so the display never

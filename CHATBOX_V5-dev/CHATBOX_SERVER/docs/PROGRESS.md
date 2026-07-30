@@ -6,6 +6,46 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## feat: first-impression integration — auto-enrol strangers into the culture pipeline  *(branch `feature/cultural-awareness`)*
+
+**Goal (user):** port the `first-impression` branch's "meet a stranger" pipeline into the culture branch, but
+as a HYBRID: an unknown face is auto-enrolled as a new person, and then the FULL culture/interest pipeline
+(auto-attach, extraction, viz highlight) runs on them — not the first-impression branch's stripped
+fast-node-only mode.
+
+**Why a manual port, not a merge:** a `git merge first-impression` is unworkable — ~130 rename/delete
+conflicts from committed runtime data (rag_indexes/faiss, sessions.db, faces.npz) + a real `webcam_loop.py`
+conflict (both branches rewrote it). Culture already had the infra it needed (`identify_all`, `enroll`,
+4-value VA emotion), so only the auto-enrol + name-learning was ported. The `first-impression` branch is left
+intact for further research.
+
+**Ported (new, no conflicts):**
+- `graph_relationship/rename.py::rename_person` — pure graph surgery: re-key `guest_N` → real name across the
+  person node + `interaction:`/`conversation:` ids, re-pointing every incident edge (rapport/trust/mood/
+  culture preserved). `SessionStore.rename_person` (SQLite rows). `FaceIdentifier.rename` (move / weighted-merge
+  the enrolled embedding).
+- `webcam_loop`: module-level `_extract_name` (regex self-intro, stoplist rejects feelings/filler + culture
+  words) + `_slug_name`; methods `_next_guest_id`, `_auto_enroll` (enrol unknown face as `guest_N` + save
+  faces.npz), `_learn_name` (re-key across face DB + graph + transcripts + in-memory maps, under the store
+  lock). Wired into the chat Enter handler: unknown face in view → auto-enrol as `guest_N` (this turn is
+  attributed to them); if they introduce themselves → re-key to the real name — all BEFORE the reply is
+  dispatched, so the prompt + KG writes use the right id.
+- A `guest_N` is a normal `PersonNode`, so culture auto-attach, interest extraction, cross-namespace bridges,
+  and the face-driven viz highlight all work on them unchanged.
+
+**Verified — `test_first_impression.py` 6/6:** name extraction; graph rename_person (ids re-keyed, culture +
+relationship edges follow, no dangling guest id, counts stable); session rename; face rename (move + merge);
+`_learn_name` re-keys all four stores; a guest gets the full culture/interest prompt. Full culture regression
+green (multi-culture, style-hint, soft-evidence, cross-namespace, affinity, preference, culture-seed/extract,
++ graph_relationship pytest 47).
+
+**Deferred (inherited from first-impression):** if topics are extracted (via `X`) BEFORE the guest gives their
+name, `interest:guest_N:*` node ids aren't re-keyed (rename_person re-keys person/interaction/conversation
+only). The normal flow (name learned during chat, extraction at session end) attaches to the real name, so
+this only bites an unusual ordering. Fix would extend rename_person to also re-key interest ids.
+
+---
+
 ## feat: multi-culture selector — Māori added + active-culture (auto-attach) + viz toggle  *(branch `feature/cultural-awareness`)*
 
 **Goal (research/testing):** let the robot hold MULTIPLE cultures (Korean + Māori) and adapt to whoever it's

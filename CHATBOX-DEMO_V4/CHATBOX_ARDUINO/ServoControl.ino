@@ -34,6 +34,11 @@
 #define RELid_Port 12
 #define LELid_Port 13
 
+// Face-tracking pan servo pin
+// Deliberately outside the expression-servo set above, so the head can pan
+// without touching a gesture servo.
+#define Pan_Port 19
+
 // Servo offset constants
 #define HAND_OFFSET_DOWN -40
 #define HAND_OFFSET_UP 60
@@ -48,15 +53,40 @@
 #define EARS_MIDDLE 130
 #define EARS_DOWN 120
 
+// Pan servo constants
+#define PAN_CENTER 90          // angle that points straight ahead
+#define PAN_MIN 20             // travel limits (degrees)
+#define PAN_MAX 160
+#define PAN_KP 0.03f           // degrees of angle per pixel of error
+#define PAN_DEADBAND 30        // ignore small errors (matches the Jetson side)
+#define PAN_MAX_STEP 4.0f      // clamp per-command target change (deg), no jerk
+#define PAN_SMOOTH_STEP 1      // deg per ease tick when approaching the target
+#define PAN_UPDATE_MS 15       // ms between ease ticks
+// Cap on one serial line. Must clear the longest expression name
+// ("hands_wave_both" / "hands_only_wave", 15 chars) or Serial Monitor commands
+// would be silently truncated into invalid ones.
+#define PAN_MAX_INPUT_LEN 24
+
 // NUM_VALID_EXPRESSIONS now defined in main file
 
 // ==================== Servo Objects ==================== //
 Servo RShoulder, LShoulder, RHand, LHand, RNeck, LNeck;
 Servo Ears, RBrow, LBrow, RELid, LELid;
+Servo panServo;
 
 // Servo position variables
 uint8_t RShoulderDest, LShoulderDest, RHandDest, LHandDest, RNeckDest, LNeckDest;
 uint8_t EarsDest, RBrowDest, LBrowDest, RELidDest, LELidDest;
+
+// Pan servo state — driven by the Jetson rather than by a move set, so it is
+// written straight to the servo instead of going through updateServos().
+// panTarget is where we want to be; panAngle eases toward it a degree at a time
+// so the head glides instead of snapping on every command.
+float panAngle = PAN_CENTER;
+float panTarget = PAN_CENTER;
+String panInput = "";
+unsigned long lastPanMsg = 0;
+unsigned long lastPanEase = 0;
 
 // Expression execution variables
 int8_t count = 0;
@@ -367,6 +397,137 @@ void servoInit() {
   updateServos();
   
   Serial.println("Servos initialized successfully!");
+}
+
+// ========================================== panServoInit ========================================== //
+// The face-tracking pan servo. Kept separate from servoInit() because it is not
+// part of any expression: the Jetson drives it continuously to keep the tracked
+// face centred, while the servos above only move as part of a move set.
+void panServoInit() {
+  // attach() returns the LEDC channel, or 0 if none was free. Eleven expression
+  // servos are already attached by servoInit(), so a silent failure here is a
+  // real possibility — check it rather than reporting "ready" regardless.
+  int ch = panServo.attach(Pan_Port, 500, 2400);
+  if (ch == 0) {
+    Serial.println("[FaceTracking] ERROR: pan servo attach FAILED on D" +
+                   String(Pan_Port) + " — no free PWM channel");
+    return;
+  }
+  Serial.println("[FaceTracking] pan servo attached on channel " + String(ch));
+  panServo.write(PAN_CENTER);
+  panAngle = PAN_CENTER;
+  panTarget = PAN_CENTER;
+  lastPanMsg = millis();
+  lastPanEase = millis();
+  Serial.println("[FaceTracking] pan servo ready on D" + String(Pan_Port) +
+                 " — streaming pixel error @ 115200");
+}
+
+// ========================================== isIntegerLine ========================================== //
+// True only for a plain integer, optionally signed — that is what the Jetson
+// streams. Everything else is treated as an expression name. Note String::toInt()
+// cannot be used for this test: it returns 0 for non-numeric input, which is
+// indistinguishable from a real "0" keep-alive.
+bool isIntegerLine(const String &s) {
+  if (s.length() == 0) return false;
+  unsigned int start = (s[0] == '-' || s[0] == '+') ? 1 : 0;
+  if (start >= s.length()) return false;          // a lone sign is not a number
+  for (unsigned int i = start; i < s.length(); i++) {
+    if (!isDigit(s[i])) return false;
+  }
+  return true;
+}
+
+// ========================================== updatePanTracking ========================================== //
+// Reads integer pixel-error lines from USB Serial and moves the pan servo.
+// The Jetson streams one integer per line: the horizontal pixel error
+// (cx - centre) of the tracked person.
+//    error > 0  -> face is RIGHT of centre -> turn head right
+//    error < 0  -> face is LEFT  of centre -> turn head left
+//    error == 0 -> keep-alive: subject seen and centred, hold this angle
+// Because the camera moves with the head this is a closed feedback loop: each
+// error nudges the angle a little, driving the error toward zero.
+//
+// Non-blocking: parses only what is already buffered.
+//
+// Serial carries two kinds of line. A plain integer is a pixel error from the
+// Jetson and drives the pan servo. Anything else is taken as an expression name
+// and handed to loop() via pendingCommand (declared in the main file), so the
+// robot can be driven from the Serial Monitor with no Jetson attached. Without
+// that split, typing "default" here would be read as toInt() == 0 and silently
+// swallowed as a keep-alive.
+//
+// Only the NEWEST reading is applied. A gesture blocks loop() for seconds
+// (updateServos() alone costs ~100ms per step), so by the time we get back here
+// the RX buffer can hold a backlog of stale errors. Applying them all would
+// accumulate — 'panAngle -= error * PAN_KP' fifty times over — and slam the head
+// into a travel limit. In a closed feedback loop an old position is worthless
+// anyway: the only reading worth acting on is the last one.
+void updatePanTracking() {
+  bool haveError = false;
+  int error = 0;
+
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\n' || c == '\r') {
+      panInput.trim();
+      if (panInput.length() > 0) {
+        if (isIntegerLine(panInput)) {
+          error = panInput.toInt();
+          haveError = true;
+        } else if (pendingCommand.length() == 0) {
+          // Keep the first command until loop() consumes it, so a burst of
+          // typing cannot overwrite one that is already queued.
+          pendingCommand = panInput;
+        }
+      }
+      panInput = "";
+    } else if (panInput.length() < PAN_MAX_INPUT_LEN) {
+      panInput += c;
+    }
+    // A partial line stays in panInput and is finished on a later call.
+  }
+
+  if (haveError) {
+    // Any complete line counts as contact, including the Jetson's "0"
+    // keep-alive, which means "subject seen and centred — hold this angle".
+    lastPanMsg = millis();
+    if (abs(error) > PAN_DEADBAND) {
+      // error > 0 (face right) -> turn head right -> DECREASE angle.
+      // If the head turns the wrong way, flip to '+= error * PAN_KP'.
+      float step = -PAN_KP * error;
+      // Clamp the step. YOLO only manages a few frames per second, so a large
+      // error would otherwise command a ~10 degree jump in one go — the head
+      // overshoots, the error flips sign, and the loop oscillates instead of
+      // settling. Small steps let the feedback loop converge.
+      if (step >  PAN_MAX_STEP) step =  PAN_MAX_STEP;
+      if (step < -PAN_MAX_STEP) step = -PAN_MAX_STEP;
+      panTarget = constrain(panTarget + step, PAN_MIN, PAN_MAX);
+    }
+  }
+
+  // Ease the servo toward the target at a fixed rate, independent of how often
+  // the Jetson sends. This is what makes the motion smooth rather than a series
+  // of jerks at the detection frame rate.
+  unsigned long nowMs = millis();
+  if (nowMs - lastPanEase >= PAN_UPDATE_MS) {
+    lastPanEase = nowMs;
+    if (panAngle < panTarget) {
+      panAngle += PAN_SMOOTH_STEP;
+      if (panAngle > panTarget) panAngle = panTarget;
+    } else if (panAngle > panTarget) {
+      panAngle -= PAN_SMOOTH_STEP;
+      if (panAngle < panTarget) panAngle = panTarget;
+    }
+    panServo.write((int)(panAngle + 0.5f));
+  }
+
+  // No data for 2s: hold the current angle (uncomment to recentre instead).
+  // Safe to enable now that the Jetson keep-alives make silence unambiguous —
+  // see face_tracking_output.py.
+  if (millis() - lastPanMsg > 2000) {
+    // panServo.write(PAN_CENTER); panAngle = PAN_CENTER;
+  }
 }
 
 // ========================================== setHand ========================================== //

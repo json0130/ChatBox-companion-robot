@@ -59,8 +59,15 @@
         "deadband": 30,
         "send_interval": 0.05,
         "keepalive_interval": 1.0,
+        "center_tolerance": 30,
+        "center_settle": 0.3,
+        "center_timeout": 3.0,
+        "center_lost_grace": 1.5,
         "model_path": "yolov8n.pt",
-        "verbose_commands": false
+        "yolo_imgsz": 320,
+        "yolo_half": false,
+        "verbose_commands": false,
+        "show_preview": false
     },
     "capabilities": {
         "navigation": false,

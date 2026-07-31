@@ -1,28 +1,46 @@
 """
 face_tracking_output.py — state-driven head tracking as an OutputModule.
 
-Ports the standalone CHATBOX_CLIENT/face_tracker_esp32.py into the client's
-module framework, with one deliberate change: instead of a free-running thread
-that fights with speech and gestures, tracking is an explicit STATE machine
-advanced by tick() from the client's main loop.
+The Jetson half of face tracking. The ESP32 half lives in the pan block of
+CHATBOX_ARDUINO/ChatBoxPlus_ESP32.ino (pan servo on D19); the firmware stays a
+dumb proportional loop and all the coordination happens here.
 
-    TRACKING  — idle. Detect the person and stream the horizontal pixel error
-                to the ESP32 so it keeps the face centred.
-    HOLDING   — a reply is being spoken or a gesture is playing. Do not move.
-                A '0' keep-alive is still sent: the firmware treats 0 as
-                "inside the deadband" (holds its angle) while the keep-alive
-                stops its LOST_TIMEOUT from drifting the head back to centre.
+Tracking is an explicit STATE machine advanced by tick() from the client's main
+loop, rather than a free-running thread that fights with speech and gestures:
+
+    TRACKING   — idle. Detect the person and stream the horizontal pixel error
+                 so the firmware keeps the face centred.
+    CENTERING  — a reply is about to be spoken. Same motion as TRACKING, but we
+                 also measure when the subject has *settled* inside the deadband
+                 and signal that to the waiting caller.
+    HOLDING    — the reply is being spoken or a gesture is playing. Do not move.
 
 Handshake used by robot.py when a response arrives:
 
-    request_hold()             # ask the tracker to stop
-    wait_until_held(timeout)   # block until it has actually stopped
+    center_and_hold()          # centre on the person, then freeze
     ... speak + gesture ...
     release_hold()             # tracking resumes
 
-All coordination lives here on the Jetson — the ESP32 firmware is unchanged and
-stays a dumb proportional servo loop. Holds are re-entrant, so overlapping
-speech and gestures cannot resume tracking early.
+Holds are re-entrant, so overlapping speech and gestures cannot resume tracking
+early. A hold always outranks a pending centring request.
+
+The '0' keep-alive
+------------------
+Whenever a subject is visible but inside the deadband we send '0' rather than
+going silent. The firmware ignores it (abs(0) > PAN_DEADBAND is false, so no
+motion — it only refreshes lastPanMsg), but it gives silence on the wire exactly
+one meaning:
+
+    "0"      -> I can see them and they are centred; hold your angle.
+    silence  -> nobody is in frame.
+
+Without that, a person standing perfectly centred produces no traffic at all,
+which is indistinguishable from an empty room. That ambiguity is why the
+recentre-when-idle homing in ChatBoxPlus_ESP32.ino is currently commented out:
+it could not tell success from failure and would drag the head back to 90°
+while someone was standing right in front of it. Homing stays disabled — but
+with these keep-alives it is now safe to re-enable if a head ever gets stranded
+facing a wall after someone walks off.
 """
 
 import glob
@@ -30,7 +48,7 @@ import logging
 import threading
 import time
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from client import OutputModule
 
@@ -60,8 +78,9 @@ except ImportError:
 
 
 class TrackingState(Enum):
-    TRACKING = "tracking"   # free to move the head
-    HOLDING = "holding"     # frozen while speech / gestures play
+    TRACKING = "tracking"     # free to move the head
+    CENTERING = "centering"   # moving, and watching for the subject to settle
+    HOLDING = "holding"       # frozen while speech / gestures play
 
 
 class FaceTrackingOutputModule(OutputModule):
@@ -72,7 +91,7 @@ class FaceTrackingOutputModule(OutputModule):
         super().__init__(name, config)
         c = self.config
 
-        # Frame / control tuning (defaults match face_tracker_esp32.py)
+        # Frame / control tuning
         self.width = c.get("width", 640)
         self.height = c.get("height", 480)
         self.baud = c.get("baud", 115200)
@@ -80,12 +99,27 @@ class FaceTrackingOutputModule(OutputModule):
         self.send_interval = c.get("send_interval", 0.05)   # 20 Hz max
         self.keepalive_interval = c.get("keepalive_interval", 1.0)
 
+        # Centring — how "centred enough to start talking" is decided.
+        # center_tolerance defaults to the deadband so that 'centred' means
+        # exactly 'the firmware would not move', which is what PAN_DEADBAND does.
+        self.center_tolerance = c.get("center_tolerance", self.deadband)
+        self.center_settle = c.get("center_settle", 0.3)
+        self.center_timeout = c.get("center_timeout", 3.0)
+        self.center_lost_grace = c.get("center_lost_grace", 1.5)
+
         # Sources
         self.serial_port = c.get("serial_port")             # None -> auto-detect
         self.use_realsense = c.get("use_realsense", True)
         self.camera_index = c.get("camera_index", 0)
         self.model_path = c.get("model_path", "yolov8n.pt")
+        # Inference resolution. YOLO runs synchronously inside tick(), so this
+        # sets the real tracking frame rate — 640 costs ~4x the compute of 320
+        # and pins the loop to a few fps on the Jetson. We only need a horizontal
+        # centroid, which survives the lower resolution fine.
+        self.yolo_imgsz = c.get("yolo_imgsz", 320)
+        self.yolo_half = c.get("yolo_half", False)   # True only helps on GPU
         self.verbose_commands = c.get("verbose_commands", False)
+        self.show_preview = c.get("show_preview", False)
 
         # State machine
         self._state = TrackingState.TRACKING
@@ -93,6 +127,14 @@ class FaceTrackingOutputModule(OutputModule):
         self._hold_requested = False
         self._held_event = threading.Event()
         self._lock = threading.RLock()
+
+        # Centring bookkeeping
+        self._center_requested = False
+        self._centered_event = threading.Event()
+        self._center_result = False
+        self._center_started: Optional[float] = None
+        self._in_band_since: Optional[float] = None
+        self._last_seen: Optional[float] = None
 
         # Hardware / model handles
         self._ser = None
@@ -118,7 +160,7 @@ class FaceTrackingOutputModule(OutputModule):
     @property
     def is_tracking(self) -> bool:
         """True when the head is free to move (what the spec calls 'tracking')."""
-        return self.state is TrackingState.TRACKING
+        return self.state is not TrackingState.HOLDING
 
     def request_hold(self) -> None:
         """Ask the tracker to stop. Re-entrant; pair every call with release_hold().
@@ -149,6 +191,84 @@ class FaceTrackingOutputModule(OutputModule):
         if not self.enabled:
             return True
         return self._held_event.wait(timeout=timeout)
+
+    # ── Centring ─────────────────────────────────────────────────────────────
+
+    def request_center(self) -> None:
+        """Ask the tracker to centre on the subject before the robot speaks.
+
+        Resets the settle timers so a stale 'was centred a minute ago' can never
+        satisfy the wait — we always measure fresh.
+        """
+        with self._lock:
+            self._center_result = False
+            self._centered_event.clear()
+            self._center_started = time.time()
+            self._in_band_since = None
+            self._last_seen = None
+
+            if (not self.enabled or self._hold_requested
+                    or self._state is TrackingState.HOLDING):
+                # Nothing is ticking, or an earlier reply already froze the head
+                # (possibly a hold that tick() has not applied yet). Either way
+                # there is nothing to centre and nothing may move — say so now
+                # rather than leaving the caller to time out.
+                self._center_result = True
+                self._centered_event.set()
+                return
+
+            self._center_requested = True
+
+    def wait_until_centered(self, timeout: float = None) -> bool:
+        """Block until the subject has settled inside the deadband.
+
+        Returns True only if it actually centred — False if nobody was there to
+        centre on, or `timeout` elapsed first. Callers are expected to carry on
+        regardless: talking late is worse than talking slightly off-centre.
+        """
+        if not self.enabled:
+            return True
+        if timeout is None:
+            timeout = self.center_timeout
+
+        if not self._centered_event.wait(timeout=timeout):
+            logger.warning(f"[FaceTracking] not centred after {timeout:.1f}s")
+            self._abandon_centering()
+            return False
+        return self._center_result
+
+    def center_and_hold(self, timeout: float = None) -> bool:
+        """Centre on the subject, then freeze the head for speech / gestures.
+
+        The one call robot.py makes. Returns whether it managed to centre; the
+        hold is applied either way, so the head never moves mid-sentence.
+        """
+        self.request_center()
+        centered = self.wait_until_centered(timeout)
+        self.request_hold()
+        if not self.wait_until_held(timeout=2.0):
+            logger.warning("[FaceTracking] hold not confirmed — proceeding anyway")
+        return centered
+
+    def _abandon_centering(self) -> None:
+        with self._lock:
+            self._center_requested = False
+            if self._state is TrackingState.CENTERING:
+                self._state = TrackingState.TRACKING
+
+    def _finish_centering(self, ok: bool, detail: str) -> None:
+        with self._lock:
+            if self._centered_event.is_set():
+                return
+            self._center_result = ok
+            self._center_requested = False
+            if self._state is TrackingState.CENTERING:
+                self._state = TrackingState.TRACKING
+            self._centered_event.set()
+        if ok:
+            logger.info(f"[FaceTracking] centred ({detail})")
+        else:
+            logger.info(f"[FaceTracking] centring gave up — {detail}")
 
     # ── Module lifecycle ─────────────────────────────────────────────────────
 
@@ -186,6 +306,11 @@ class FaceTrackingOutputModule(OutputModule):
             except Exception:
                 pass
             self._ser = None
+        if self.show_preview and cv2 is not None:
+            try:
+                cv2.destroyAllWindows()
+            except Exception:
+                pass
         logger.info(f"[FaceTracking] stopped — {self.frames_seen} frames, "
                     f"{self.commands_sent} commands")
 
@@ -193,7 +318,7 @@ class FaceTrackingOutputModule(OutputModule):
         """OutputModule contract. Accepts explicit control dicts:
         {"face_tracking": "hold"} / {"face_tracking": "resume"}.
         Ordinary chat text is ignored — robot.py drives the hold explicitly so
-        the head freezes *before* audio starts."""
+        the head centres and freezes *before* audio starts."""
         if isinstance(data, dict):
             cmd = data.get("face_tracking")
             if cmd == "hold":
@@ -209,36 +334,84 @@ class FaceTrackingOutputModule(OutputModule):
         if not self.enabled:
             return
 
-        # Apply a pending hold here so the caller knows the loop has seen it.
+        # Apply pending transitions here so the caller knows the loop has seen
+        # them. A hold outranks a centring request: drop the request so that
+        # release_hold() returns to TRACKING rather than resuming a stale centre.
         with self._lock:
             if self._hold_requested and self._state is not TrackingState.HOLDING:
                 self._state = TrackingState.HOLDING
+                self._center_requested = False
                 self._held_event.set()
                 logger.debug("[FaceTracking] holding (speech/gesture active)")
+            elif self._center_requested and self._state is TrackingState.TRACKING:
+                self._state = TrackingState.CENTERING
+                logger.info("[FaceTracking] centring on subject")
             state = self._state
 
         now = time.time()
 
         if state is TrackingState.HOLDING:
-            # Keep the head where it is; suppress the firmware's recentre timer.
+            # Keep the head where it is. Detection is skipped entirely — YOLO
+            # inference during speech is wasted CPU on the Jetson.
             if now - self._last_keepalive >= self.keepalive_interval:
-                self._send_error(0, quiet=True)
+                self._send_error(0, keepalive=True)
                 self._last_keepalive = now
+            if self.show_preview:
+                self._preview(self._read_frame(), None, None, state)
             return
 
         frame = self._read_frame()
         if frame is None:
+            # A dropped frame is not evidence of an empty room, but waiting
+            # forever for one is how the reply gets stuck — let the grace run.
+            if state is TrackingState.CENTERING:
+                self._update_centering(now, None)
             return
         self.frames_seen += 1
 
-        error = self._detect_error(frame)
+        error, box = self._detect(frame)
         self.last_error = error
+
+        if error is not None:
+            if abs(error) > self.deadband:
+                if now - self._last_send >= self.send_interval:
+                    self._send_error(error)
+                    self._last_send = now
+            elif now - self._last_keepalive >= self.keepalive_interval:
+                # Inside the deadband: say "still here, still centred" so that
+                # silence on the wire keeps its one meaning — nobody in frame.
+                self._send_error(0, keepalive=True)
+                self._last_keepalive = now
+
+        if state is TrackingState.CENTERING:
+            self._update_centering(now, error)
+
+        if self.show_preview:
+            self._preview(frame, box, error, state)
+
+    def _update_centering(self, now: float, error: Optional[int]) -> None:
+        """Decide whether the head has settled on the subject. CENTERING only."""
         if error is None:
+            # Nobody detected. Give them a grace period to reappear, then stop
+            # blocking — a reply must never be held hostage by an empty room.
+            since = self._last_seen or self._center_started or now
+            if now - since > self.center_lost_grace:
+                self._finish_centering(False, "no subject in frame")
             return
 
-        if abs(error) > self.deadband and (now - self._last_send) >= self.send_interval:
-            self._send_error(error)
-            self._last_send = now
+        self._last_seen = now
+
+        if abs(error) > self.center_tolerance:
+            self._in_band_since = None
+            return
+
+        # In band — but require it to stay there, so one lucky frame mid-swing
+        # cannot pass for a centred head.
+        if self._in_band_since is None:
+            self._in_band_since = now
+        elif now - self._in_band_since >= self.center_settle:
+            took = now - (self._center_started or now)
+            self._finish_centering(True, f"err={error:+d}px in {took:.1f}s")
 
     # ── Serial ───────────────────────────────────────────────────────────────
 
@@ -261,16 +434,19 @@ class FaceTrackingOutputModule(OutputModule):
             logger.warning(f"[FaceTracking] serial {port} failed: {e} — print-only")
             self._ser = None
 
-    def _send_error(self, error: int, quiet: bool = False) -> None:
+    def _send_error(self, error: int, keepalive: bool = False) -> None:
         if self._ser is not None:
             try:
                 self._ser.write(f"{int(error)}\n".encode())
             except Exception as e:
                 logger.error(f"[FaceTracking] serial write failed: {e}")
         self.commands_sent += 1
-        if not quiet and self.verbose_commands:
-            direction = "RIGHT" if error > 0 else "LEFT"
-            logger.info(f"[FaceTracking] error={error:+d}px -> turn {direction}")
+        if self.verbose_commands:
+            if keepalive:
+                logger.info("[FaceTracking] keepalive 0 (centred/held)")
+            else:
+                direction = "RIGHT" if error > 0 else "LEFT"
+                logger.info(f"[FaceTracking] error={error:+d}px -> turn {direction}")
 
     # ── Camera ───────────────────────────────────────────────────────────────
 
@@ -359,34 +535,76 @@ class FaceTrackingOutputModule(OutputModule):
         except Exception as e:
             logger.error(f"[FaceTracking] no detector: {e}")
 
-    def _detect_error(self, frame) -> Optional[int]:
-        """Horizontal pixel error of the largest subject, or None if none seen."""
+    def _detect(self, frame) -> Tuple[Optional[int], Optional[tuple]]:
+        """Horizontal pixel error of the largest subject and its box.
+
+        Returns (None, None) when nobody is visible. The box is (x1, y1, x2, y2)
+        and is only used to draw the preview.
+        """
         center_x = frame.shape[1] // 2
 
         if self._model is not None:
             try:
-                results = self._model(frame, classes=[0], verbose=False)
+                results = self._model(frame, classes=[0], verbose=False,
+                                      imgsz=self.yolo_imgsz, half=self.yolo_half)
                 boxes = results[0].boxes
                 if len(boxes) == 0:
-                    return None
+                    return None, None
                 xyxy = boxes.xyxy.cpu().numpy()
                 areas = (xyxy[:, 2] - xyxy[:, 0]) * (xyxy[:, 3] - xyxy[:, 1])
-                x1, _y1, x2, _y2 = xyxy[areas.argmax()]
-                return int((x1 + x2) / 2) - center_x
+                x1, y1, x2, y2 = xyxy[areas.argmax()]
+                return int((x1 + x2) / 2) - center_x, (int(x1), int(y1),
+                                                       int(x2), int(y2))
             except Exception as e:
                 logger.debug(f"[FaceTracking] YOLO inference error: {e}")
-                return None
+                return None, None
 
         if self._cascade is not None:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             faces = self._cascade.detectMultiScale(gray, scaleFactor=1.15,
                                                    minNeighbors=4, minSize=(40, 40))
             if len(faces) == 0:
-                return None
-            x, _y, w, h = max(faces, key=lambda f: f[2] * f[3])
-            return int(x + w / 2) - center_x
+                return None, None
+            x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
+            return int(x + w / 2) - center_x, (int(x), int(y),
+                                               int(x + w), int(y + h))
 
-        return None
+        return None, None
+
+    # ── Preview (debug window) ───────────────────────────────────────────────
+
+    def _preview(self, frame, box, error: Optional[int],
+                 state: TrackingState) -> None:
+        """Draw the debug window. Disables itself when there is no display."""
+        if frame is None:
+            return
+
+        img = frame.copy()
+        h, w = img.shape[:2]
+        center_x = w // 2
+
+        if box is not None:
+            x1, y1, x2, y2 = box
+            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.circle(img, ((x1 + x2) // 2, (y1 + y2) // 2), 4, (0, 0, 255), -1)
+
+        cv2.line(img, (center_x, 0), (center_x, h), (255, 0, 0), 1)
+        if error is not None:
+            cv2.putText(img, f"err={error:+d}", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
+        cv2.putText(img, state.value.upper(), (10, h - 15),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        link = "SERIAL" if self._ser is not None else "PRINT-ONLY"
+        cv2.putText(img, link, (w - 160, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
+
+        try:
+            cv2.imshow("ChatBox Face Tracker", img)
+            cv2.waitKey(1)
+        except cv2.error:
+            logger.info("[FaceTracking] no display available — preview off")
+            self.show_preview = False
 
     # ── Introspection ────────────────────────────────────────────────────────
 
@@ -395,10 +613,12 @@ class FaceTrackingOutputModule(OutputModule):
             "state": self.state.value,
             "is_tracking": self.is_tracking,
             "hold_depth": self._hold_depth,
+            "centered": self._center_result and self._centered_event.is_set(),
             "frames_seen": self.frames_seen,
             "commands_sent": self.commands_sent,
             "last_error": self.last_error,
             "serial": self._ser is not None,
+            "preview": self.show_preview,
             "detector": "yolo" if self._model is not None else
                         ("haar" if self._cascade is not None else "none"),
         }

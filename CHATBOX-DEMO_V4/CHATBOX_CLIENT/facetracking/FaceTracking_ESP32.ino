@@ -1,19 +1,30 @@
 /*
  * FaceTracking_ESP32.ino
- * Standalone face-tracking sketch — single pan servo (left/right only).
+ * BRING-UP SKETCH ONLY — not what runs on the robot.
  *
- * Hardware: one hobby servo on GPIO 13 (D13). No mechanical joints yet;
- * the servo just rotates the head left/right to keep the face centered.
+ * Use this to bench-test the pan servo and the serial link on their own,
+ * without flashing the whole ChatBox system. The real implementation is the
+ * pan block in CHATBOX_ARDUINO/ChatBoxPlus_ESP32.ino, which does the same job
+ * alongside the expression servos and the TCP command socket.
  *
- * Pairs with CHATBOX_CLIENT/face_tracker_esp32.py running on the Jetson.
- * The Jetson streams a single integer per line over USB serial: the horizontal
- * pixel error (cx - center_x) of the tracked person.
+ * >> PIN DIFFERENCE: this sketch drives D13. The real firmware uses D19. <<
+ *    Wire from ChatBoxPlus_ESP32.ino, not from here.
+ *
+ * The Jetson side is CHATBOX_CLIENT/OutputModules/face_tracking_output.py,
+ * driven by robot.py. (It replaced the old standalone face_tracker_esp32.py.)
+ * It streams a single integer per line over USB serial: the horizontal pixel
+ * error (cx - center_x) of the tracked person.
  *    error > 0  ->  face is to the RIGHT of center  ->  turn head RIGHT
  *    error < 0  ->  face is to the LEFT  of center  ->  turn head LEFT
+ *    error == 0 ->  keep-alive: subject seen and centered, hold this angle
  *
  * Because the camera moves with the head, this is a closed feedback loop:
  * each error nudges the servo angle a little, driving the error toward zero
  * (proportional control on the angle rather than an absolute pixel->angle map).
+ *
+ * NOTE: unlike the real firmware, this sketch recenters to PAN_CENTER after
+ * LOST_TIMEOUT. That homing is deliberately disabled in ChatBoxPlus_ESP32.ino —
+ * see the comment there before copying this behaviour across.
  */
 
 #include <ESP32Servo.h>

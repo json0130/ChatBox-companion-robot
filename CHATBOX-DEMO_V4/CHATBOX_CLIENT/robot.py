@@ -43,7 +43,7 @@ class SimpleConcurrentClient(BasicClient):
         self._register_custom_event_handlers()
 
     # ── Arduino helpers ───────────────────────────────────────────────────────
-
+    
     def _on_arduino_connected(self):
         logger.info("[Arduino] Connected")
 
@@ -94,14 +94,14 @@ class SimpleConcurrentClient(BasicClient):
         if "console_output" in self.output_modules:
             self.output_modules["console_output"].process_output(response_text)
 
-        # A response arrived: freeze head tracking BEFORE any gesture or audio,
-        # and wait until the tracker confirms it has actually stopped, so the
-        # head never moves mid-sentence. Released in the finally below.
+        # A response arrived: centre on the person FIRST, then freeze, and only
+        # then gesture and speak — so the robot finishes turning to face you
+        # before it says a word, and never moves mid-sentence. Talking is not
+        # blocked if nobody is there to centre on. Released in the finally below.
         tracker = self.output_modules.get("face_tracking_output")
         if tracker:
-            tracker.request_hold()
-            if not tracker.wait_until_held(timeout=2.0):
-                logger.warning("[FaceTracking] hold not confirmed — proceeding anyway")
+            if not tracker.center_and_hold():
+                logger.info("[FaceTracking] not centred — speaking anyway")
 
         try:
             tts = self.output_modules.get("edge_tts_output")
@@ -178,9 +178,21 @@ class SimpleConcurrentClient(BasicClient):
             if active:
                 logger.info(f"[Persona] Active capabilities: {', '.join(active)}")
 
+        # The announcement is speech too, so it gets the same treatment as a
+        # reply: centre, freeze, speak, resume. Otherwise the head would pan
+        # around mid-sentence.
         tts = self.output_modules.get("edge_tts_output")
         if tts:
-            tts.process_output(f"Persona updated to {persona_name}.")
+            tracker = self.output_modules.get("face_tracking_output")
+            if tracker:
+                tracker.center_and_hold()
+            try:
+                tts.process_output(f"Persona updated to {persona_name}.")
+                if tracker:
+                    self._wait_for_speech_end()
+            finally:
+                if tracker:
+                    tracker.release_hold()
 
         if "console_output" in self.output_modules:
             self.output_modules["console_output"].process_output(

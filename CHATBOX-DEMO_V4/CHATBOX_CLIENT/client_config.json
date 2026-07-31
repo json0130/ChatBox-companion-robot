@@ -69,7 +69,11 @@
         "verbose_commands": false,
         "show_preview": false,
         "show_meter": true,
-        "meter_interval": 0.15
+        "meter_interval": 0.15,
+        "show_stream": true,
+        "stream_port": 8080,
+        "stream_fps": 10,
+        "stream_quality": 70
     },
     "capabilities": {
         "navigation": false,

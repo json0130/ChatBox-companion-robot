@@ -60,6 +60,7 @@ import logging
 import threading
 import time
 from enum import Enum
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional, Tuple
 
 from client import OutputModule
@@ -145,6 +146,15 @@ class FaceTrackingOutputModule(OutputModule):
         self.target_switch_ratio = c.get("target_switch_ratio", 1.3)
         self.target_switch_frames = c.get("target_switch_frames", 5)
 
+        # Browser view. show_preview needs an X display, which the robot does not
+        # have when it runs headless in Docker — this serves the same annotated
+        # image as MJPEG instead, so it is reachable from any machine that can
+        # see the Jetson. Frames are only encoded while somebody is watching.
+        self.show_stream = c.get("show_stream", False)
+        self.stream_port = c.get("stream_port", 8080)
+        self.stream_fps = c.get("stream_fps", 10)
+        self.stream_quality = c.get("stream_quality", 70)
+
         # Terminal meter — a one-line live readout of where the subject is and
         # what the firmware will do about it. Unlike show_preview it needs no
         # display, so it is the way to watch tracking over SSH or in Docker.
@@ -200,6 +210,12 @@ class FaceTrackingOutputModule(OutputModule):
         self._target_x: Optional[float] = None
         self._target_missing = 0
         self._switch_votes = 0
+
+        # Stream plumbing
+        self._httpd = None
+        self._stream_frame = None
+        self._stream_lock = threading.Lock()
+        self._stream_clients = 0
 
     # ── State ────────────────────────────────────────────────────────────────
 
@@ -332,11 +348,14 @@ class FaceTrackingOutputModule(OutputModule):
             if self._hold_depth == 0:
                 self._state = TrackingState.TRACKING
                 self._held_event.clear()
+        if self.show_stream and self._httpd is None:
+            self._start_stream()
         logger.info("[FaceTracking] started — state machine active (tick-driven)")
         return True
 
     def stop(self):
         self.enabled = False
+        self._stop_stream()
         self._close_camera()
         if self._ser is not None:
             try:
@@ -394,8 +413,13 @@ class FaceTrackingOutputModule(OutputModule):
             if now - self._last_keepalive >= self.keepalive_interval:
                 self._send_error(0, keepalive=True)
                 self._last_keepalive = now
-            if self.show_preview:
-                self._preview(self._read_frame(), None, None, state)
+            if self.show_preview or self._stream_clients > 0:
+                # Grabbing a frame while held is cheap — no inference runs — and
+                # it keeps the view live rather than frozen while the robot talks.
+                held_frame = self._read_frame()
+                if self.show_preview:
+                    self._preview(held_frame, None, None, state)
+                self._publish(held_frame, None, None, state)
             if self.show_meter:
                 # No detection runs while held, so there is no position to show —
                 # but keep printing so the line does not freeze and look crashed.
@@ -436,6 +460,7 @@ class FaceTrackingOutputModule(OutputModule):
 
         if self.show_preview:
             self._preview(frame, box, error, state)
+        self._publish(frame, box, error, state)
         if self.show_meter:
             self._meter(now, error, state)
 
@@ -761,6 +786,70 @@ class FaceTrackingOutputModule(OutputModule):
         logger.info(f"[FT] |{bar}|{detail}  {state.value.upper():<9} "
                     f"{fps:4.1f}fps")
 
+    # ── Annotated view (shared by the window and the browser stream) ─────────
+
+    def _annotate(self, frame, box, error: Optional[int],
+                  state: TrackingState):
+        """The debug image: subject box, centre line, deadband, state."""
+        img = frame.copy()
+        h, w = img.shape[:2]
+        center_x = w // 2
+
+        # Deadband band — inside this the firmware will not move at all, so it
+        # shows at a glance whether the head is going to react.
+        db = int(self.deadband)
+        cv2.rectangle(img, (center_x - db, 0), (center_x + db, h),
+                      (60, 60, 60), 1)
+
+        if box is not None:
+            x1, y1, x2, y2 = box
+            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.circle(img, ((x1 + x2) // 2, (y1 + y2) // 2), 4, (0, 0, 255), -1)
+            # Line from frame centre to the subject: the error being corrected.
+            cv2.line(img, (center_x, h // 2), ((x1 + x2) // 2, h // 2),
+                     (0, 165, 255), 2)
+
+        cv2.line(img, (center_x, 0), (center_x, h), (255, 0, 0), 1)
+
+        if error is not None:
+            step = self._predicted_step(error)
+            label = f"err={error:+d}px  {step:+.1f}deg" if step else \
+                    f"err={error:+d}px  centred"
+            cv2.putText(img, label, (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        else:
+            cv2.putText(img, "no subject", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 255), 2)
+
+        cv2.putText(img, state.value.upper(), (10, h - 15),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        link = "SERIAL" if self._ser is not None else "PRINT-ONLY"
+        cv2.putText(img, link, (w - 160, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
+        return img
+
+    def _publish(self, frame, box, error: Optional[int],
+                 state: TrackingState) -> None:
+        """Hand the latest annotated frame to the stream server.
+
+        Skipped entirely when nobody has the page open, so the annotation and
+        JPEG cost only apply while somebody is actually looking.
+        """
+        if frame is None or self._stream_clients <= 0:
+            return
+        img = self._annotate(frame, box, error, state)
+        with self._stream_lock:
+            self._stream_frame = img
+
+    def _latest_jpeg(self) -> Optional[bytes]:
+        with self._stream_lock:
+            img = self._stream_frame
+        if img is None:
+            return None
+        ok, buf = cv2.imencode(".jpg", img,
+                               [int(cv2.IMWRITE_JPEG_QUALITY), self.stream_quality])
+        return buf.tobytes() if ok else None
+
     # ── Preview (debug window) ───────────────────────────────────────────────
 
     def _preview(self, frame, box, error: Optional[int],
@@ -769,25 +858,7 @@ class FaceTrackingOutputModule(OutputModule):
         if frame is None:
             return
 
-        img = frame.copy()
-        h, w = img.shape[:2]
-        center_x = w // 2
-
-        if box is not None:
-            x1, y1, x2, y2 = box
-            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.circle(img, ((x1 + x2) // 2, (y1 + y2) // 2), 4, (0, 0, 255), -1)
-
-        cv2.line(img, (center_x, 0), (center_x, h), (255, 0, 0), 1)
-        if error is not None:
-            cv2.putText(img, f"err={error:+d}", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-
-        cv2.putText(img, state.value.upper(), (10, h - 15),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        link = "SERIAL" if self._ser is not None else "PRINT-ONLY"
-        cv2.putText(img, link, (w - 160, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
+        img = self._annotate(frame, box, error, state)
 
         try:
             cv2.imshow("ChatBox Face Tracker", img)
@@ -795,6 +866,100 @@ class FaceTrackingOutputModule(OutputModule):
         except cv2.error:
             logger.info("[FaceTracking] no display available — preview off")
             self.show_preview = False
+
+    # ── Browser stream ───────────────────────────────────────────────────────
+
+    _PAGE = b"""<!doctype html><meta charset=utf-8>
+<title>ChatBox tracker</title>
+<style>
+ body{margin:0;background:#111;color:#ccc;font:14px system-ui,sans-serif;
+      display:flex;flex-direction:column;align-items:center;gap:12px;padding:16px}
+ img{max-width:100%;border:1px solid #333;border-radius:6px}
+ .k{display:flex;gap:16px;flex-wrap:wrap;justify-content:center}
+ .k span{display:flex;align-items:center;gap:6px}
+ .s{width:12px;height:12px;border-radius:2px;display:inline-block}
+</style>
+<h3>ChatBox face tracker</h3>
+<img src="/stream.mjpg" alt="tracker view">
+<div class=k>
+ <span><i class=s style="background:#0f0"></i>subject</span>
+ <span><i class=s style="background:#f00"></i>centroid</span>
+ <span><i class=s style="background:#00f"></i>frame centre</span>
+ <span><i class=s style="background:#3c3c3c"></i>deadband</span>
+ <span><i class=s style="background:#ffa500"></i>error</span>
+</div>
+<p>Freezes while the robot speaks &mdash; detection is paused during HOLDING.</p>
+"""
+
+    def _start_stream(self) -> bool:
+        module = self
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.0"
+
+            def log_message(self, *args):
+                pass    # the robot's log is busy enough without per-frame lines
+
+            def do_GET(self):
+                if self.path in ("/", "/index.html"):
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(module._PAGE)))
+                    self.end_headers()
+                    self.wfile.write(module._PAGE)
+                    return
+                if self.path != "/stream.mjpg":
+                    self.send_error(404)
+                    return
+
+                self.send_response(200)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Type",
+                                 "multipart/x-mixed-replace; boundary=frame")
+                self.end_headers()
+                module._stream_clients += 1
+                try:
+                    interval = 1.0 / max(1, module.stream_fps)
+                    while module.enabled:
+                        jpg = module._latest_jpeg()
+                        if jpg is None:
+                            time.sleep(0.05)
+                            continue
+                        self.wfile.write(b"--frame\r\n")
+                        self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                        self.wfile.write(f"Content-Length: {len(jpg)}\r\n\r\n"
+                                         .encode())
+                        self.wfile.write(jpg)
+                        self.wfile.write(b"\r\n")
+                        time.sleep(interval)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass    # tab closed — normal, not worth logging
+                finally:
+                    module._stream_clients -= 1
+
+        try:
+            self._httpd = ThreadingHTTPServer(("0.0.0.0", self.stream_port),
+                                              Handler)
+            self._httpd.daemon_threads = True
+            threading.Thread(target=self._httpd.serve_forever, daemon=True,
+                             name="ft-stream").start()
+            logger.info(f"[FaceTracking] view at http://<jetson>:{self.stream_port}")
+            return True
+        except Exception as e:
+            logger.warning(f"[FaceTracking] stream port {self.stream_port} "
+                           f"unavailable ({e}) — view disabled")
+            self._httpd = None
+            self.show_stream = False
+            return False
+
+    def _stop_stream(self) -> None:
+        if self._httpd is not None:
+            try:
+                self._httpd.shutdown()
+                self._httpd.server_close()
+            except Exception:
+                pass
+            self._httpd = None
 
     # ── Introspection ────────────────────────────────────────────────────────
 
@@ -812,6 +977,9 @@ class FaceTrackingOutputModule(OutputModule):
             "meter": self.show_meter,
             "target_x": self._target_x,
             "target_missing": self._target_missing,
+            "stream": (f"http://<host>:{self.stream_port}"
+                       if self._httpd is not None else None),
+            "stream_clients": self._stream_clients,
             "detector": "yolo" if self._model is not None else
                         ("haar" if self._cascade is not None else "none"),
         }

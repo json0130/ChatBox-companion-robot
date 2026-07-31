@@ -1,6 +1,7 @@
 # robot.py — Robot client (v6)
 import sys
 import re
+import threading
 import time
 import logging
 from typing import Optional
@@ -94,29 +95,53 @@ class SimpleConcurrentClient(BasicClient):
         if "console_output" in self.output_modules:
             self.output_modules["console_output"].process_output(response_text)
 
-        # A response arrived: centre on the person FIRST, then freeze, and only
-        # then gesture and speak — so the robot finishes turning to face you
-        # before it says a word, and never moves mid-sentence. Talking is not
-        # blocked if nobody is there to centre on. Released in the finally below.
+        tts = self.output_modules.get("edge_tts_output")
+        if not tts:
+            if emotion:
+                self.on_emotion_detected(emotion)
+            return
+
+        sentences = self._split_sentences(clean_text)
+        if not sentences:
+            return
+
+        # A response arrived: start turning toward the person straight away, but
+        # keep tracking while TTS synthesises. Freezing here instead would leave
+        # the head locked and silent for however long synthesis takes — about two
+        # seconds on gTTS's network round trip — which reads as a crash rather
+        # than as a robot about to speak.
         tracker = self.output_modules.get("face_tracking_output")
         if tracker:
-            if not tracker.center_and_hold():
-                logger.info("[FaceTracking] not centred — speaking anyway")
+            tracker.request_center()
+
+        # Set once the hold has actually been taken, so the finally below cannot
+        # release a hold this call never acquired — the callback runs on the TTS
+        # worker thread and may never fire if synthesis fails outright.
+        hold_taken = threading.Event()
+
+        def _on_audio_start():
+            """Runs on the TTS worker thread immediately before playback starts.
+
+            Every TTS path (gTTS, piper warm, piper one-shot) invokes this right
+            before handing the file to aplay, so blocking here holds back the
+            audio itself: nothing is spoken until the subject is centred and the
+            head is frozen. Centring that fails or times out does not gag the
+            robot — talking slightly off-centre beats not talking at all.
+            """
+            if tracker:
+                if not tracker.wait_until_centered():
+                    logger.info("[FaceTracking] not centred — speaking anyway")
+                tracker.request_hold()
+                hold_taken.set()
+                if not tracker.wait_until_held(timeout=2.0):
+                    logger.warning("[FaceTracking] hold not confirmed — speaking anyway")
+            if emotion:
+                self.on_emotion_detected(emotion)
 
         try:
-            tts = self.output_modules.get("edge_tts_output")
-            if not tts:
-                if emotion:
-                    self.on_emotion_detected(emotion)
-                return
-
-            sentences = self._split_sentences(clean_text)
-            if not sentences:
-                return
-
-            # First sentence carries the emotion callback — fires when audio starts
-            start_cb = (lambda e: lambda: self.on_emotion_detected(e))(emotion) if emotion else None
-            tts.process_output_synced(sentences[0], start_callback=start_cb)
+            # First sentence carries the callback — it gates audio on centring and
+            # fires the gesture at the moment the robot actually starts talking.
+            tts.process_output_synced(sentences[0], start_callback=_on_audio_start)
 
             # Remaining sentences queued individually — TTS plays them back-to-back
             for sentence in sentences[1:]:
@@ -124,7 +149,7 @@ class SimpleConcurrentClient(BasicClient):
 
             self._wait_for_speech_end()
         finally:
-            if tracker:
+            if tracker and hold_taken.is_set():
                 tracker.release_hold()
 
     def _wait_for_speech_end(self, settle: float = 0.8, timeout: float = 120.0) -> bool:
@@ -179,19 +204,30 @@ class SimpleConcurrentClient(BasicClient):
                 logger.info(f"[Persona] Active capabilities: {', '.join(active)}")
 
         # The announcement is speech too, so it gets the same treatment as a
-        # reply: centre, freeze, speak, resume. Otherwise the head would pan
-        # around mid-sentence.
+        # reply: centre while it synthesises, freeze the instant audio starts,
+        # resume when it finishes. Otherwise the head would pan mid-sentence.
         tts = self.output_modules.get("edge_tts_output")
         if tts:
             tracker = self.output_modules.get("face_tracking_output")
             if tracker:
-                tracker.center_and_hold()
+                tracker.request_center()
+
+            hold_taken = threading.Event()
+
+            def _on_audio_start():
+                if tracker:
+                    tracker.wait_until_centered()
+                    tracker.request_hold()
+                    hold_taken.set()
+                    tracker.wait_until_held(timeout=2.0)
+
             try:
-                tts.process_output(f"Persona updated to {persona_name}.")
+                tts.process_output_synced(f"Persona updated to {persona_name}.",
+                                          start_callback=_on_audio_start)
                 if tracker:
                     self._wait_for_speech_end()
             finally:
-                if tracker:
+                if tracker and hold_taken.is_set():
                     tracker.release_hold()
 
         if "console_output" in self.output_modules:

@@ -17,9 +17,21 @@ loop, rather than a free-running thread that fights with speech and gestures:
 
 Handshake used by robot.py when a response arrives:
 
-    center_and_hold()          # centre on the person, then freeze
+    request_center()           # start turning; the head keeps tracking
+    ... TTS synthesises ...
+    wait_until_centered()      # called from the TTS start callback, so it
+    request_hold()             #   gates the audio itself, then freezes
     ... speak + gesture ...
     release_hold()             # tracking resumes
+
+Centring deliberately overlaps synthesis. Freezing the head the moment a
+response arrives would leave it locked and mute for however long TTS takes —
+seconds, on a network voice — which reads as a crash. Instead the head keeps
+following the subject while the audio is being made, and the hold lands at the
+instant playback begins. Because wait_until_centered() runs inside the TTS
+start callback, and every TTS path invokes that immediately before handing the
+file to aplay, blocking there holds back the speech: no word is spoken until
+the subject is centred.
 
 Holds are re-entrant, so overlapping speech and gestures cannot resume tracking
 early. A hold always outranks a pending centring request.
@@ -255,19 +267,6 @@ class FaceTrackingOutputModule(OutputModule):
             self._abandon_centering()
             return False
         return self._center_result
-
-    def center_and_hold(self, timeout: float = None) -> bool:
-        """Centre on the subject, then freeze the head for speech / gestures.
-
-        The one call robot.py makes. Returns whether it managed to centre; the
-        hold is applied either way, so the head never moves mid-sentence.
-        """
-        self.request_center()
-        centered = self.wait_until_centered(timeout)
-        self.request_hold()
-        if not self.wait_until_held(timeout=2.0):
-            logger.warning("[FaceTracking] hold not confirmed — proceeding anyway")
-        return centered
 
     def _abandon_centering(self) -> None:
         with self._lock:

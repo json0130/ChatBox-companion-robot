@@ -133,6 +133,18 @@ class FaceTrackingOutputModule(OutputModule):
         self.verbose_commands = c.get("verbose_commands", False)
         self.show_preview = c.get("show_preview", False)
 
+        # Target selection. The subject is the closest person — the largest box —
+        # but picking that fresh every frame is what makes a room with two people
+        # in it unwatchable: their boxes trade the lead on random frames as they
+        # shift about, and the head swings between them. So the choice is sticky.
+        # We stay on whoever we are following and only hand over when someone
+        # else is target_switch_ratio times larger (clearly nearer, not merely
+        # nearer by a pixel) and has held that lead for target_switch_frames.
+        self.target_match_px = c.get("target_match_px", 150)
+        self.target_reacquire_frames = c.get("target_reacquire_frames", 8)
+        self.target_switch_ratio = c.get("target_switch_ratio", 1.3)
+        self.target_switch_frames = c.get("target_switch_frames", 5)
+
         # Terminal meter — a one-line live readout of where the subject is and
         # what the firmware will do about it. Unlike show_preview it needs no
         # display, so it is the way to watch tracking over SSH or in Docker.
@@ -180,6 +192,14 @@ class FaceTrackingOutputModule(OutputModule):
         # slows down instead of averaging the problem away.
         self._last_meter = 0.0
         self._tick_times: list = []
+
+        # Which person we are following. Identity is just "the box nearest to
+        # where the subject was last frame" — enough to hold a lock without the
+        # cost of a real tracker, given people cannot teleport across the frame
+        # between ticks.
+        self._target_x: Optional[float] = None
+        self._target_missing = 0
+        self._switch_votes = 0
 
     # ── State ────────────────────────────────────────────────────────────────
 
@@ -565,6 +585,63 @@ class FaceTrackingOutputModule(OutputModule):
         except Exception as e:
             logger.error(f"[FaceTracking] no detector: {e}")
 
+    def _lock_target(self, idx: int, cx) -> int:
+        self._target_x = float(cx[idx])
+        self._target_missing = 0
+        self._switch_votes = 0
+        return idx
+
+    def _lose_target(self) -> None:
+        """Count a frame in which the subject was not seen."""
+        self._target_missing += 1
+        if self._target_missing > self.target_reacquire_frames:
+            self._target_x = None
+            self._switch_votes = 0
+
+    def _choose_target(self, xyxy) -> Optional[int]:
+        """Index of the person to follow, or None if this frame is unusable.
+
+        Closest-person wins, but stickily: see the target_* config notes above.
+        Returning None for a frame where the subject is momentarily missing is
+        deliberate — it makes the head hold its angle for a beat rather than
+        snapping to a bystander because someone walked between us.
+        """
+        cx = (xyxy[:, 0] + xyxy[:, 2]) / 2.0
+        areas = (xyxy[:, 2] - xyxy[:, 0]) * (xyxy[:, 3] - xyxy[:, 1])
+        biggest = int(areas.argmax())
+
+        # Nothing locked (first sighting, or we gave up on the last subject) —
+        # take the closest person and follow them.
+        if self._target_x is None:
+            return self._lock_target(biggest, cx)
+
+        # Re-find our subject: the detection nearest to where they just were.
+        distances = np.abs(cx - self._target_x)
+        nearest = int(distances.argmin())
+
+        if distances[nearest] > self.target_match_px:
+            # Nobody is near the last known position. Wait a few frames before
+            # re-acquiring, so a brief occlusion does not hand over the head.
+            self._lose_target()
+            if self._target_x is None:
+                return self._lock_target(biggest, cx)
+            return None
+
+        self._target_missing = 0
+
+        # Hand over only to someone clearly nearer, and only once they have held
+        # that lead for a few frames — a single frame's margin is noise.
+        if areas[biggest] > areas[nearest] * self.target_switch_ratio:
+            self._switch_votes += 1
+            if self._switch_votes >= self.target_switch_frames:
+                logger.info("[FaceTracking] switching to a closer person")
+                return self._lock_target(biggest, cx)
+        else:
+            self._switch_votes = 0
+
+        self._target_x = float(cx[nearest])
+        return nearest
+
     def _detect(self, frame) -> Tuple[Optional[int], Optional[tuple]]:
         """Horizontal pixel error of the largest subject and its box.
 
@@ -579,10 +656,13 @@ class FaceTrackingOutputModule(OutputModule):
                                       imgsz=self.yolo_imgsz, half=self.yolo_half)
                 boxes = results[0].boxes
                 if len(boxes) == 0:
+                    self._lose_target()
                     return None, None
                 xyxy = boxes.xyxy.cpu().numpy()
-                areas = (xyxy[:, 2] - xyxy[:, 0]) * (xyxy[:, 3] - xyxy[:, 1])
-                x1, y1, x2, y2 = xyxy[areas.argmax()]
+                idx = self._choose_target(xyxy)
+                if idx is None:
+                    return None, None
+                x1, y1, x2, y2 = xyxy[idx]
                 return int((x1 + x2) / 2) - center_x, (int(x1), int(y1),
                                                        int(x2), int(y2))
             except Exception as e:
@@ -594,10 +674,18 @@ class FaceTrackingOutputModule(OutputModule):
             faces = self._cascade.detectMultiScale(gray, scaleFactor=1.15,
                                                    minNeighbors=4, minSize=(40, 40))
             if len(faces) == 0:
+                self._lose_target()
                 return None, None
-            x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
-            return int(x + w / 2) - center_x, (int(x), int(y),
-                                               int(x + w), int(y + h))
+            # Same sticky choice as the YOLO path — the cascade is just as prone
+            # to swapping between two faces of similar size.
+            xyxy = np.array([[x, y, x + w, y + h] for x, y, w, h in faces],
+                            dtype=float)
+            idx = self._choose_target(xyxy)
+            if idx is None:
+                return None, None
+            x1, y1, x2, y2 = xyxy[idx]
+            return int((x1 + x2) / 2) - center_x, (int(x1), int(y1),
+                                                   int(x2), int(y2))
 
         return None, None
 
@@ -722,6 +810,8 @@ class FaceTrackingOutputModule(OutputModule):
             "serial": self._ser is not None,
             "preview": self.show_preview,
             "meter": self.show_meter,
+            "target_x": self._target_x,
+            "target_missing": self._target_missing,
             "detector": "yolo" if self._model is not None else
                         ("haar" if self._cascade is not None else "none"),
         }

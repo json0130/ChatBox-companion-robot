@@ -115,6 +115,9 @@ class FaceTrackingOutputModule(OutputModule):
         # Centring — how "centred enough to start talking" is decided.
         # center_tolerance defaults to the deadband so that 'centred' means
         # exactly 'the firmware would not move', which is what PAN_DEADBAND does.
+        # Never set it tighter than PAN_DEADBAND in ServoControl.ino: the head
+        # would then be asked to reach a precision the firmware refuses to act
+        # on, and centring could only ever end by timing out.
         self.center_tolerance = c.get("center_tolerance", self.deadband)
         self.center_settle = c.get("center_settle", 0.3)
         self.center_timeout = c.get("center_timeout", 3.0)
@@ -179,8 +182,8 @@ class FaceTrackingOutputModule(OutputModule):
         self.show_meter = c.get("show_meter", False)
         self.meter_interval = c.get("meter_interval", 0.15)
         self.meter_width = c.get("meter_width", 31)
-        self.pan_kp = c.get("pan_kp", 0.03)
-        self.pan_max_step = c.get("pan_max_step", 4.0)
+        self.pan_kp = c.get("pan_kp", 0.015)
+        self.pan_max_step = c.get("pan_max_step", 2.0)
 
         # State machine
         self._state = TrackingState.TRACKING

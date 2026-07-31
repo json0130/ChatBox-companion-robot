@@ -54,12 +54,20 @@
 #define EARS_DOWN 120
 
 // Pan servo constants
+//
+// Gains are deliberately gentle. The Jetson detects at roughly 7 fps, so every
+// error we act on describes where the subject was ~130ms ago — by then the head
+// has already moved in response to the previous command. Corrections therefore
+// stack, and a gain that would be fine on a 30fps loop overshoots here: the head
+// sails past centre, out the far side of the deadband, and hunts back and forth
+// forever. Halving KP and the step clamp trades about half a second of settling
+// time for a head that actually stops.
 #define PAN_CENTER 90          // angle that points straight ahead
 #define PAN_MIN 20             // travel limits (degrees)
 #define PAN_MAX 160
-#define PAN_KP 0.03f           // degrees of angle per pixel of error
-#define PAN_DEADBAND 30        // ignore small errors (matches the Jetson side)
-#define PAN_MAX_STEP 4.0f      // clamp per-command target change (deg), no jerk
+#define PAN_KP 0.015f          // degrees of angle per pixel of error
+#define PAN_DEADBAND 45        // ignore small errors (matches the Jetson side)
+#define PAN_MAX_STEP 2.0f      // clamp per-command target change (deg), no jerk
 #define PAN_SMOOTH_STEP 1      // deg per ease tick when approaching the target
 #define PAN_UPDATE_MS 15       // ms between ease ticks
 // Cap on one serial line. Must clear the longest expression name

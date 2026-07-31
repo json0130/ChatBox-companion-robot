@@ -124,7 +124,21 @@ class FaceTrackingOutputModule(OutputModule):
         self.serial_port = c.get("serial_port")             # None -> auto-detect
         self.use_realsense = c.get("use_realsense", True)
         self.camera_index = c.get("camera_index", 0)
-        self.model_path = c.get("model_path", "yolov8n.pt")
+        # A pose model by default. Plain yolov8n detects *people*, and a person
+        # box spans torso and arms, so its centre is nowhere near the face —
+        # aiming at it centres somebody's chest, and a hand held up to the lens
+        # scores as a person all by itself. The pose variant returns facial
+        # keypoints, which is what we actually want to point the head at.
+        self.model_path = c.get("model_path", "yolov8n-pose.pt")
+        # Minimum keypoint confidence for a facial landmark to count.
+        self.head_conf = c.get("head_conf", 0.35)
+        # With a pose model, ignore people whose head we cannot see at all. This
+        # is what rejects a hand filling the frame, or somebody facing away.
+        self.require_head = c.get("require_head", True)
+        # Exponential smoothing on the pixel error, 0 disables. Box edges wobble
+        # a few pixels every frame; without this the error crosses in and out of
+        # the deadband and the head twitches instead of settling.
+        self.error_smoothing = c.get("error_smoothing", 0.4)
         # Inference resolution. YOLO runs synchronously inside tick(), so this
         # sets the real tracking frame rate — 640 costs ~4x the compute of 320
         # and pins the loop to a few fps on the Jetson. We only need a horizontal
@@ -210,6 +224,8 @@ class FaceTrackingOutputModule(OutputModule):
         self._target_x: Optional[float] = None
         self._target_missing = 0
         self._switch_votes = 0
+        self._has_pose = False
+        self._smoothed_error: Optional[float] = None
 
         # Stream plumbing
         self._httpd = None
@@ -442,6 +458,7 @@ class FaceTrackingOutputModule(OutputModule):
                 self._tick_times.pop(0)
 
         error, box = self._detect(frame)
+        error = self._smooth(error)
         self.last_error = error
 
         if error is not None:
@@ -463,6 +480,27 @@ class FaceTrackingOutputModule(OutputModule):
         self._publish(frame, box, error, state)
         if self.show_meter:
             self._meter(now, error, state)
+
+    def _smooth(self, error: Optional[int]) -> Optional[int]:
+        """Exponentially smooth the pixel error.
+
+        Detection boxes and keypoints jitter by a few pixels every frame even
+        when nobody moves. Unsmoothed, that noise straddles the deadband edge
+        and the head gets a nudge, stops, gets another — the twitch you see when
+        standing still. Losing the subject resets the filter so a reappearance
+        is not dragged toward wherever they used to be.
+        """
+        if error is None:
+            self._smoothed_error = None
+            return None
+        if self.error_smoothing <= 0:
+            return error
+        if self._smoothed_error is None:
+            self._smoothed_error = float(error)
+        else:
+            a = self.error_smoothing
+            self._smoothed_error = a * error + (1.0 - a) * self._smoothed_error
+        return int(round(self._smoothed_error))
 
     def _update_centering(self, now: float, error: Optional[int]) -> None:
         """Decide whether the head has settled on the subject. CENTERING only."""
@@ -594,7 +632,14 @@ class FaceTrackingOutputModule(OutputModule):
         if YOLO is not None:
             try:
                 self._model = YOLO(self.model_path)
-                logger.info(f"[FaceTracking] YOLO detector: {self.model_path}")
+                self._has_pose = getattr(self._model, "task", "") == "pose"
+                kind = "pose (head-aimed)" if self._has_pose else \
+                       "detect (body-centre aimed)"
+                logger.info(f"[FaceTracking] YOLO {kind}: {self.model_path}")
+                if not self._has_pose:
+                    logger.warning("[FaceTracking] not a pose model — aiming at "
+                                   "the body-box centre, which sits well below "
+                                   "the face at close range")
                 return
             except Exception as e:
                 logger.warning(f"[FaceTracking] YOLO load failed ({e}) — "
@@ -610,10 +655,52 @@ class FaceTrackingOutputModule(OutputModule):
         except Exception as e:
             logger.error(f"[FaceTracking] no detector: {e}")
 
+    # COCO pose keypoints 0-4 are nose, both eyes, both ears — between them a
+    # head is locatable from the front or in profile.
+    _FACE_KP = (0, 1, 2, 3, 4)
+
+    def _head_targets(self, result, xyxy):
+        """Per-person head x-position and head box, from pose keypoints.
+
+        xs[i] is NaN when person i has no facial landmark confident enough to
+        use. That is not a failure — it is the signal that there is no head to
+        aim at, which is how a hand at the lens or someone facing away gets
+        rejected rather than tracked.
+        """
+        n = len(xyxy)
+        xs = np.full(n, np.nan)
+        boxes = np.full((n, 4), np.nan)
+
+        kp = getattr(result, "keypoints", None)
+        data = getattr(kp, "data", None) if kp is not None else None
+        if data is None or len(data) == 0:
+            return xs, boxes
+
+        data = data.cpu().numpy()          # (N, 17, 3) — x, y, confidence
+        for i in range(min(n, len(data))):
+            face = data[i, self._FACE_KP, :]
+            visible = face[:, 2] >= self.head_conf
+            if not visible.any():
+                continue
+            px, py = face[visible, 0], face[visible, 1]
+            cx_, cy_ = float(px.mean()), float(py.mean())
+            xs[i] = cx_
+            # Pad the landmark spread out to something head-sized. With only the
+            # nose confident the spread is zero, so fall back to a fraction of
+            # the body box — a head is roughly an eighth of a standing figure.
+            half = max(float(px.max() - px.min()),
+                       float(py.max() - py.min())) * 0.9
+            half = max(half, float(xyxy[i, 2] - xyxy[i, 0]) * 0.12, 20.0)
+            boxes[i] = [cx_ - half, cy_ - half * 1.2, cx_ + half, cy_ + half * 1.2]
+        return xs, boxes
+
     def _lock_target(self, idx: int, cx) -> int:
         self._target_x = float(cx[idx])
         self._target_missing = 0
         self._switch_votes = 0
+        # Whoever we were following is not who we are following now — carrying
+        # their smoothed error over would drag the head toward where they were.
+        self._smoothed_error = None
         return idx
 
     def _lose_target(self) -> None:
@@ -679,17 +766,36 @@ class FaceTrackingOutputModule(OutputModule):
             try:
                 results = self._model(frame, classes=[0], verbose=False,
                                       imgsz=self.yolo_imgsz, half=self.yolo_half)
-                boxes = results[0].boxes
-                if len(boxes) == 0:
+                result = results[0]
+                if result.boxes is None or len(result.boxes) == 0:
                     self._lose_target()
                     return None, None
-                xyxy = boxes.xyxy.cpu().numpy()
+                xyxy = result.boxes.xyxy.cpu().numpy()
+                head_x, head_box = self._head_targets(result, xyxy)
+
+                if self._has_pose and self.require_head:
+                    keep = np.flatnonzero(~np.isnan(head_x))
+                    if keep.size == 0:
+                        # Bodies in frame but not a single visible head — a hand
+                        # over the lens, or everyone turned away. Nothing here is
+                        # worth turning toward.
+                        self._lose_target()
+                        return None, None
+                    xyxy, head_x, head_box = xyxy[keep], head_x[keep], head_box[keep]
+
+                # Identity and distance are judged on the body box (stable, and
+                # 'closest' means the biggest body), but we aim at the head.
                 idx = self._choose_target(xyxy)
                 if idx is None:
                     return None, None
-                x1, y1, x2, y2 = xyxy[idx]
-                return int((x1 + x2) / 2) - center_x, (int(x1), int(y1),
-                                                       int(x2), int(y2))
+
+                if not np.isnan(head_x[idx]):
+                    aim, draw = head_x[idx], head_box[idx]
+                else:
+                    aim = (xyxy[idx, 0] + xyxy[idx, 2]) / 2.0
+                    draw = xyxy[idx]
+                return int(aim) - center_x, (int(draw[0]), int(draw[1]),
+                                             int(draw[2]), int(draw[3]))
             except Exception as e:
                 logger.debug(f"[FaceTracking] YOLO inference error: {e}")
                 return None, None
@@ -882,8 +988,8 @@ class FaceTrackingOutputModule(OutputModule):
 <h3>ChatBox face tracker</h3>
 <img src="/stream.mjpg" alt="tracker view">
 <div class=k>
- <span><i class=s style="background:#0f0"></i>subject</span>
- <span><i class=s style="background:#f00"></i>centroid</span>
+ <span><i class=s style="background:#0f0"></i>head</span>
+ <span><i class=s style="background:#f00"></i>aim point</span>
  <span><i class=s style="background:#00f"></i>frame centre</span>
  <span><i class=s style="background:#3c3c3c"></i>deadband</span>
  <span><i class=s style="background:#ffa500"></i>error</span>
@@ -980,6 +1086,7 @@ class FaceTrackingOutputModule(OutputModule):
             "stream": (f"http://<host>:{self.stream_port}"
                        if self._httpd is not None else None),
             "stream_clients": self._stream_clients,
-            "detector": "yolo" if self._model is not None else
+            "detector": ("yolo-pose" if self._has_pose else "yolo")
+                        if self._model is not None else
                         ("haar" if self._cascade is not None else "none"),
         }

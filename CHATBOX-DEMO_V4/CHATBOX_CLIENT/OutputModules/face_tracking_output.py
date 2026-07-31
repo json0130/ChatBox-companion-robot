@@ -121,6 +121,19 @@ class FaceTrackingOutputModule(OutputModule):
         self.verbose_commands = c.get("verbose_commands", False)
         self.show_preview = c.get("show_preview", False)
 
+        # Terminal meter — a one-line live readout of where the subject is and
+        # what the firmware will do about it. Unlike show_preview it needs no
+        # display, so it is the way to watch tracking over SSH or in Docker.
+        # pan_kp / pan_max_step only exist to *predict* the servo response for
+        # the display; the firmware owns the real values and ignores whatever
+        # is set here. Keep them matching PAN_KP and PAN_MAX_STEP in
+        # ServoControl.ino or the degrees column will quietly lie.
+        self.show_meter = c.get("show_meter", False)
+        self.meter_interval = c.get("meter_interval", 0.15)
+        self.meter_width = c.get("meter_width", 31)
+        self.pan_kp = c.get("pan_kp", 0.03)
+        self.pan_max_step = c.get("pan_max_step", 4.0)
+
         # State machine
         self._state = TrackingState.TRACKING
         self._hold_depth = 0
@@ -149,6 +162,12 @@ class FaceTrackingOutputModule(OutputModule):
         self.last_error: Optional[int] = None
         self.frames_seen = 0
         self.commands_sent = 0
+
+        # Meter bookkeeping. The tick rate is measured over a short rolling
+        # window rather than since start-up, so the fps column reacts when YOLO
+        # slows down instead of averaging the problem away.
+        self._last_meter = 0.0
+        self._tick_times: list = []
 
     # ── State ────────────────────────────────────────────────────────────────
 
@@ -358,6 +377,10 @@ class FaceTrackingOutputModule(OutputModule):
                 self._last_keepalive = now
             if self.show_preview:
                 self._preview(self._read_frame(), None, None, state)
+            if self.show_meter:
+                # No detection runs while held, so there is no position to show —
+                # but keep printing so the line does not freeze and look crashed.
+                self._meter(now, None, state)
             return
 
         frame = self._read_frame()
@@ -368,6 +391,12 @@ class FaceTrackingOutputModule(OutputModule):
                 self._update_centering(now, None)
             return
         self.frames_seen += 1
+        if self.show_meter:
+            # Timestamp before inference, so the interval we measure is one
+            # whole detection cycle — that is what the head actually sees.
+            self._tick_times.append(now)
+            if len(self._tick_times) > 20:
+                self._tick_times.pop(0)
 
         error, box = self._detect(frame)
         self.last_error = error
@@ -388,6 +417,8 @@ class FaceTrackingOutputModule(OutputModule):
 
         if self.show_preview:
             self._preview(frame, box, error, state)
+        if self.show_meter:
+            self._meter(now, error, state)
 
     def _update_centering(self, now: float, error: Optional[int]) -> None:
         """Decide whether the head has settled on the subject. CENTERING only."""
@@ -571,6 +602,78 @@ class FaceTrackingOutputModule(OutputModule):
 
         return None, None
 
+    # ── Terminal meter ───────────────────────────────────────────────────────
+
+    def _predicted_step(self, error: int) -> float:
+        """Degrees the firmware will move for this error — display only.
+
+        Mirrors updatePanTracking() in ServoControl.ino: inside PAN_DEADBAND
+        nothing happens at all, and outside it the correction is
+        'panAngle -= error * PAN_KP' clamped to +/-PAN_MAX_STEP. The sign is
+        negative for a positive error because the servo angle decreases as the
+        head turns toward a subject on the right.
+        """
+        if abs(error) <= self.deadband:
+            return 0.0
+        step = -error * self.pan_kp
+        return max(-self.pan_max_step, min(self.pan_max_step, step))
+
+    def _meter(self, now: float, error: Optional[int],
+               state: TrackingState) -> None:
+        """One line of live tracking state, throttled to meter_interval.
+
+        Needs no display, unlike _preview(), so this is what you watch when the
+        robot is running over SSH or inside Docker — which is the normal case.
+        """
+        if now - self._last_meter < self.meter_interval:
+            return
+        self._last_meter = now
+
+        # Force an odd width so there is a single true centre cell to aim at.
+        w = max(11, self.meter_width | 1)
+        mid = w // 2
+        half_px = max(1, self.width // 2)
+
+        cells = ["."] * w
+        cells[mid] = "|"
+        # Deadband edges, so you can see at a glance whether the firmware would
+        # even act on the current position.
+        db = int(round(self.deadband / half_px * mid))
+        for idx in (mid - db, mid + db):
+            if 0 <= idx < w and idx != mid:
+                cells[idx] = ":"
+
+        if error is None:
+            bar = "".join(cells)
+            if state is TrackingState.HOLDING:
+                detail = "  held — not detecting"
+            else:
+                detail = "  no subject in frame"
+        else:
+            pos = mid + int(round(error / half_px * mid))
+            cells[max(0, min(w - 1, pos))] = "O"
+            bar = "".join(cells)
+
+            step = self._predicted_step(error)
+            if step == 0.0:
+                # Same width as the moving case, so the columns to the right of
+                # this one stay put instead of jittering every other line.
+                move = "centred     "
+            else:
+                move = f"{'RIGHT' if error > 0 else 'LEFT':<5} {step:+5.1f}d"
+            detail = f"  err={error:+5d}px  {move}"
+
+        # Measured over a rolling window — this is the true tracking rate, since
+        # YOLO runs synchronously inside tick().
+        fps = 0.0
+        if len(self._tick_times) >= 2:
+            span = self._tick_times[-1] - self._tick_times[0]
+            if span > 0:
+                fps = (len(self._tick_times) - 1) / span
+
+        logger.info(f"[FT] |{bar}|{detail}  {state.value.upper():<9} "
+                    f"{fps:4.1f}fps")
+
     # ── Preview (debug window) ───────────────────────────────────────────────
 
     def _preview(self, frame, box, error: Optional[int],
@@ -619,6 +722,7 @@ class FaceTrackingOutputModule(OutputModule):
             "last_error": self.last_error,
             "serial": self._ser is not None,
             "preview": self.show_preview,
+            "meter": self.show_meter,
             "detector": "yolo" if self._model is not None else
                         ("haar" if self._cascade is not None else "none"),
         }

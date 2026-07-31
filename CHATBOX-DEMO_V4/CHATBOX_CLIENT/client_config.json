@@ -67,7 +67,9 @@
         "yolo_imgsz": 320,
         "yolo_half": false,
         "verbose_commands": false,
-        "show_preview": false
+        "show_preview": false,
+        "show_meter": true,
+        "meter_interval": 0.15
     },
     "capabilities": {
         "navigation": false,

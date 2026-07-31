@@ -157,26 +157,31 @@ def test_active_state_for_viz():
     s.upsert_node(PersonNode(id="mia", display_name="mia")); assign_person_culture(s, "mia", "Maori")
     s.save(kg)
     L = _loop(s, kg_path=kg)
-    L._last_active_written = None; L._active_person = None; L._active_person_t = 0.0
+    L._last_active_written = None; L._last_active_write_t = 0.0
+    L._active_person = None; L._active_person_t = 0.0
     gs = GraphState(kg)
 
-    L._write_active_state("jay")
-    assert gs.read()["active"] == {"person": "jay", "culture": "culture:korean"}
-    # STICKY through a true dropout (no face present) → keeps jay, no flicker
+    def _act():
+        a = gs.read()["active"]
+        return (a.get("person"), a.get("culture"), a.get("present"), a.get("live"))
+
+    L._write_active_state("jay", present=True)
+    assert _act() == ("jay", "culture:korean", True, True), _act()
+    # STICKY through a true dropout (no face present) → keeps jay
     L._write_active_state(None, present=False)
-    assert gs.read()["active"] == {"person": "jay", "culture": "culture:korean"}
+    assert _act()[0] == "jay", _act()
     # an UNKNOWN face on camera (present, unrecognised) drops jay IMMEDIATELY
     L._write_active_state(None, present=True)
-    assert gs.read()["active"] == {"person": None, "culture": None}
+    assert _act() == (None, None, True, True), _act()      # → viz: ChatBox only
     # switching to a recognised person changes focus immediately
-    L._write_active_state("mia")
-    assert gs.read()["active"] == {"person": "mia", "culture": "culture:maori"}
-    # a SUSTAINED no-face dropout (past the grace window) clears to nobody
-    L._active_person_t = 0.0
+    L._write_active_state("mia", present=True)
+    assert _act()[:2] == ("mia", "culture:maori"), _act()
+    # a SUSTAINED no-face dropout (past the grace window) clears to nobody, present False
+    L._active_person_t = 0.0; L._last_active_write_t = 0.0
     L._write_active_state(None, present=False)
-    assert gs.read()["active"] == {"person": None, "culture": None}
-    print("6. active-state: sticky through no-face dropouts, unknown face → drop to "
-          "nobody at once, switches person, clears after grace ✓")
+    assert _act() == (None, None, False, True), _act()     # → viz: no dim (idle)
+    print("6. active-state: sticky, unknown-face→ChatBox-only, no-face→idle, live "
+          "heartbeat + present flag drive the viz dim/no-dim ✓")
 
 
 if __name__ == "__main__":

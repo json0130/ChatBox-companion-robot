@@ -258,15 +258,19 @@ class GraphState:
         return g
 
     def read_active_state(self) -> dict:
-        """The loop's current (person, active-culture) sidecar — display-only, used to
-        highlight the active culture/person and dim the rest. {} when absent."""
+        """The loop's current focus sidecar — display-only. Includes `live` (the loop
+        wrote it within the last few seconds — else it's not running, so the viz must
+        NOT dim) and `present` (a face, even unknown, is on camera). {} when absent."""
+        import time
         p = os.path.join(os.path.dirname(os.path.abspath(self.kg_path)),
                          "active_state.json")
         try:
             with open(p, "r", encoding="utf-8") as fh:
                 d = json.load(fh)
-            return {"person": d.get("person"), "culture": d.get("culture")}
-        except (FileNotFoundError, json.JSONDecodeError, ValueError, OSError):
+            live = (time.time() - float(d.get("ts", 0))) < 5.0
+            return {"person": d.get("person"), "culture": d.get("culture"),
+                    "present": bool(d.get("present")), "live": live}
+        except (FileNotFoundError, json.JSONDecodeError, ValueError, OSError, TypeError):
             return {}
 
     def _read_fresh(self) -> dict:
@@ -308,11 +312,23 @@ class GraphState:
                       if n.get("node_type") == "culture" and n.get("label"))
 
     def delete_node(self, node_id: str) -> dict:
-        """Remove a node and every edge touching it. Returns removed counts."""
+        """Remove a node and every edge touching it. CASCADES for a person: also
+        removes their interests / interaction / conversation subnodes (and thus the
+        fast has_conversation link to the robot), so no orphans are left behind.
+        Returns removed counts."""
         raw = self._read_fresh()
-        nodes = [n for n in raw.get("nodes", []) if n.get("id") != node_id]
+        victims = {node_id}
+        node = next((n for n in raw.get("nodes", []) if n.get("id") == node_id), None)
+        if node is not None and node.get("node_type") == "person":
+            for n in raw.get("nodes", []):
+                nid = n.get("id", "")
+                if (nid.startswith(f"interest:{node_id}:")
+                        or nid.startswith(f"interaction:{node_id}:")
+                        or nid.startswith(f"conversation:{node_id}:")):
+                    victims.add(nid)
+        nodes = [n for n in raw.get("nodes", []) if n.get("id") not in victims]
         edges = [e for e in raw.get("edges", [])
-                 if e.get("source_id") != node_id and e.get("target_id") != node_id]
+                 if e.get("source_id") not in victims and e.get("target_id") not in victims]
         removed = {"nodes": len(raw.get("nodes", [])) - len(nodes),
                    "edges": len(raw.get("edges", [])) - len(edges)}
         raw["nodes"], raw["edges"] = nodes, edges

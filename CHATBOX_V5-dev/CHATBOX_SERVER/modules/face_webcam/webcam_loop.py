@@ -904,6 +904,7 @@ class WebcamKGLoop:
         # plus a STICKY current person so brief face-reco dropouts don't make the
         # highlight (and the dimmed culture nodes) flicker on/off.
         self._last_active_written = None
+        self._last_active_write_t = 0.0
         self._active_person = None
         self._active_person_t = 0.0
         # First-impression: sequence for provisional 'guest_N' ids (unknown faces).
@@ -926,6 +927,7 @@ class WebcamKGLoop:
         self._kg_dirty = False
         self._last_save_t = 0.0
         self._save_min_interval = 1.0   # seconds between debounced saves
+        self._last_save_mtime = 0.0     # mtime of our own last write (external-edit detect)
 
     def _spawn_topic_detect(self, msg: str, verbal: str, person_id: str,
                             robot_id: str, turn_row_id: Optional[int]) -> None:
@@ -1029,6 +1031,24 @@ class WebcamKGLoop:
         """Flag that the graph changed; the loop's _flush_kg debounces the write."""
         self._kg_dirty = True
 
+    def _reload_if_externally_changed(self) -> None:
+        """Adopt edits made to the KG file by ANOTHER writer (the viz — e.g. a node
+        deletion) so they aren't clobbered by our next save and persist to next run.
+        Only reloads when the on-disk mtime is newer than our own last write."""
+        kg = getattr(self, "kg_path", None)
+        if not kg or self._kg_dirty:        # don't drop our own unsaved changes
+            return
+        try:
+            mt = os.path.getmtime(kg)
+        except OSError:
+            return
+        if self._last_save_mtime and mt > self._last_save_mtime + 0.5:
+            with self._store_lock:
+                if self.store.reload(kg):
+                    self._last_save_mtime = os.path.getmtime(kg)
+                    self._last_active_written = None   # force a viz-state refresh
+                    print("[WebcamLoop] adopted an external KG edit (viz)")
+
     def _flush_kg(self, *, force: bool = False) -> None:
         """Persist kg_state.json at most once per _save_min_interval, and only when
         something changed (or `force`). Called every loop iteration on the MAIN
@@ -1043,6 +1063,10 @@ class WebcamKGLoop:
             self.store.save(self.kg_path)
         self._kg_dirty = False
         self._last_save_t = now
+        try:
+            self._last_save_mtime = os.path.getmtime(self.kg_path)   # ignore our own write
+        except OSError:
+            pass
 
     # ── #2: threaded chat pipeline ────────────────────────────────────────────
 
@@ -1235,12 +1259,18 @@ class WebcamKGLoop:
         """Enrol the face in `frame` under a fresh provisional id and persist the face
         DB. Returns the new id, or None if no face was captured. A guest_N is a normal
         PersonNode, so the full culture/interest pipeline runs on them from here."""
+        if frame is None:
+            print("[FirstImpression] auto-enrol skipped — no face seen recently")
+            return None
         gid = self._next_guest_id()
         if not self.face_id.enroll(gid, frame):
             self._guest_seq -= 1          # release the id we reserved
+            print("[FirstImpression] auto-enrol: couldn't capture a clean face — "
+                  "try again facing the camera")
             return None
         self.face_id.save(self.faces_path)
-        print(f"[FirstImpression] new face → saved as '{gid}'")
+        print(f"[FirstImpression] new face → enrolled as '{gid}' (guest); "
+              "profile + fast link to ChatBox will build as you talk")
         return gid
 
     def _learn_name(self, old_id: str, new_id: str, display: str) -> bool:
@@ -1463,15 +1493,20 @@ class WebcamKGLoop:
         eff = self._active_person
         with self._store_lock:
             cid = self._active_culture_id(eff)
-        state = (eff, cid)
-        if state == self._last_active_written:
+        state = (eff, cid, bool(present))
+        # Write on change, OR as a ~2s heartbeat so the viz can tell the loop is LIVE
+        # (a fresh `ts`); when the loop isn't running the file goes stale and the viz
+        # stops dimming. `present` distinguishes "no face" from "unknown face".
+        if state == self._last_active_written and (now - self._last_active_write_t) < 2.0:
             return
         self._last_active_written = state
+        self._last_active_write_t = now
         try:
             path = os.path.join(os.path.dirname(kg), "active_state.json")
             tmp = path + ".tmp"
             with open(tmp, "w") as fh:
-                json.dump({"person": eff, "culture": cid}, fh)
+                json.dump({"person": eff, "culture": cid,
+                           "present": bool(present), "ts": now}, fh)
             os.replace(tmp, path)               # atomic swap — no partial reads
         except Exception:  # noqa: BLE001 — display-only, never fail the loop
             pass
@@ -1874,6 +1909,9 @@ class WebcamKGLoop:
         chat_expire_t   : float           = 0.0
         last_all_detections: list         = []
         last_va         : tuple           = (0.0, 0.0)
+        # Most recent frame that actually contained a face — used for auto-enrol so
+        # typing while glancing at the keyboard doesn't miss the capture.
+        last_face_frame : Optional[np.ndarray] = None
 
         # ── In-window input state ─────────────────────────────────────────────
         input_mode      : int  = _MODE_IDLE
@@ -1909,6 +1947,7 @@ class WebcamKGLoop:
                     if _verbal is not None:
                         last_verbal   = _verbal
                         chat_expire_t = time.time() + 45.0
+                self._reload_if_externally_changed()   # adopt viz deletions (persist)
                 self._drain_pending_topics()
                 self._drain_pending_culture()   # mid-session culture auto-attach
                 # viz highlight (debounced). `present` = a face (even unknown) is on
@@ -1996,6 +2035,9 @@ class WebcamKGLoop:
                     last_person_id = None
                     last_sim       = 0.0
                     last_box       = None
+                # Remember the latest frame that had a face, for a robust auto-enrol.
+                if last_box is not None:
+                    last_face_frame = frame
 
                 # ── KG / PAD tick (every tick_interval) ───────────────────────
                 now = time.time()
@@ -2116,14 +2158,20 @@ class WebcamKGLoop:
                                 print(f"\n  [you]  \"{msg}\"")
 
                                 # ── First impression: meet a stranger ──────────
-                                # (1) Unknown face in view → auto-enrol as guest_N so
+                                # (1) Unrecognised person → auto-enrol as guest_N so
                                 #     THIS turn is attributed to them and the full
                                 #     culture/interest pipeline builds their profile.
-                                if last_person_id is None and last_box is not None:
-                                    gid = self._auto_enroll(frame)
-                                    if gid:
-                                        last_person_id = gid
-                                        last_tier      = "visitor"
+                                #     Uses the last frame that had a face (robust to
+                                #     glancing at the keyboard while typing).
+                                if last_person_id is None:
+                                    if last_face_frame is not None:
+                                        gid = self._auto_enroll(last_face_frame)
+                                        if gid:
+                                            last_person_id = gid
+                                            last_tier      = "visitor"
+                                    else:
+                                        print("[FirstImpression] no face seen yet — "
+                                              "look at the camera so I can meet you")
                                 # (2) Did they introduce themselves? Re-key the
                                 #     provisional guest id to their real name.
                                 if last_person_id and last_person_id.startswith("guest_"):

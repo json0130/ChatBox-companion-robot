@@ -517,20 +517,34 @@ function computeLit() {
   const culture = activeState.culture;                 // "culture:korean" | null
   const slug = culture ? culture.slice("culture:".length) : null;
   const person = activeState.person || null;
-  // anchors: robot(s) always, the active culture node + its ck topics
-  nodeById.forEach((n, id) => { if (n.type === "Robot") lit.add(id); });
+  const adj = new Map();
+  const add = (a, b) => { if (!adj.has(a)) adj.set(a, []); adj.get(a).push(b); };
+  links.forEach(l => { add(l.source.id, l.target.id); add(l.target.id, l.source.id); });
+
+  // Anchors: the robot + its OWN identity (persona / role / capabilities) always,
+  // AND the topics its capabilities know (space, jazz, math…) so they never dim.
+  const _robotSelf = new Set(["Robot", "Capability", "Persona", "Role"]);
+  nodeById.forEach((n, id) => {
+    if (!_robotSelf.has(n.type)) return;
+    lit.add(id);
+    if (n.type === "Capability") {
+      for (const t of (adj.get(id) || [])) {          // capability --about--> topic
+        const tn = nodeById.get(t);
+        if (tn && tn.type === "Topic") lit.add(t);
+      }
+    }
+  });
+  // Active culture node + its ck topics.
   if (culture) lit.add(culture);
   if (slug) nodeById.forEach((n, id) => {
     if (id.startsWith("ck:" + slug + ":")) lit.add(id); });
+
   // The current person's OWN subgraph only — namespaced by interest id
   // (interest:<person>:…) so shared topics can NEVER leak the highlight to another
-  // person. So when ChatBox sees someone else, jay's node/interests/exclusive
-  // bridges all dim; a topic both share stays lit (it's the current person's too).
+  // person. When ChatBox sees someone else, jay's node/interests/exclusive bridges
+  // all dim; a topic both share stays lit (it's the current person's too).
   if (person && nodeById.has(person)) {
     lit.add(person);
-    const adj = new Map();
-    const add = (a, b) => { if (!adj.has(a)) adj.set(a, []); adj.get(a).push(b); };
-    links.forEach(l => { add(l.source.id, l.target.id); add(l.target.id, l.source.id); });
     for (const nb of (adj.get(person) || [])) {
       const nn = nodeById.get(nb);
       if (!nn) continue;
@@ -548,9 +562,18 @@ function computeLit() {
   return lit;
 }
 function applyCultureFocus() {
-  // computeLit() lights the robot + the recognised person's own subgraph + their
-  // active culture. With no recognised person (nobody, or an UNKNOWN face on camera)
-  // only ChatBox stays lit and everyone else — jay included — dims.
+  const a = activeState || {};
+  // Only dim when the loop is LIVE and there's actually someone in front of the
+  // camera. If the webcam loop isn't running (stale/absent state) OR no face is
+  // detected, show the FULL graph — no dimming.
+  if (!a.live || (!a.person && !a.present)) {
+    gNodes.selectAll("g.node").classed("inactive", false);
+    gLinks.selectAll("line").classed("inactive", false);
+    return;
+  }
+  // Live + someone present: light the robot(+its capabilities) + the recognised
+  // person's own subgraph + their active culture; dim the rest. An UNKNOWN face
+  // (present but no recognised person) leaves only ChatBox + its capabilities lit.
   const lit = computeLit();
   gNodes.selectAll("g.node").classed("inactive", d => !lit.has(d.id));
   gLinks.selectAll("line").classed("inactive",

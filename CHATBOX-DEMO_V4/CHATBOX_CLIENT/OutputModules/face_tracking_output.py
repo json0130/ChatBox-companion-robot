@@ -122,6 +122,12 @@ class FaceTrackingOutputModule(OutputModule):
         self.center_settle = c.get("center_settle", 0.3)
         self.center_timeout = c.get("center_timeout", 3.0)
         self.center_lost_grace = c.get("center_lost_grace", 1.5)
+        # Minimum beat between finishing the turn and starting to speak. Turning
+        # to face someone and talking in the same instant reads as abrupt; a
+        # short pause reads as the robot having looked at you first. Measured
+        # from when centring completed, not added on top of it, so slow speech
+        # synthesis absorbs the pause instead of stacking with it.
+        self.speak_delay = c.get("speak_delay", 1.0)
 
         # Sources
         self.serial_port = c.get("serial_port")             # None -> auto-detect
@@ -199,6 +205,8 @@ class FaceTrackingOutputModule(OutputModule):
         self._center_started: Optional[float] = None
         self._in_band_since: Optional[float] = None
         self._last_seen: Optional[float] = None
+        # When centring last resolved — the reference point for speak_delay.
+        self.centered_at: Optional[float] = None
 
         # Hardware / model handles
         self._ser = None
@@ -292,6 +300,7 @@ class FaceTrackingOutputModule(OutputModule):
             self._center_started = time.time()
             self._in_band_since = None
             self._last_seen = None
+            self.centered_at = None
 
             if (not self.enabled or self._hold_requested
                     or self._state is TrackingState.HOLDING):
@@ -300,6 +309,7 @@ class FaceTrackingOutputModule(OutputModule):
                 # there is nothing to centre and nothing may move — say so now
                 # rather than leaving the caller to time out.
                 self._center_result = True
+                self.centered_at = time.time()
                 self._centered_event.set()
                 return
 
@@ -335,6 +345,7 @@ class FaceTrackingOutputModule(OutputModule):
                 return
             self._center_result = ok
             self._center_requested = False
+            self.centered_at = time.time()
             if self._state is TrackingState.CENTERING:
                 self._state = TrackingState.TRACKING
             self._centered_event.set()

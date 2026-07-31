@@ -135,6 +135,7 @@ class SimpleConcurrentClient(BasicClient):
                 hold_taken.set()
                 if not tracker.wait_until_held(timeout=2.0):
                     logger.warning("[FaceTracking] hold not confirmed — speaking anyway")
+                self._settle_before_speaking(tracker)
             if emotion:
                 self.on_emotion_detected(emotion)
 
@@ -151,6 +152,24 @@ class SimpleConcurrentClient(BasicClient):
         finally:
             if tracker and hold_taken.is_set():
                 tracker.release_hold()
+
+    @staticmethod
+    def _settle_before_speaking(tracker) -> None:
+        """Hold a beat between finishing the turn and opening its mouth.
+
+        Measured from when centring completed rather than added after it, so a
+        slow synthesiser absorbs the pause instead of stacking with it: gTTS
+        already spends ~2s making the audio, and nobody wants that to become
+        three. The head is already frozen by the time we get here, so the pause
+        looks like the robot regarding you before it speaks.
+        """
+        delay = getattr(tracker, "speak_delay", 0.0)
+        if delay <= 0:
+            return
+        centered_at = getattr(tracker, "centered_at", None)
+        remaining = delay - (time.time() - centered_at) if centered_at else delay
+        if remaining > 0:
+            time.sleep(remaining)
 
     def _wait_for_speech_end(self, settle: float = 0.8, timeout: float = 120.0) -> bool:
         """Block until TTS has been quiet for `settle` seconds.
@@ -220,6 +239,7 @@ class SimpleConcurrentClient(BasicClient):
                     tracker.request_hold()
                     hold_taken.set()
                     tracker.wait_until_held(timeout=2.0)
+                    self._settle_before_speaking(tracker)
 
             try:
                 tts.process_output_synced(f"Persona updated to {persona_name}.",

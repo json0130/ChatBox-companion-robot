@@ -65,6 +65,7 @@
         "center_settle": 0.3,
         "center_timeout": 3.0,
         "center_lost_grace": 1.5,
+        "speak_delay": 1.0,
         "model_path": "yolov8n-pose.pt",
         "head_conf": 0.35,
         "require_head": true,

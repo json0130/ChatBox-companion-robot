@@ -816,6 +816,7 @@ class WebcamKGLoop:
         emotion_enabled: bool  = False,
         demographics_enabled: bool = False,
         demographics_backend: str  = 'fairface',
+        detector:        str   = 'opencv',
         debug_prompt:    bool  = False,
     ):
         self.robot_id      = robot_id
@@ -825,7 +826,7 @@ class WebcamKGLoop:
         self.llm           = llm_client
         self.show_window   = show_window
 
-        self.face_id = FaceIdentifier(threshold=threshold)
+        self.face_id = FaceIdentifier(threshold=threshold, detector=detector)
         if os.path.exists(faces_path):
             self.face_id.load(faces_path)
         else:
@@ -2290,8 +2291,9 @@ class WebcamKGLoop:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_enroll_mode(name: str, faces_path: str,
-                    camera_index: int, n_captures: int, threshold: float) -> None:
-    fi = FaceIdentifier(threshold=threshold)
+                    camera_index: int, n_captures: int, threshold: float,
+                    detector: str = "opencv") -> None:
+    fi = FaceIdentifier(threshold=threshold, detector=detector)
     if os.path.exists(faces_path):
         fi.load(faces_path)
     ok = fi.enroll_from_camera(name, camera_index=camera_index, n_captures=n_captures)
@@ -2480,6 +2482,11 @@ def main() -> None:
     p.add_argument("--emotion",    default="hsemotion",
                    choices=["hsemotion", "hsemotion-b2", "efficientnet"],
                    help="Emotion detection backend (default: hsemotion)")
+    p.add_argument("--detector",   default="opencv",
+                   choices=["opencv", "mtcnn"],
+                   help="Face locator: 'opencv' (single Haar pass shared by "
+                        "face-reco + emotion, default) or 'mtcnn' (landmark-aligned, "
+                        "more accurate). Re-enroll people after switching.")
     p.add_argument("--no-window",  action="store_true",
                    help="Headless — terminal output only")
     p.add_argument("--esp32-host", default="",
@@ -2524,7 +2531,7 @@ def main() -> None:
         if not args.name:
             p.error("--name is required for enroll mode")
         run_enroll_mode(args.name, args.faces, args.camera,
-                        args.n_captures, args.threshold)
+                        args.n_captures, args.threshold, detector=args.detector)
         return
 
     if args.mode == "consolidate":
@@ -2588,6 +2595,7 @@ def main() -> None:
         emotion_enabled  = args.enable_emotion,
         demographics_enabled = args.culture,
         demographics_backend = args.culture_backend,
+        detector             = args.detector,
         debug_prompt         = args.debug_prompt,
     )
     loop.run(camera_index=args.camera)

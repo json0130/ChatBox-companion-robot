@@ -1,11 +1,24 @@
 """
 Face enrollment and recognition using facenet-pytorch.
 
-Backend: MTCNN (face detection + alignment) + InceptionResnetV1 (512-dim embeddings).
+Detector modes (how faces are *located* in the frame):
+    "opencv"  — a single OpenCV Haar `detectMultiScale` pass finds every face box.
+                Each box is cropped and embedded with InceptionResnetV1 for identity,
+                and the *same* box is handed to the emotion detector. One detection
+                feeds both pipelines (no separate MTCNN/Haar per model).  [default]
+    "mtcnn"   — facenet-pytorch MTCNN detects + landmark-aligns each face before the
+                embedding. Higher recognition accuracy, but MTCNN is the locator.
+
+Embeddings are always InceptionResnetV1 (VGGFace2, 512-dim). If facenet-pytorch is
+not installed, both modes fall back to a coarse Haar pixel embedding.
 Runs on CPU — avoids CUDA version conflicts with the system torch install.
 
+NOTE: enrollment and identification must use the SAME detector mode — a face
+enrolled under MTCNN alignment will match poorly against an OpenCV-cropped probe
+(and vice-versa). Re-enroll people after switching modes.
+
 Usage:
-    fi = FaceIdentifier()
+    fi = FaceIdentifier(detector="opencv")
     fi.enroll("alice", bgr_frame)          # call multiple times to average embeddings
     fi.enroll("bob",   bgr_frame)
     person_id, sim, box = fi.identify(bgr_frame)   # box is (x1,y1,x2,y2) or None
@@ -56,13 +69,19 @@ class FaceIdentifier:
     def __init__(
         self,
         threshold: float = 0.75,
+        detector:  str   = "opencv",
     ) -> None:
         """
         Args:
             threshold: Minimum cosine similarity to accept a match [0, 1].
                        0.75 is conservative; lower for looser matching.
+            detector:  Face locator — "opencv" (single Haar pass shared with the
+                       emotion detector) or "mtcnn" (landmark-aligned, more accurate).
         """
         self.threshold = threshold
+        self.detector  = detector.lower()
+        if self.detector not in ("opencv", "mtcnn"):
+            raise ValueError(f"detector must be 'opencv' or 'mtcnn', got {detector!r}")
 
         # Per-person: averaged embedding and sample count for running average
         self._embeddings: dict[str, np.ndarray] = {}
@@ -79,31 +98,38 @@ class FaceIdentifier:
     # ── Initialisation ────────────────────────────────────────────────────────
 
     def _init_backend(self) -> None:
+        # Haar is always loaded when present: it is the locator for "opencv" mode
+        # and the fallback when facenet-pytorch is unavailable.
+        if os.path.exists(_HAAR_PATH):
+            self._haar = cv2.CascadeClassifier(_HAAR_PATH)
+
         if _FACENET_AVAILABLE:
-            self._mtcnn = MTCNN(
-                image_size=160, margin=20,
-                keep_all=False,       # single-face path (enroll, identify)
-                device=self._device,
-                post_process=True,
-            )
-            self._mtcnn_all = MTCNN(
-                image_size=160, margin=20,
-                keep_all=True,        # multi-face path (identify_all)
-                device=self._device,
-                post_process=True,
-            )
             self._resnet = InceptionResnetV1(pretrained="vggface2").eval()
+            # MTCNN is only needed when it is the chosen locator — skip it in
+            # "opencv" mode so we don't load/run a second detector.
+            if self.detector == "mtcnn":
+                self._mtcnn = MTCNN(
+                    image_size=160, margin=20,
+                    keep_all=False,       # single-face path (enroll, identify)
+                    device=self._device,
+                    post_process=True,
+                )
+                self._mtcnn_all = MTCNN(
+                    image_size=160, margin=20,
+                    keep_all=True,        # multi-face path (identify_all)
+                    device=self._device,
+                    post_process=True,
+                )
+        elif self._haar is not None:
+            print("[FaceID] WARNING — facenet-pytorch not installed; using pixel fallback")
         else:
-            if os.path.exists(_HAAR_PATH):
-                self._haar = cv2.CascadeClassifier(_HAAR_PATH)
-                print("[FaceID] WARNING — facenet-pytorch not installed; using pixel fallback")
-            else:
-                print("[FaceID] ERROR — neither facenet-pytorch nor Haar cascade available")
+            print("[FaceID] ERROR — neither facenet-pytorch nor Haar cascade available")
 
     @property
     def backend(self) -> str:
         if self._resnet is not None:
-            return "facenet"
+            # facenet embeddings, located by either Haar (opencv) or MTCNN.
+            return f"facenet+{self.detector}"
         if self._haar is not None:
             return "haar-pixel"
         return "none"
@@ -154,9 +180,80 @@ class FaceIdentifier:
         box   = (x, y, x + w, y + h)
         return emb, box
 
+    # ── OpenCV (Haar) locator — shared single detection ───────────────────────
+
+    def _detect_boxes_opencv(
+        self, frame_bgr: np.ndarray, scale: float = 1.0, max_faces: int = 4,
+    ) -> list[tuple]:
+        """One Haar pass → up to `max_faces` boxes (x1,y1,x2,y2), largest first.
+
+        Detection runs on a `scale`-downsized grayscale image for speed; boxes are
+        mapped back to original-frame coordinates.
+        """
+        if self._haar is None:
+            return []
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        if scale != 1.0:
+            gray = cv2.resize(gray, (int(gray.shape[1] * scale),
+                                     int(gray.shape[0] * scale)))
+        faces = self._haar.detectMultiScale(gray, scaleFactor=1.15,
+                                            minNeighbors=5, minSize=(40, 40))
+        if len(faces) == 0:
+            return []
+        faces = sorted(faces, key=lambda f: f[2] * f[3], reverse=True)[:max_faces]
+        inv = 1.0 / scale
+        return [(int(x * inv), int(y * inv), int((x + w) * inv), int((y + h) * inv))
+                for (x, y, w, h) in faces]
+
+    def _crop_with_margin(
+        self, frame_bgr: np.ndarray, box: tuple, margin: float = 0.2,
+    ) -> np.ndarray:
+        """Crop `box` from the frame with a relative margin (approximates MTCNN's
+        margin so Haar-located crops embed closer to MTCNN-aligned ones)."""
+        h, w = frame_bgr.shape[:2]
+        x1, y1, x2, y2 = box
+        mx, my = int((x2 - x1) * margin), int((y2 - y1) * margin)
+        x1, y1 = max(0, x1 - mx), max(0, y1 - my)
+        x2, y2 = min(w, x2 + mx), min(h, y2 + my)
+        return frame_bgr[y1:y2, x1:x2]
+
+    def _embed_crop_facenet(self, crop_bgr: np.ndarray) -> Optional[np.ndarray]:
+        """Embed an already-cropped face with InceptionResnetV1.
+
+        Applies facenet's fixed image standardization ((x-127.5)/128) — the same
+        preprocessing MTCNN(post_process=True) uses — so opencv-located crops and
+        mtcnn-aligned faces land in a comparable embedding space.
+        """
+        if crop_bgr is None or crop_bgr.size == 0:
+            return None
+        rgb  = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
+        face = cv2.resize(rgb, (160, 160)).astype(np.float32)
+        face = (face - 127.5) / 128.0
+        tensor = torch.from_numpy(face).permute(2, 0, 1).unsqueeze(0)  # [1,3,160,160]
+        with torch.no_grad():
+            emb = self._resnet(tensor)
+        emb_np = emb.cpu().numpy()[0]
+        return emb_np / (np.linalg.norm(emb_np) + 1e-8)
+
+    def _embed_opencv(
+        self, frame_bgr: np.ndarray
+    ) -> tuple[Optional[np.ndarray], Optional[tuple]]:
+        """Single-face path for opencv mode: largest Haar box → facenet embedding."""
+        boxes = self._detect_boxes_opencv(frame_bgr, scale=1.0, max_faces=1)
+        if not boxes:
+            return None, None
+        box = boxes[0]
+        emb = self._embed_crop_facenet(self._crop_with_margin(frame_bgr, box))
+        if emb is None:
+            return None, None
+        return emb, box
+
     def _get_embedding_and_box(
         self, frame_bgr: np.ndarray
     ) -> tuple[Optional[np.ndarray], Optional[tuple]]:
+        # opencv mode with facenet embeddings: one Haar detection, resnet embedding.
+        if self.detector == "opencv" and self._resnet is not None and self._haar is not None:
+            return self._embed_opencv(frame_bgr)
         if self._resnet is not None:
             return self._embed_facenet(frame_bgr)
         if self._haar is not None:
@@ -313,6 +410,26 @@ class FaceIdentifier:
             Faces are ordered by detection confidence (highest first).
             Returns [] when no faces are found.
         """
+        # ── OpenCV mode: one Haar pass locates every face, facenet embeds each ──
+        if self.detector == "opencv" and self._resnet is not None and self._haar is not None:
+            boxes = self._detect_boxes_opencv(frame_bgr, scale=scale, max_faces=max_faces)
+            results = []
+            for box in boxes:
+                emb = self._embed_crop_facenet(self._crop_with_margin(frame_bgr, box))
+                if emb is None:
+                    continue
+                if not self._embeddings:
+                    results.append((None, 0.0, box))
+                    continue
+                best_name, best_sim = None, -1.0
+                for name, stored in self._embeddings.items():
+                    s = _cosine_sim(emb, stored)
+                    if s > best_sim:
+                        best_sim, best_name = s, name
+                pid = best_name if best_sim >= self.threshold else None
+                results.append((pid, float(best_sim), box))
+            return results
+
         # ── Haar fallback: single face only ──────────────────────────────────
         if self._mtcnn_all is None:
             if self._haar is None:

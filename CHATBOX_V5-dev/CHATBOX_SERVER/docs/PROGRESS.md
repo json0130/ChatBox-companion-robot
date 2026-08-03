@@ -848,3 +848,20 @@ notes into the system prompt; records real turns onto `SessionNode.turns`.
   disabled and the worker finished fast. Renamed to `_stop_evt`.
 - *Save spam* (identical snapshots each tick): added dirty-gating so KG-only ticks don't rewrite
   unchanged graphs.
+
+## Unified OpenCV face detection (shared by face-reco + emotion)
+
+**Goal:** one face-detection pass feeds both identity and emotion, using OpenCV.
+
+- **Tried:** added a `detector` mode to `FaceIdentifier` (`face_id.py`) — `"opencv"`
+  (new default) vs `"mtcnn"`. In opencv mode a single Haar `detectMultiScale` locates
+  every face; each box is cropped (with a ~20% margin to mimic MTCNN's) and embedded by
+  the *same* InceptionResnetV1 (facenet fixed-image-standardization) for identity, and the
+  same box is handed to the emotion detector. MTCNN is not loaded in opencv mode.
+- **Worked:** `identify_all` returns the shared Haar boxes → the detection worker already
+  passes each box to emotion, so face-reco + emotion now share ONE detection. `--detector
+  {opencv,mtcnn}` on the loop + enroll mode. 12/12 face/culture tests pass; embeddings stay
+  L2-normalised (self-sim=1).
+- **Didn't / caveat:** Haar boxes are unaligned vs MTCNN's landmark alignment, so recognition
+  is a bit looser — **re-enroll people after switching modes** (a face enrolled under MTCNN
+  matches poorly against an opencv-cropped probe). `--detector mtcnn` restores the old path.

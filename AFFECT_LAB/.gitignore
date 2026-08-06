@@ -1,0 +1,5 @@
+# Fetched on first run, not worth versioning
+face_detection_yunet_*.onnx
+# Screenshots from the S key
+affect_*.png
+__pycache__/

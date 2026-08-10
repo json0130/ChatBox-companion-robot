@@ -161,6 +161,15 @@ STEPS = 5
 # rather than snapping back to a bright neutral the instant the gesture ends.
 HOME_TAGS = {"default", "sleep"}
 
+# ...with one exception. On a home pose the neck returns level, because droop and
+# posture both push it the same way for a bright, dominant robot and together they
+# consume 12 of its 30 degrees of travel — the head parks visibly off-centre and
+# stays there. A slumped shoulder or a drooped ear reads as mood; a permanently
+# tilted head reads as a fault, or as looking at something else.
+#
+# Gestures are untouched: the neck still moves with the mood while one plays.
+HOME_LEVEL_SERVOS = {"RNeck", "LNeck"}
+
 # ── How droop and posture reach each servo ──────────────────────────────────
 # Degrees at full deflection (droop or posture = 1.0), signed so that a positive
 # droop reads as "sadder" and a positive posture as "more open". Ears carry the
@@ -242,7 +251,8 @@ def clamp_style(style: Dict[str, float]) -> Dict[str, float]:
     return out
 
 
-def resolve_servo(name: str, symbol: int, style: Dict[str, float]) -> int:
+def resolve_servo(name: str, symbol: int, style: Dict[str, float],
+                  home: bool = False) -> int:
     """One servo, one step: symbol -> styled angle."""
     spec = SERVOS[name]
     rest = spec["rest"]
@@ -253,11 +263,11 @@ def resolve_servo(name: str, symbol: int, style: Dict[str, float]) -> int:
     # 1+2. scale the excursion from rest
     angle = rest + style["amplitude"] * (target - rest)
 
-    # 3. valence tint
-    angle += style["droop"] * DROOP_DEG.get(name, 0)
-
-    # 4. carriage, neck and shoulders only
-    angle += style["posture"] * POSTURE_DEG.get(name, 0)
+    # 3+4. mood: valence tint, then carriage. Skipped for the neck on a home pose
+    # so the head comes back level — see HOME_LEVEL_SERVOS.
+    if not (home and name in HOME_LEVEL_SERVOS):
+        angle += style["droop"] * DROOP_DEG.get(name, 0)
+        angle += style["posture"] * POSTURE_DEG.get(name, 0)
 
     # 5. never leave the stock pose range
     lo, hi = servo_range(name)
@@ -273,8 +283,10 @@ def resolve_gesture(tag: str, style: Dict[str, float] = None
     if tag not in MOVE_SETS:
         raise KeyError(f"unknown tag {tag!r}; have {sorted(MOVE_SETS)}")
     st = clamp_style(style)
-    if tag in HOME_TAGS:
-        # Reach the home pose fully; keep the mood in droop and posture.
+    home = tag in HOME_TAGS
+    if home:
+        # Reach the home pose fully; keep the mood in droop and posture, except
+        # on the neck, which comes back level.
         st = dict(st, amplitude=1.0)
     move = MOVE_SETS[tag]
 
@@ -282,7 +294,8 @@ def resolve_gesture(tag: str, style: Dict[str, float] = None
     for servo, column, per_step in CHANNELS:
         raw = move[column]
         seq = raw if per_step else [raw] * STEPS
-        angles[servo] = [resolve_servo(servo, seq[i], st) for i in range(STEPS)]
+        angles[servo] = [resolve_servo(servo, seq[i], st, home)
+                         for i in range(STEPS)]
 
     return {
         "tag": tag,

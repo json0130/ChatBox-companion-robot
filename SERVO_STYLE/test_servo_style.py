@@ -161,6 +161,34 @@ check_true("a real gesture is still damped",
            gesture["RShoulder"][0] < S.resolve_gesture("greeting")["angles"]["RShoulder"][0],
            "greeting is not a home pose")
 
+print("\n=== 7c. The head comes back level at rest ===")
+# Droop and posture both lift the neck for a bright, dominant robot, together
+# eating 12 of its 30 degrees — it would park off-centre and stay there.
+bright = {"posture": 0.49, "droop": -0.91}
+for tag in sorted(S.HOME_TAGS & set(S.MOVE_SETS)):
+    home = S.resolve_gesture(tag, bright)["angles"]
+    plain = S.resolve_gesture(tag, S.NEUTRAL_STYLE)["angles"]
+    for servo in ("RNeck", "LNeck"):
+        check(f"{tag}: {servo} returns level", home[servo], plain[servo])
+    # The rest of the body still carries the mood at rest. Checked with a sad
+    # style: 'default' already holds the ears at 165, which is their maximum, so
+    # a bright mood cannot lift them further and correctly clamps.
+    sad_home = S.resolve_gesture(tag, {"posture": -0.54, "droop": 0.29})["angles"]
+    check_true(f"{tag}: ears still droop at rest",
+               sad_home["Ears"][0] < plain["Ears"][0],
+               f"{plain['Ears'][0]} -> {sad_home['Ears'][0]}")
+    check_true(f"{tag}: shoulders still tinted",
+               home["RShoulder"][0] != plain["RShoulder"][0],
+               f"{plain['RShoulder'][0]} -> {home['RShoulder'][0]}")
+    check(f"{tag}: neck level under a sad style too",
+          sad_home["RNeck"], plain["RNeck"])
+# During a gesture the neck must still move with the mood.
+g_bright = S.resolve_gesture("greeting", bright)["angles"]
+g_plain = S.resolve_gesture("greeting")["angles"]
+check_true("greeting: neck still moves with the mood",
+           g_bright["RNeck"][0] != g_plain["RNeck"][0],
+           f"{g_plain['RNeck'][0]} -> {g_bright['RNeck'][0]}")
+
 print("\n=== 8. Out-of-range style values are clamped, not trusted ===")
 wild = S.clamp_style({"amplitude": 99, "tempo": -5, "posture": 42,
                       "droop": -99, "idle": 100})

@@ -618,8 +618,12 @@ void setNeck(uint8_t Orientation) {
     case (L): rTarget = 100; lTarget = 120; break;
     case (M): rTarget = 82;  lTarget = 103; break;
   }
-  RNeckDest = styleAngle(rTarget, 82, 70, 100, DROOP_NECK, POSTURE_NECK);
-  LNeckDest = styleAngle(lTarget, 103, 80, 120, -DROOP_NECK, -POSTURE_NECK);
+  // On a home pose the head comes back level: droop and posture together eat 12
+  // of the neck's 30 degrees, so it would park off-centre and stay there.
+  int dNeck = styleHomePose ? 0 : DROOP_NECK;
+  int pNeck = styleHomePose ? 0 : POSTURE_NECK;
+  RNeckDest = styleAngle(rTarget, 82, 70, 100, dNeck, pNeck);
+  LNeckDest = styleAngle(lTarget, 103, 80, 120, -dNeck, -pNeck);
 }
 
 // ========================================== setEyes ========================================== //

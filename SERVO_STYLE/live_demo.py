@@ -9,7 +9,7 @@ your face, at whichever persona is selected. Look sad and press GREETING and it
 greets you sadly — small, slow, ears down.
 
     python live_demo.py                  # auto-detect the ESP32
-    python live_demo.py --port COM8
+    python live_demo.py --port COM10     # or name it, if detection picks wrong
     python live_demo.py --dry-run        # no serial, just show what would be sent
     python live_demo.py --list-ports
 

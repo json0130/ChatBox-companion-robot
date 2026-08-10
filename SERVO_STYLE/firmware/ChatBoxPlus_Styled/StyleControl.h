@@ -64,6 +64,13 @@ extern float styleIdle;
 // looking sad while it waits instead of snapping back to a bright neutral.
 extern float styleAmpOverride;
 
+// True while a home pose is playing. setNeck() uses it to return the head level:
+// droop and posture both push the neck the same way for a bright, dominant robot
+// and together consume 12 of its 30 degrees, so the head would park visibly off
+// centre and stay there. A slumped shoulder reads as mood; a permanently tilted
+// head reads as a fault. Gestures are unaffected.
+extern bool styleHomePose;
+
 // ── Prototypes ───────────────────────────────────────────────────────── //
 uint8_t styleAngle(float target, int rest, int lo, int hi,
                    int droopDeg, int postureDeg);

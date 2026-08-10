@@ -50,6 +50,7 @@ float styleIdle      = 0.45f;
 // Negative means "use styleAmplitude". Raised to 1.0 for home poses — see the
 // note in StyleControl.h.
 float styleAmpOverride = -1.0f;
+bool  styleHomePose    = false;
 
 // Poses that exist to reach a position rather than to express something.
 bool styleIsHomePose(const String &tag) {
@@ -58,7 +59,8 @@ bool styleIsHomePose(const String &tag) {
 
 // Called at the start of every gesture, before any setX() runs.
 void styleBeginGesture(const String &tag) {
-  styleAmpOverride = styleIsHomePose(tag) ? 1.0f : -1.0f;
+  styleHomePose = styleIsHomePose(tag);
+  styleAmpOverride = styleHomePose ? 1.0f : -1.0f;
 }
 
 static inline float clampf(float v, float lo, float hi) {

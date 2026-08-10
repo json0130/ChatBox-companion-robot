@@ -5,9 +5,19 @@ mirrors emotion has no personality at all. This is the machinery that lets it do
 both: keep a stable character while still reacting to the person in front of it —
 and lets two different robots share a design yet read as different creatures.
 
-Everything below is implemented in [`affect.py`](affect.py) and verified by
-[`test_affect.py`](test_affect.py). All numbers in this document were produced by
-running that code, not by hand.
+The whole chain, from a face to a servo angle:
+
+```
+camera -> valence/arousal -> PAD -> five style values -> servo angles
+```
+
+Implemented across [`affect.py`](affect.py) and
+[`../SERVO_STYLE/servo_style.py`](../SERVO_STYLE/servo_style.py), verified by two
+test suites. **Every number in this document was produced by running that code**,
+including the worked examples in §9 — none of it is illustrative.
+
+Section 10 says plainly which parts come from published work and which are
+proposals of mine, because the two get cited very differently.
 
 ---
 
@@ -45,14 +55,18 @@ flowchart TD
     O["OCEAN traits<br/>5 numbers, set once"] -->|Mehrabian regressions| B["baseline PAD<br/>the robot's temperament"]
     F["camera: the person's face"] -->|valence + arousal| E
     B --> E["felt PAD<br/>temperament nudged by empathy"]
-    R["who they are<br/>(knowledge graph)"] -.->|Dominance, not built yet| E
-    E --> S["shown PAD<br/>scaled by what the body can express"]
+    R["who they are<br/>(knowledge graph)"] -.->|Dominance, not built| E
+    E --> S["shown PAD<br/>scaled by what the body expresses"]
     S --> W["3 words<br/>-> LLM prompt"]
-    E --> G["4 parameters<br/>amplitude, tempo, posture, idle"]
-    G -.->|not built yet| SV["servo angles"]
+    E --> G["amplitude, tempo,<br/>posture, idle, droop"]
+    G -->|"STYLE line over serial"| SV["servo angles<br/>computed on the ESP32"]
+    T["gesture tag<br/>e.g. greeting"] --> SV
+    SV --> M["the robot moves"]
 ```
 
-Six stages. Four are built; two are marked.
+Every stage is built except the relationship → Dominance path, which needs the
+knowledge graph. `idle` is computed and sent but the firmware does not act on it
+yet.
 
 ---
 
@@ -207,58 +221,181 @@ and amplitude describe the same restraint; applying both would count it twice.
 
 ## 8. Stage six — parameters to servo angles
 
-**Not built yet.** The intended shape, three lines in the firmware:
+Built, in [`../SERVO_STYLE/`](../SERVO_STYLE/). Two things happen here that the
+paper does not describe.
 
-```cpp
-angle = neutral + amplitude * (moveset_angle - neutral);   // scale the travel
-angle += posture * POSTURE_RANGE;                          // neck/shoulders only
-stepDelay = BASE_DELAY / tempo;                            // the 900 ms timer
-```
+### The fifth parameter
 
-Amplitude scales each servo's excursion *from its neutral*, so a gentle wave is
-the same gesture performed smaller rather than a different gesture. Posture
-offsets only neck and shoulders — it is carriage, not expression. Tempo divides
-the existing step timing. `idle` drives a new behaviour: a small spontaneous
-movement every so often, so the robot does not look switched off while waiting.
+The paper's four cannot make a greeting look sad. Amplitude only makes it
+*smaller* — a small wave is still a happy wave. Tempo only makes it slower.
+Neither carries valence.
 
-Transport needs one new message alongside the existing tag names:
+So there is a fifth, **`droop`**: a signed offset that pushes the expressive
+servos down when the coordinate is unpleasant and lifts them when it is pleasant,
+on top of whatever gesture is playing.
 
 ```
-STYLE 1.06 1.18 +0.49 0.65
+droop = −felt.P × 1.4 × travel        clamped −1 … +1
 ```
+
+Derived from `felt`, not `shown`: the body's display fraction and amplitude
+describe the same restraint, so using the scaled coordinate would apply it twice.
+
+### Travel — the mechanical half of embodiment
+
+```
+amplitude_sent = amplitude × travel
+```
+
+| | travel | |
+|---|---|---|
+| CHATBOX | 0.65 | tabletop: the same gestures, kept small |
+| ELLEBOT | 1.00 | mobile: performed at authored size |
+
+Deliberately **not** the `show` fractions from §6 (0.30 / 1.00). Reusing those
+multiplies the restraint twice and lands CHATBOX at 0.19 amplitude, which does not
+read as reserved — it reads as broken.
+
+### What the firmware already had
+
+A tag arrives as a string, is looked up in `listOfMoveSets`, and a fixed five-step
+sequence plays. Each step holds one *symbol* per servo — `D` (down), `M` (middle),
+`U` (up) — and `setNeck` / `setShoulder` / `setEyes` / `setBrows` / `setEars` /
+`setHand` convert that symbol into a hardcoded angle. Identical every time, for
+every persona, in every mood.
+
+Each servo's `M` pose is its **rest**, and that is what amplitude scales away
+from:
+
+| servo | rest | D | M | U | range |
+|---|---|---|---|---|---|
+| Ears | 130 | 120 | 130 | 165 | 120–165 |
+| RBrow / LBrow | 120 / 60 | 150 / 30 | 120 / 60 | 90 / 90 | 90–150 / 30–90 |
+| REyelid / LEyelid | 110 / 70 | 90 / 90 | 110 / 70 | 130 / 50 | 90–130 / 50–90 |
+| RNeck / LNeck | 82 / 103 | 70 / 110 | 82 / 103 | 100 / 80 | 70–100 / 80–120 |
+| RShoulder / LShoulder | 140 / 40 | 50 / 130 | 140 / 40 | 170 / 10 | 50–170 / 10–130 |
+| RHand / LHand | 90 / 90 | 50 / 130 | 90 / 90 | 150 / 30 | 50–150 / 30–130 |
+
+### The conversion, per servo, per step
+
+```
+1. symbol           -> target        exactly as the stock firmware does
+2. angle = rest + amplitude × (target − rest)
+3. angle += droop   × DROOP_DEG[servo]
+4. angle += posture × POSTURE_DEG[servo]      neck and shoulders only
+5. clamp to the servo's stock range
+```
+
+Degrees at full deflection. Left-hand servos take the negated weight, because
+both sides sit at 90 ± an offset — a mood has to move them oppositely or the robot
+ends up lopsided. Hands get zero droop: a drooping hand reads as a failed servo,
+not a mood.
+
+| servo | DROOP_DEG | POSTURE_DEG |
+|---|---|---|
+| Ears | −20 | 0 |
+| RBrow / LBrow | +12 / −12 | 0 |
+| REyelid / LEyelid | −10 / +10 | 0 |
+| RNeck / LNeck | −8 / +8 | +10 / −10 |
+| RShoulder / LShoulder | −12 / +12 | +8 / −8 |
+| RHand / LHand | 0 | 0 |
+
+Tempo never touches an angle — it divides the step timer only:
+
+```
+step_ms = 900 / tempo
+```
+
+Keeping that separation means a tempo bug can make the robot sluggish but can
+never make it reach somewhere new.
+
+### Two properties worth knowing
+
+**Clamping to the stock range** means styling can never command a pose the
+unstyled firmware would not have commanded. The test suite checks all 189
+tag/style combinations for this.
+
+**Amplitude therefore stops at 1.00.** Each servo has only three symbols, so `D`
+and `U` already *are* the ends of its range — asking for 1.3 of the way to an end
+stop just saturates. The authored gestures are treated as full expression, which
+styling damps.
+
+### Transport
+
+Five floats cross the wire, not 55 angles. The ESP32 keeps the move sets and
+computes the angles itself.
+
+```
+STYLE 0.34 0.63 -0.54 +0.29 0.36      only when the mood changes
+greeting                               every gesture
+```
+
+Style is sticky — the firmware holds those five values and applies them to every
+gesture until a new `STYLE` arrives. Tag messages are unchanged, so the existing
+protocol still works, and if a `STYLE` line never arrives the robot behaves exactly
+as it did before.
 
 ---
 
 ## 9. End to end, with real numbers
 
-Both robots, same moment: a happy face in front of them.
+Both robots see a **sad** face, and both are asked to play `greeting`. Every
+figure below came from running the code.
 
-**CHATBOX**
+### Traits to a style
 
-| stage | P | Ar | D | |
-|---|---|---|---|---|
-| baseline from traits | +0.266 | −0.009 | −0.643 | *mildly pleased* |
-| face says happy | | | | v +0.80, a +0.50 |
-| felt, empathy 0.60 | +0.586 | +0.296 | −0.643 | D unmoved |
-| shown, body 30% | +0.176 | +0.089 | −0.193 | *mildly elated* |
+| | CHATBOX | ELLEBOT |
+|---|---|---|
+| traits | O−0.5 C+0.2 E−0.6 A+0.6 N+0.2 | O+0.5 C+0.4 E+0.7 A+0.6 N−0.4 |
+| baseline PAD | +0.266, −0.009, −0.643 | +0.425, +0.483, +0.421 |
+| face `sad` | v −0.70, a −0.38 | v −0.70, a −0.38 |
+| felt (empathy 0.60) | −0.314, −0.232, −0.643 | −0.250, −0.035, +0.421 |
+| shown | −0.094, −0.069, −0.193 *(30%)* | −0.250, −0.035, +0.421 *(100%)* |
+| four params | amp 0.517, tempo 0.626, post −0.544 | amp 0.819, tempo 0.894, post +0.220 |
+| × travel | 0.517 × 0.65 = **0.336** | 0.819 × 1.00 = **0.819** |
+| droop | 0.314 × 1.4 × 0.65 = **+0.285** | 0.250 × 1.4 × 1.00 = **+0.350** |
+| **wire** | `STYLE 0.34 0.63 -0.54 +0.29 0.36` | `STYLE 0.82 0.89 +0.22 +0.35 0.44` |
+| step timing | 900 / 0.63 = **1437 ms** | 900 / 0.89 = **1007 ms** |
 
-→ prompt: **"warm, calm, reserved"**
-→ movement: amplitude 0.76, tempo 0.92, posture −0.27, idle 0.57
+### One servo, all five steps of the conversion
 
-**ELLEBOT**
+CHATBOX's right shoulder, `greeting` step 0, where the move set says `U`:
 
-| stage | P | Ar | D | |
-|---|---|---|---|---|
-| baseline from traits | +0.425 | +0.483 | +0.421 | *elated* |
-| face says happy | | | | v +0.80, a +0.50 |
-| felt, empathy 0.60 | +0.650 | +0.493 | +0.421 | D unmoved |
-| shown, body 100% | +0.650 | +0.493 | +0.421 | *strongly elated* |
+```
+1  symbol U                          -> 170
+2  rest + amp × (target − rest)      = 140 + 0.34 × (170 − 140) = 150.1
+3  + droop × −12                     = 150.1 + (+0.29 × −12)    = 146.7
+4  + posture × +8                    = 146.7 + (−0.54 × +8)     = 142.3
+5  clamp to 50..170                  -> 142
+                                        (stock would be 170)
+```
 
-→ prompt: **"affectionate, lively, assertive"**
-→ movement: amplitude 1.06, tempo 1.18, posture +0.49, idle 0.65
+ELLEBOT, identical gesture, identical face:
 
-Same face, same instant. One responds warmly but quietly from a withdrawn
-posture; the other responds brightly and expansively. Neither has left character.
+```
+2  140 + 0.82 × 30 = 164.6
+3  164.6 + (+0.35 × −12) = 160.4
+4  160.4 + (+0.22 × +8)  = 162.1
+5  -> 162
+```
+
+### The whole gesture
+
+| servo | stock | CHATBOX | ELLEBOT |
+|---|---|---|---|
+| Ears | 165 165 165 165 165 | 136 136 136 136 136 | 152 152 152 152 152 |
+| RBrow | 120 ×5 | 123 ×5 | 124 ×5 |
+| REyelid | 130 90 90 90 90 | 114 100 100 100 100 | 123 90 90 90 90 |
+| RNeck | 82 ×5 | 74 ×5 | 81 ×5 |
+| LNeck | 103 ×5 | 111 ×5 | 104 ×5 |
+| RShoulder | 170 170 50 50 50 | 142 142 102 102 102 | 162 162 64 64 64 |
+| LShoulder | 130 ×5 | 78 ×5 | 116 ×5 |
+| RHand / LHand | 90 ×5 | 90 ×5 | 90 ×5 |
+
+Same tag, same face. CHATBOX barely lifts its arm (142 rather than 170), ears down
+29°, head dipped, and the whole thing takes 7.2 s instead of 4.5. ELLEBOT performs
+most of the gesture but still visibly tinted. Neither was given a different move
+set, and the hands stay put in both.
 
 ---
 
@@ -270,12 +407,17 @@ Worth being clear about, because the two get cited very differently.
 |---|---|
 | OCEAN → PAD equations | **Published.** Mehrabian via ALMA. Reproduces the paper's Table I to two decimals. |
 | Russell's two axes for the face | **Published**, and the reason Dominance is excluded. |
+| Symbol → angle tables | **Transcribed** from `ServoControl.ino`, and the tests assert a neutral style reproduces the stock firmware exactly. |
 | Descriptor bands | **Fitted** so CHATBOX returns the paper's own example. Surrounding words are mine. |
 | `empathy = 0.60` | **Proposal.** Not specified anywhere. Tune with `[` and `]` in the demo. |
 | `show`: 0.30 / 1.00 | **Proposal.** The paper describes ELLEBOT's extra channels but gives no number. |
 | The four style equations | **Proposal.** Axis assignments follow the nonverbal literature; weights are tuning. |
-| Parameters → servo angles | **Not written.** §8 is a sketch. |
+| **`droop`, the fifth parameter** | **Addition, not implementation.** The paper names four, and none of them can carry valence. |
+| `travel`: 0.65 / 1.00 | **Proposal.** Mechanical fractions, distinct from `show`. |
+| The droop gain (1.4) | **Proposal.** Pleasure rarely reaches ±1 in practice, so a straight copy barely tints anything. |
+| `DROOP_DEG` / `POSTURE_DEG` | **Proposal.** Tuned by eye in the angle table, never against a real servo. |
 | Relationship → Dominance | **Not written.** Needs the knowledge graph. |
+| `idle` frequency | **Computed and sent, but the firmware ignores it.** The stirring behaviour is optional Edit 4 in `SERVO_STYLE/firmware/INTEGRATION.md`. |
 
 ### One quirk to resolve
 
@@ -294,6 +436,8 @@ pulling arousal down by 0.17.
 
 ## 11. Where each piece lives
 
+### AFFECT_LAB — persona, emotion, and the four parameters
+
 | stage | code |
 |---|---|
 | OCEAN → PAD | `affect.to_pad`, weights in `affect.WEIGHTS` |
@@ -306,5 +450,29 @@ pulling arousal down by 0.17.
 | the four parameters | `affect.gesture_style`, limits in `affect.STYLE_LIMITS` |
 | whole chain in one call | `affect.pipeline` |
 
-Run [`test_affect.py`](test_affect.py) to check all of it, or
-[`webcam_demo.py`](webcam_demo.py) to watch it move against your own face.
+### SERVO_STYLE — parameters to angles, and the wire
+
+| stage | code |
+|---|---|
+| move sets and symbol→angle tables | `servo_style.MOVE_SETS`, `servo_style.SERVOS` |
+| droop / posture weights | `servo_style.DROOP_DEG`, `POSTURE_DEG` |
+| mechanical fractions | `servo_style.TRAVEL` |
+| one servo, one step | `servo_style.resolve_servo` |
+| a whole tag | `servo_style.resolve_gesture` |
+| the wire format | `servo_style.wire_message`, `parse_wire` |
+| persona+emotion → five values | `live_demo.current_style` |
+| the serial link | `live_demo.RobotLink` |
+| the firmware | `firmware/ChatBoxPlus_Styled/` — `StyleControl.h` holds the weights |
+
+### Running it
+
+```bash
+python AFFECT_LAB/test_affect.py           # the affect maths
+python SERVO_STYLE/test_servo_style.py     # the angle maths
+python AFFECT_LAB/webcam_demo.py           # watch the coordinate move
+python SERVO_STYLE/preview.py greeting --emotion sad    # the angle table
+python SERVO_STYLE/live_demo.py            # the whole chain, driving the robot
+```
+
+The two test suites need no camera and no hardware. `live_demo.py` falls back to
+preview-only when no ESP32 is attached, so it is safe to run either way.

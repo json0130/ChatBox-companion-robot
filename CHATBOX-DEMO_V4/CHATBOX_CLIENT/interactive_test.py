@@ -1,5 +1,6 @@
 import socket
 import time
+from typing import Optional  # for X|None on Python <3.10
 
 ESP32_HOST = 'chatbox.local'
 ESP32_PORT = 8888
@@ -10,7 +11,7 @@ VALID_EXPRESSIONS = [
 ]
 
 
-def connect_to_esp32() -> socket.socket | None:
+def connect_to_esp32() -> Optional[socket.socket]:
     try:
         sock = socket.create_connection((ESP32_HOST, ESP32_PORT), timeout=5.0)
         sock.settimeout(1.0)

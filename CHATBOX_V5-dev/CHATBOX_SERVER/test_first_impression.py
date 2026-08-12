@@ -79,6 +79,37 @@ def test_graph_rename():
           "relationship edges followed, no dangling guest id, counts stable ✓")
 
 
+# ── 2b. rename onto an EXISTING person merges, never clobbers ─────────────────
+
+def test_graph_rename_merges_into_existing_person():
+    """A returning person whose face is not recognised gets auto-enrolled as a new
+    guest; folding that guest back must not wipe the relationship they already had.
+    (Blind upsert previously demoted them from 'known' to 'visitor'.)"""
+    from modules.graph_relationship.interactions import set_closeness
+    from modules.graph_relationship.kg_bridge import derive_tier
+
+    s = InMemoryGraphStore()
+    s.upsert_node(RobotNode(id=_ROBOT, name=_ROBOT, embodiment=Embodiment.CAT))
+    s.upsert_node(PersonNode(id="jay", display_name="Jay"))
+    s.upsert_node(PersonNode(id="guest_1", display_name="guest_1"))
+
+    set_closeness(s, "jay", _ROBOT, rapport=1.0, trust=0.10)   # established bond
+    set_interaction_count(s, "jay", _ROBOT, 3, source="t")
+    set_closeness(s, "guest_1", _ROBOT, rapport=0.10, trust=0.0)   # fresh guest
+    set_interaction_count(s, "guest_1", _ROBOT, 1, source="t")
+    assert derive_tier("jay", _ROBOT, s) == "known"
+
+    assert rename_person(s, "guest_1", "jay", _ROBOT, display_name="Jay")
+
+    n = s.get_node("interaction:jay:chatbox")
+    assert n.rapport == 1.0 and n.trust == 0.10, "closeness must not be clobbered"
+    assert n.interaction_count == 4, "interaction counts should add up"
+    assert derive_tier("jay", _ROBOT, s) == "known", "must not be demoted to visitor"
+    assert s.get_node("guest_1") is None
+    print("2b. rename onto an existing person MERGES closeness (max) and counts "
+          "(sum) — no demotion when a known face is re-enrolled as a guest ✓")
+
+
 # ── 3. SessionStore.rename_person ─────────────────────────────────────────────
 
 def test_session_rename():
@@ -177,6 +208,7 @@ def test_guest_gets_culture_pipeline():
 if __name__ == "__main__":
     test_name_extraction()
     test_graph_rename()
+    test_graph_rename_merges_into_existing_person()
     test_session_rename()
     test_face_rename()
     test_learn_name_flow()

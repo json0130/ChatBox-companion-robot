@@ -61,17 +61,41 @@ def rename_person(
         }))
 
     # Recreate the renamed nodes (preserving all other fields).
+    #
+    # `new_id` may ALREADY exist — e.g. a returning person whose face was not
+    # recognised got auto-enrolled as a fresh guest, and we are now folding that
+    # guest back onto their real identity. In that case the two nodes describe the
+    # SAME relationship split across two ids, so they must be merged: blindly
+    # upserting would overwrite the accumulated rapport/trust/interaction_count
+    # with the guest's near-zero values and demote the person's tier.
     new_nodes = []
     changed = False
     for oid, nid in id_map.items():
-        node = store.get_node(oid)
-        if node is None:
+        incoming = store.get_node(oid)
+        if incoming is None:
             continue
         changed = True
-        update = {"id": nid}
-        if node.node_type == "person":
+        existing = store.get_node(nid)          # None unless new_id already exists
+        base, update = incoming, {"id": nid}
+
+        if incoming.node_type == "person":
+            if existing is not None:
+                base = existing                 # keep the established person node
             update["display_name"] = display_name or new_id
-        new_nodes.append(node.model_copy(update=update))
+
+        elif incoming.node_type == "interaction" and existing is not None:
+            # Closeness belongs to the PAIR, so someone must not lose the bond they
+            # built just because the robot failed to recognise their face and filed
+            # the session under a guest id.
+            base = existing
+            update.update({
+                "rapport": max(existing.rapport, incoming.rapport),
+                "trust":   max(existing.trust,   incoming.trust),
+                "interaction_count": (existing.interaction_count
+                                      + incoming.interaction_count),
+            })
+
+        new_nodes.append(base.model_copy(update=update))
 
     if not changed:
         return False

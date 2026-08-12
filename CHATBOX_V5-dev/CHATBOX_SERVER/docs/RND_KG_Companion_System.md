@@ -83,18 +83,47 @@ durable signals differently.
 
 File: `modules/face_webcam/face_id.py`
 
-**Pipeline.** Each frame is passed to MTCNN for face detection and alignment; the aligned crop is embedded
-by InceptionResnetV1 (pretrained on VGGFace2) into a **512-dimensional L2-normalized** vector. Because the
-vectors are unit-norm, cosine similarity reduces to a dot product.
+**Pipeline.** Faces are *located* by one of two detectors (`--detector`): **opencv** (default) runs the
+OpenCV Haar cascades — frontal plus profile plus profile-on-a-mirrored-image, so a turned head is still
+found — and dedupes overlapping detections of one head by IoU **and** centre-containment; **mtcnn** uses
+facenet-pytorch's landmark-aligned detector. Either way the crop (margin **0.20** frontal / **0.30**
+profile) is embedded by InceptionResnetV1 (VGGFace2) into a **512-dimensional L2-normalized** vector, so
+cosine similarity reduces to a dot product. The same box is reused for emotion — one detection feeds both.
 
-**Identification.** A probe embedding is compared against each enrolled identity's stored prototype;
-the argmax identity is accepted iff cosine similarity ≥ **0.75** (`threshold`), otherwise the face is
-reported as *unknown*. `identify_all()` handles multiple faces per frame (cap **4**, detection downscaled
-by **0.5** for speed) and returns `(person_id, similarity, bounding_box)` per face.
+**Identification (multi-view gallery).** Each person is stored as **several prototype views**, not one
+vector: matching takes the *best* view (`retain`) and the *mean of the top two* (`acquire`, once ≥4 views)
+so a single freak prototype cannot admit a stranger. A face is accepted iff `acquire ≥` **0.75**
+(`threshold`) — plus a runner-up margin of 0.05 when ≥2 people are enrolled. Averaging every pose into one
+centroid (the previous design) produced a blurry mean that matched no pose well; that was the root cause of
+"recognition only works at one angle".
 
-**Enrollment.** `enroll(name, frame)` is additive: repeated calls maintain a **running average** of the
-person's embedding (with a per-person sample count), which is robust to pose/lighting variation. The
-identity database is persisted to `faces.npz` as three arrays: `names`, `embeddings` (N×512), `counts`.
+**Hysteresis.** `identify_all(..., sticky=<held id>)` keeps the identity the caller already holds down to
+`retain_threshold` **0.62**, and only lets a rival take over if it clears `threshold` *and* beats the held
+score by `switch_margin` **0.08**. Applied to the largest face only, so a second person in frame is never
+pulled toward the held identity. The loop layers a sampled duty cycle on top: identity is voted over a
+**1 s** window and then held for **3 s** (`--id-sample` / `--id-interval`), with a miss-grace of 2 windows
+for hard poses — but an empty frame or a rival vote drops the label at once.
+
+**Enrollment.** `enroll(name, frame)` adds an ENROLLED view: a frame close to an existing view (≥ `tau_dup`
+**0.92**) refines it in place (weight-capped at 50), a genuinely different pose becomes a new view, and a
+full tier evicts its most redundant member so the gallery keeps *spanning* poses. Guided enrollment
+(`--mode enroll`) prompts for front / left / right / up / down and rejects frames that merely repeat a view
+already stored — pose coverage, not frame count, is what buys accuracy.
+
+**Adaptive capture.** During conversation the loop can learn new views of an already-known person. The
+embedding is computed anyway, so this costs no extra inference. Adoption is decided once per vote window
+and gated on: a confirmed identity, exactly one face in frame, unanimous votes, a quality check (box fully
+in frame, ≥90 px, Laplacian sharpness ≥40), a per-person interval (20 s) and session cap (20), and a
+similarity in `[adapt_floor, tau_dup)` — `adapt_floor` defaults to `threshold`, so by default it only
+learns views it already recognises. Learned views live in a **separate tier** that can never displace
+enrolled ones and can be wiped with `--reset-adaptive`. The worker only *queues* adoptions; the main thread
+applies them, keeping a single writer on the gallery.
+
+**Persistence.** `faces.npz` schema 2: `schema`, `names`, `counts`, `protos` (M×512, all people's views
+stacked), `proto_owner` (M, index into `names`), `proto_meta` (M×4: weight, origin, created, last-hit), plus
+a legacy `embeddings` (P×512) per-person centroid kept so older readers still work. All arrays are
+fixed-width numeric, so it loads with `allow_pickle=False`. A schema-1 file (single averaged embedding per
+person) is **migrated on load** into one enrolled view per person — no data loss, no forced re-enrollment.
 
 **Fallbacks / robustness.** If `facenet-pytorch` is unavailable, an OpenCV Haar-cascade path degrades to a
 coarse pixel-level identity. All heavy model construction happens once at start-up.

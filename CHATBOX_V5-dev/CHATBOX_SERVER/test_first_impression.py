@@ -95,24 +95,30 @@ def test_session_rename():
     print("3. session rename: transcript rows re-keyed guest_1 → jay ✓")
 
 
-# ── 4. FaceIdentifier.rename (move + weighted merge) ──────────────────────────
+# ── 4. FaceIdentifier.rename (move + gallery concat) ─────────────────────────
 
 def test_face_rename():
     f = FaceIdentifier.__new__(FaceIdentifier)   # skip model init
-    f._embeddings = {"guest_1": np.array([1.0, 0.0, 0.0])}
+    f.k_anchor, f.k_adapt = 12, 6
+    f._protos = {"guest_1": np.array([[1.0, 0.0, 0.0]], dtype=np.float32)}
+    f._meta   = {"guest_1": np.array([[2.0, 0.0, 0.0, 0.0]], dtype=np.float32)}
     f._counts = {"guest_1": 2}
     # move (new name absent)
     assert f.rename("guest_1", "jay")
-    assert "guest_1" not in f._embeddings and "jay" in f._embeddings
+    assert "guest_1" not in f._protos and "jay" in f._protos
     assert f._counts["jay"] == 2
-    # merge (new name present) — averaged + renormalised
-    f._embeddings["guest_2"] = np.array([0.0, 1.0, 0.0]); f._counts["guest_2"] = 1
+    # merge (new name present) — galleries CONCATENATE. Averaging the two would
+    # destroy exactly the pose diversity the multi-view gallery exists to build.
+    f._protos["guest_2"] = np.array([[0.0, 1.0, 0.0]], dtype=np.float32)
+    f._meta["guest_2"]   = np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32)
+    f._counts["guest_2"] = 1
     assert f.rename("guest_2", "jay")
-    assert "guest_2" not in f._embeddings
-    assert abs(np.linalg.norm(f._embeddings["jay"]) - 1.0) < 1e-6   # unit vector
+    assert "guest_2" not in f._protos
+    assert f._protos["jay"].shape == (2, 3)                 # both views survive
+    assert np.allclose(np.linalg.norm(f._protos["jay"], axis=1), 1.0)  # unit rows
     assert f._counts["jay"] == 3
     assert f.rename("nobody", "x") is False
-    print("4. face rename: move + weighted-merge (unit-normalised), missing key → False ✓")
+    print("4. face rename: move + gallery concat (per-row unit-norm), missing key → False ✓")
 
 
 # ── 5. _learn_name flow: re-key across all stores + in-memory maps ────────────

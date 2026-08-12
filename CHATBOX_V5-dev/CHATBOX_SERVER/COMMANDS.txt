@@ -10,12 +10,20 @@ cd /home/jay/Desktop/2026-Jay/ChatBox-companion-robot/CHATBOX-DEMO_V4/CHATBOX_SE
  1. ENROLL A FACE  (do this first before running the main loop)
 ────────────────────────────────────────────────────────────────────────────────
 
-  # Enroll one person — opens a webcam window, counts down 3 s, then captures
-  # 15 frames. Look straight at the camera during capture.
+  # Enroll one person — opens a webcam window and GUIDES you through five head
+  # poses (front, left, right, chin up, chin down), storing each as a separate
+  # view. Follow the on-screen prompt; it refuses frames that just repeat a view
+  # it already has.
   python3 -m modules.face_webcam.webcam_loop --mode enroll --name Jay
 
-  # Enroll with more capture frames (better accuracy)
+  # ACCURACY COMES FROM POSE COVERAGE, NOT FRAME COUNT. 30 frames all shot
+  # face-on collapse into ONE view and stay angle-brittle; --n-captures is split
+  # across the poses (30 → 6 frames per pose).
   python3 -m modules.face_webcam.webcam_loop --mode enroll --name Jay --n-captures 30
+
+  # Only capture certain poses
+  python3 -m modules.face_webcam.webcam_loop --mode enroll --name Jay \
+      --enroll-poses front,left,right
 
   # Enroll a second person
   python3 -m modules.face_webcam.webcam_loop --mode enroll --name Peter
@@ -23,8 +31,38 @@ cd /home/jay/Desktop/2026-Jay/ChatBox-companion-robot/CHATBOX-DEMO_V4/CHATBOX_SE
   # Enroll using a different camera (e.g. external USB cam = index 1)
   python3 -m modules.face_webcam.webcam_loop --mode enroll --name Jay --camera 1
 
+  # Inspect what is stored — how many views each person has and how distinct
+  # they are. "only ONE view" means recognition will fail off-angle.
+  python3 -m modules.face_webcam.webcam_loop --faces-info
+
   # Enrollments are saved automatically to faces.npz in the working directory.
-  # Re-enrolling the same name UPDATES (averages) the existing embedding.
+  # Re-enrolling the same name ADDS to that person's views (same pose refines an
+  # existing view; a new angle becomes a new one).
+
+
+────────────────────────────────────────────────────────────────────────────────
+ 1b. ANGLE ROBUSTNESS / FLICKER  (defaults are already on — tune only if needed)
+────────────────────────────────────────────────────────────────────────────────
+
+  # The robot also LEARNS new views of a known person while talking to them.
+  # Watch for:  [FaceID] learned a new view of 'jay' (sim 0.81) — 5 enrolled + 1 learned
+  # Undo everything it taught itself (enrolled views are kept):
+  python3 -m modules.face_webcam.webcam_loop --reset-adaptive
+  python3 -m modules.face_webcam.webcam_loop --reset-adaptive jay
+  # Turn the learning off entirely:
+  python3 -m modules.face_webcam.webcam_loop --llm --no-adapt
+
+  # Calibration trace — per-frame box, similarity and votes. Use it to pick
+  # --threshold / --retain-threshold for your lighting.
+  python3 -m modules.face_webcam.webcam_loop --llm --id-debug
+
+  # Still flickering? hold the identity longer / through more missed windows:
+  python3 -m modules.face_webcam.webcam_loop --llm --retain-threshold 0.55 --id-miss-grace 3
+  # Mixing people up? tighten instead:
+  python3 -m modules.face_webcam.webcam_loop --llm --threshold 0.80 --id-margin 0.08
+
+  # Profile detection costs ~3 ms/frame; disable if you only ever face the camera:
+  python3 -m modules.face_webcam.webcam_loop --llm --no-multi-pose
 
 
 ────────────────────────────────────────────────────────────────────────────────

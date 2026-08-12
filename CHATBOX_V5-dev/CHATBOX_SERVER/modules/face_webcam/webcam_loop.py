@@ -360,6 +360,7 @@ def draw_overlay(
     enroll_capturing: bool = False,
     enroll_progress:  int  = 0,
     enroll_total:     int  = 12,
+    enroll_prompt:    str  = "",
     llm_on:           bool = False,
     # ALL detected faces this tick  ← new
     all_detections: list  = [],
@@ -388,8 +389,11 @@ def draw_overlay(
         for cx, cy, dx, dy in [(x1,y1,1,1),(x2,y1,-1,1),(x1,y2,1,-1),(x2,y2,-1,-1)]:
             cv2.line(frame, (cx, cy), (cx + dx*clen, cy), dcol, 3)
             cv2.line(frame, (cx, cy), (cx, cy + dy*clen), dcol, 3)
-        # Name + similarity above box
-        name_label = f"{dpid}  {det.get('sim',0):.2f}" if dpid else f"?  {det.get('sim',0):.2f}"
+        # Name + similarity above box. A negative sim means "identity held from the
+        # last check, not measured this frame" — show 'held' rather than a number.
+        dsim = det.get("sim", 0.0)
+        sim_str = "held" if dsim < 0 else f"{dsim:.2f}"
+        name_label = f"{dpid}  {sim_str}" if dpid else f"?  {sim_str}"
         _text(frame, name_label, (x1 + 4, max(y1 - 20, 18)), 0.58, dcol)
         # Emotion below name (inside top of box area)
         dem, dec = det.get("emotion", ""), det.get("e_conf", 0.0)
@@ -544,6 +548,14 @@ def draw_overlay(
         banner_w, banner_h = 340, 60
         bx0 = (w - banner_w) // 2
         by0 = h // 2 - banner_h // 2
+        # Pose instruction sits ABOVE the progress banner — it is the thing the
+        # person has to act on, so it gets the prominent slot.
+        if enroll_prompt:
+            pw = 560
+            px0 = max(4, (w - pw) // 2)
+            _panel(frame, px0, by0 - 54, min(w - 4, px0 + pw), by0 - 10,
+                   col=_C_DARK, alpha=0.9)
+            _text(frame, enroll_prompt, (px0 + 14, by0 - 24), 0.62, _C_CYAN, 2)
         _panel(frame, bx0, by0, bx0 + banner_w, by0 + banner_h,
                col=(0, 80, 0), alpha=0.85)
         cv2.rectangle(frame, (bx0, by0), (bx0 + banner_w, by0 + banner_h),
@@ -650,6 +662,17 @@ class _DetectionWorker(threading.Thread):
         detect_emotion:  bool  = True,
         detect_demographics: bool = False,
         demographics_backend: str = 'fairface',
+        id_check_interval: float = 3.0,
+        id_sample_window:  float = 1.0,
+        id_confirm_ratio:  float = 0.6,
+        id_miss_grace:     int   = 2,
+        id_debug:          bool  = False,
+        adapt_enabled:     bool  = True,
+        adapt_floor:       Optional[float] = None,
+        adapt_interval:    float = 20.0,
+        adapt_max:         int   = 20,
+        adapt_min_px:      int   = 90,
+        adapt_min_sharp:   float = 40.0,
     ):
         super().__init__(daemon=True, name="detection-worker")
         self._face_id         = face_id
@@ -657,6 +680,46 @@ class _DetectionWorker(threading.Thread):
         self._max_faces       = max_faces
         self._det_scale       = det_scale
         self._detect_emotion  = detect_emotion
+
+        # ── Sampled identity (sample-and-hold) ───────────────────────────────
+        # Face recognition flickers if we re-identify every frame. Instead we run
+        # a short SAMPLE window (id_sample_window s) where we identify each frame
+        # and vote, confirm the identity if it was recognised in >= id_confirm_ratio
+        # of those frames, then HOLD that identity for id_check_interval s — during
+        # which we only detect boxes (for emotion/display), never re-identify. This
+        # stabilises the label and skips the expensive embedding most of the time.
+        self._id_check_interval = id_check_interval
+        self._id_sample_window  = id_sample_window
+        self._id_confirm_ratio  = id_confirm_ratio
+        self._id_phase   = 'sample'   # 'sample' | 'hold'
+        self._id_phase_t = 0.0        # when the current phase started (0 = uninit)
+        self._id_votes: dict[str, int] = {}   # pid -> frames recognised this window
+        self._id_samples = 0          # frames WITH A FACE processed this sample window
+        self._confirmed_pid: Optional[str] = None   # currently held primary identity
+        # A face was seen at all this window (even an unrecognised one). Distinguishes
+        # "hard pose, couldn't name them" from "nobody there" — the first deserves a
+        # grace window, the second must drop the label immediately.
+        self._saw_face_window = False
+        self._id_miss_grace = id_miss_grace
+        self._miss_streak   = 0
+        self._id_debug      = id_debug
+
+        # ── Adaptive capture: learn a new VIEW of a known person automatically ──
+        # Decided once per sample window (never per frame) because the corroboration
+        # signal — the vote ratio — is a window property. The worker only EMITS
+        # events; the main thread applies them, so the gallery keeps a single writer.
+        self._adapt_enabled  = adapt_enabled
+        self._adapt_floor    = (adapt_floor if adapt_floor is not None
+                                else getattr(face_id, "threshold", 0.75))
+        self._adapt_interval = adapt_interval
+        self._adapt_max      = adapt_max
+        self._adapt_min_px   = adapt_min_px
+        self._adapt_min_sharp = adapt_min_sharp
+        self._adapt_buf: list = []      # [(sim, emb)] candidates this window
+        self._adapt_dirty     = False   # window saw 0 or >1 faces → not usable
+        self._adapt_last: dict = {}     # pid -> last adoption timestamp
+        self._adapt_count     = 0       # adoptions this session
+        self._adapt_events: list = []   # queued for the main thread
 
         # Per-person smoothers (only ever touched from this thread — no lock needed).
         # Skipped entirely when emotion detection is disabled (no models loaded).
@@ -720,11 +783,61 @@ class _DetectionWorker(threading.Thread):
             if frame is None:
                 continue
 
-            raw = self._face_id.identify_all(
-                frame,
-                max_faces=self._max_faces,
-                scale=self._det_scale,
-            )
+            now = time.time()
+            if self._id_phase_t == 0.0:
+                self._id_phase_t = now   # first frame → start the sample window
+
+            phase_elapsed = now - self._id_phase_t
+
+            if self._id_phase == 'sample':
+                # Identify every frame this window and vote on the primary face.
+                # `sticky` gives face_id the identity we currently hold so it can
+                # apply hysteresis (keep it through a brief off-angle dip).
+                # `with_emb` keeps the embedding that was computed anyway, so
+                # adaptive capture costs no extra inference.
+                full = self._face_id.identify_all(
+                    frame, max_faces=self._max_faces, scale=self._det_scale,
+                    sticky=self._confirmed_pid, with_emb=self._adapt_enabled,
+                )
+                if self._adapt_enabled:
+                    self._collect_adapt(frame, full)
+                    raw = [(p, s, b) for (p, s, b, _e) in full]
+                else:
+                    raw = full
+                primary = self._primary_pid(raw)
+                # Only frames that actually CONTAIN a face count toward the vote.
+                # Counting empty frames inflates the denominator, so looking away
+                # (no box at all) used to push the ratio under id_confirm_ratio and
+                # drop a perfectly good identity — a direct cause of label flicker.
+                if raw:
+                    self._id_samples += 1
+                    self._saw_face_window = True
+                    if primary is not None:
+                        self._id_votes[primary] = self._id_votes.get(primary, 0) + 1
+
+                # Show the already-held identity (no flicker); before the first
+                # confirmation, show the raw guesses so something appears.
+                raw_for_results = (
+                    self._relabel_primary(raw, self._confirmed_pid)
+                    if self._confirmed_pid is not None else raw
+                )
+
+                if self._id_debug:
+                    self._debug_frame(frame, raw, 'sample')
+
+                if phase_elapsed >= self._id_sample_window:
+                    self._confirm_identity()      # decide held identity from votes
+                    self._id_phase   = 'hold'
+                    self._id_phase_t = now
+            else:  # hold — detect boxes only, reuse the confirmed identity
+                boxes = self._face_id.detect_boxes(
+                    frame, max_faces=self._max_faces, scale=self._det_scale,
+                )
+                raw_for_results = self._boxes_to_raw(boxes, self._confirmed_pid)
+                if phase_elapsed >= self._id_check_interval:
+                    self._id_phase   = 'sample'   # time to re-check identity
+                    self._id_phase_t = now
+                    self._start_sample_window()
 
             # Throttle the (heavier) demographics model — infer every Nth cycle,
             # reuse the last voted estimate on the cycles we skip.
@@ -733,54 +846,244 @@ class _DetectionWorker(threading.Thread):
                 self._demo_cycle += 1
                 run_demo = (self._demo_cycle % self._demo_every) == 0
 
-            results = []
-            for person_id, sim, box in raw:
-                if not self._detect_emotion:
-                    # Emotion disabled for this pass — face identification only.
-                    emo, e_conf, ev, ea = "neutral", 0.0, 0.0, 0.0
-                elif person_id is not None:
-                    if person_id not in self._per_emotion:
-                        self._per_emotion[person_id] = EmotionDetector.create(
-                            self._emotion_backend
-                        )
-                    emo, e_conf, ev, ea = self._per_emotion[person_id].detect(
-                        frame, box=box, smooth=True
-                    )
-                else:
-                    emo, e_conf, ev, ea = self._unknown_emotion.detect(
-                        frame, box=box, smooth=False
-                    )
-
-                # ── Demographics (region/heritage + age) — display only ────────
-                demo = None
-                if self._detect_demographics:
-                    key = person_id or DemographicsDetector.__name__  # shared unknown
-                    if person_id is not None and key not in self._per_demo:
-                        self._per_demo[key] = DemographicsDetector.create(
-                            self._demographics_backend)
-                    det = self._per_demo.get(key, self._unknown_demo)
-                    if run_demo:
-                        demo = det.detect(frame, box=box, smooth=True)
-                        self._last_demo[key] = demo
-                    else:
-                        demo = self._last_demo.get(key)
-
-                results.append({
-                    "person_id": person_id,
-                    "sim":       sim,
-                    "box":       box,
-                    "emotion":   emo,
-                    "e_conf":    e_conf,
-                    "va":        (ev, ea),
-                    "region":      demo.region      if demo else "",
-                    "region_conf": demo.region_conf if demo else 0.0,
-                    "age":         demo.age         if demo else "",
-                    "age_stage":   demo.age_stage   if demo else "",
-                    "demo_locked": demo.locked      if demo else False,
-                })
+            results = self._build_results(frame, raw_for_results, run_demo)
 
             with self._lock:
                 self._results = results
+
+    # ── Sampled-identity helpers ──────────────────────────────────────────────
+
+    @staticmethod
+    def _box_area(box) -> int:
+        x1, y1, x2, y2 = box
+        return max(0, x2 - x1) * max(0, y2 - y1)
+
+    @classmethod
+    def _primary_idx(cls, raw: list) -> int:
+        """Index of the largest-box entry in [(pid, sim, box), ...], or -1."""
+        best_i, best_a = -1, -1
+        for i, (_, _, box) in enumerate(raw):
+            a = cls._box_area(box)
+            if a > best_a:
+                best_a, best_i = a, i
+        return best_i
+
+    @classmethod
+    def _primary_pid(cls, raw: list):
+        i = cls._primary_idx(raw)
+        return raw[i][0] if i >= 0 else None
+
+    @classmethod
+    def _relabel_primary(cls, raw: list, pid) -> list:
+        """Force the largest-box face's person_id to `pid` (stable display label)."""
+        i = cls._primary_idx(raw)
+        if i < 0:
+            return raw
+        out = list(raw)
+        _, sim, box = out[i]
+        out[i] = (pid, sim, box)
+        return out
+
+    # sim sentinel for a HOLD-phase box: identity is REUSED, not measured this frame.
+    # (Reporting 1.0 here would be a fabricated perfect match and would mislead any
+    # threshold calibration done from the overlay/debug trace.)
+    HELD_SIM = -1.0
+
+    @classmethod
+    def _boxes_to_raw(cls, boxes: list, pid) -> list:
+        """Bare boxes → (pid, sim, box): the largest gets the held identity, the
+        rest are unknown. `boxes` arrives largest-first from detect_boxes."""
+        if not boxes:
+            return []
+        return ([(pid, cls.HELD_SIM, boxes[0])]
+                + [(None, 0.0, b) for b in boxes[1:]])
+
+    def _start_sample_window(self) -> None:
+        """Reset per-window accumulators at the start of a SAMPLE phase."""
+        self._id_votes        = {}
+        self._id_samples      = 0
+        self._saw_face_window = False
+        self._adapt_buf       = []
+        self._adapt_dirty     = False
+
+    # ── Adaptive capture ──────────────────────────────────────────────────────
+
+    def _quality_ok(self, frame, box) -> bool:
+        """Reject faces too small, clipped by the frame edge, or motion-blurred —
+        a bad crop would be memorised as a 'new view' and pollute the gallery."""
+        h, w = frame.shape[:2]
+        x1, y1, x2, y2 = box
+        if x1 < 4 or y1 < 4 or x2 > w - 4 or y2 > h - 4:
+            return False
+        if min(x2 - x1, y2 - y1) < self._adapt_min_px:
+            return False
+        crop = frame[max(0, y1):y2, max(0, x1):x2]
+        if crop.size == 0:
+            return False
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        return cv2.Laplacian(gray, cv2.CV_64F).var() >= self._adapt_min_sharp
+
+    def _collect_adapt(self, frame, full: list) -> None:
+        """Buffer this frame's embedding as an adoption candidate (or poison the
+        window). Called per sampled frame; `full` holds 4-tuples with embeddings."""
+        if len(full) != 1:
+            # 0 faces = nothing to learn; >1 = we cannot be sure which is whom.
+            self._adapt_dirty = True
+            return
+        pid, sim, box, emb = full[0]
+        if emb is None:
+            return
+        # Never learn from a DIFFERENT enrolled person (that is the poisoning case).
+        # Unknown is allowed: an unrecognised pose of the held person is the target.
+        if pid is not None and pid != self._confirmed_pid:
+            self._adapt_dirty = True
+            return
+        if self._quality_ok(frame, box):
+            self._adapt_buf.append((float(sim), emb))
+
+    def _maybe_adapt(self, now: float) -> None:
+        """Decide, at end of window, whether to learn a new view. Every condition
+        must hold — this is the anti-poisoning gate."""
+        if self._adapt_dirty or not self._adapt_buf:
+            return
+        pid = self._confirmed_pid
+        if pid is None:                                     # (1) nobody confirmed
+            return
+        if len(self._id_votes) > 1:                         # (2) ambiguous window
+            return
+        if self._id_samples <= 0:
+            return
+        if (self._id_votes.get(pid, 0) / self._id_samples
+                < self._id_confirm_ratio):                  # (3) weak confirmation
+            return
+        if now - self._adapt_last.get(pid, 0.0) < self._adapt_interval:
+            return                                          # (4) rate limit
+        if self._adapt_count >= self._adapt_max:            # (5) session cap
+            return
+
+        sims = [s for s, _ in self._adapt_buf]
+        med  = float(np.median(sims))
+        tau  = getattr(self._face_id, "tau_dup", 0.92)
+        if med >= tau:                                      # (6) view already covered
+            return
+        if med < self._adapt_floor:                         # (7) impostor territory
+            return
+        if (med < getattr(self._face_id, "threshold", 0.75)
+                and len(self._adapt_buf) < self._id_samples * 0.8):
+            return                                          # (8) marginal → unanimity
+
+        # Take the frame nearest the band centre: most typical of the new pose,
+        # rather than the most extreme (and least trustworthy) outlier.
+        target = min(med + 0.03, tau - 0.01)
+        _s, emb = min(self._adapt_buf, key=lambda t: abs(t[0] - target))
+        with self._lock:
+            self._adapt_events.append({"pid": pid, "emb": emb, "sim": med, "t": now})
+        self._adapt_last[pid] = now
+        self._adapt_count += 1
+
+    def pop_adapt_events(self) -> list:
+        """Main thread drains queued adoptions (worker never mutates the gallery)."""
+        with self._lock:
+            ev, self._adapt_events = self._adapt_events, []
+            return ev
+
+    def _debug_frame(self, frame, raw: list, phase: str) -> None:
+        """--id-debug: one line per sampled frame, for threshold calibration."""
+        if not raw:
+            print(f"[id] {phase}: no face   held={self._confirmed_pid}")
+            return
+        i = self._primary_idx(raw)
+        pid, sim, box = raw[i][0], raw[i][1], raw[i][2]
+        area = self._box_area(box)
+        print(f"[id] {phase}: box={box} area={area} "
+              f"best={pid or '?'}:{sim:.3f} faces={len(raw)} "
+              f"held={self._confirmed_pid} votes={self._id_votes}/{self._id_samples}")
+
+    def _confirm_identity(self) -> None:
+        """Decide the held identity from this sample window's votes: the most-voted
+        person, but only if recognised in >= id_confirm_ratio of the frames that
+        actually contained a face.
+
+        Miss-grace: if this window failed to confirm anyone but a face WAS present and
+        no rival was seen, keep the previous identity for up to id_miss_grace windows —
+        that pattern means "hard pose", not "different person". A rival vote or an
+        empty window (nobody there) drops the identity immediately.
+        """
+        cand = None
+        if self._id_samples > 0 and self._id_votes:
+            best_pid, best_cnt = max(self._id_votes.items(), key=lambda kv: kv[1])
+            ratio = best_cnt / self._id_samples
+            if ratio >= self._id_confirm_ratio:
+                cand = best_pid
+
+        if cand is not None:
+            self._miss_streak = 0
+        elif self._confirmed_pid is not None:
+            rival = any(p != self._confirmed_pid for p in self._id_votes)
+            if rival or not self._saw_face_window:
+                self._miss_streak = 0          # someone else, or truly gone → drop now
+            else:
+                self._miss_streak += 1
+                if self._miss_streak < self._id_miss_grace:
+                    cand = self._confirmed_pid  # hard pose → keep holding
+                else:
+                    self._miss_streak = 0
+
+        self._confirmed_pid = cand
+        # Adoption is decided BEFORE the window state is cleared — it needs the votes.
+        if self._adapt_enabled:
+            self._maybe_adapt(time.time())
+        self._start_sample_window()
+
+    def _build_results(self, frame, raw: list, run_demo: bool) -> list:
+        """Turn a [(person_id, sim, box), ...] list into the per-face result dicts
+        (emotion + demographics), shared by both the sample and hold phases."""
+        results = []
+        for person_id, sim, box in raw:
+            if not self._detect_emotion:
+                # Emotion disabled for this pass — face identification only.
+                emo, e_conf, ev, ea = "neutral", 0.0, 0.0, 0.0
+            elif person_id is not None:
+                if person_id not in self._per_emotion:
+                    self._per_emotion[person_id] = EmotionDetector.create(
+                        self._emotion_backend
+                    )
+                emo, e_conf, ev, ea = self._per_emotion[person_id].detect(
+                    frame, box=box, smooth=True
+                )
+            else:
+                emo, e_conf, ev, ea = self._unknown_emotion.detect(
+                    frame, box=box, smooth=False
+                )
+
+            # ── Demographics (region/heritage + age) — display only ────────
+            demo = None
+            if self._detect_demographics:
+                key = person_id or DemographicsDetector.__name__  # shared unknown
+                if person_id is not None and key not in self._per_demo:
+                    self._per_demo[key] = DemographicsDetector.create(
+                        self._demographics_backend)
+                det = self._per_demo.get(key, self._unknown_demo)
+                if run_demo:
+                    demo = det.detect(frame, box=box, smooth=True)
+                    self._last_demo[key] = demo
+                else:
+                    demo = self._last_demo.get(key)
+
+            results.append({
+                "person_id": person_id,
+                "sim":       sim,
+                "box":       box,
+                "emotion":   emo,
+                "e_conf":    e_conf,
+                "va":        (ev, ea),
+                "region":      demo.region      if demo else "",
+                "region_conf": demo.region_conf if demo else 0.0,
+                "age":         demo.age         if demo else "",
+                "age_stage":   demo.age_stage   if demo else "",
+                "demo_locked": demo.locked      if demo else False,
+            })
+        return results
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -817,6 +1120,23 @@ class WebcamKGLoop:
         demographics_enabled: bool = False,
         demographics_backend: str  = 'fairface',
         detector:        str   = 'opencv',
+        id_check_interval: float = 3.0,
+        id_sample_window:  float = 1.0,
+        id_confirm_ratio:  float = 0.6,
+        id_miss_grace:     int   = 2,
+        id_debug:          bool  = False,
+        multi_pose:        bool  = True,
+        retain_threshold:  float = 0.62,
+        switch_margin:     float = 0.08,
+        id_margin:         float = 0.05,
+        proto_dup:         float = 0.92,
+        proto_max:         int   = 12,
+        proto_adapt_max:   int   = 6,
+        adapt_enabled:     bool  = True,
+        adapt_floor:       Optional[float] = None,
+        adapt_interval:    float = 20.0,
+        adapt_max:         int   = 20,
+        adapt_min_px:      int   = 90,
         debug_prompt:    bool  = False,
     ):
         self.robot_id      = robot_id
@@ -826,11 +1146,19 @@ class WebcamKGLoop:
         self.llm           = llm_client
         self.show_window   = show_window
 
-        self.face_id = FaceIdentifier(threshold=threshold, detector=detector)
+        self.face_id = FaceIdentifier(
+            threshold=threshold, detector=detector,
+            multi_pose=multi_pose, retain_threshold=retain_threshold,
+            switch_margin=switch_margin, id_margin=id_margin,
+            tau_dup=proto_dup, k_anchor=proto_max, k_adapt=proto_adapt_max,
+        )
         if os.path.exists(faces_path):
             self.face_id.load(faces_path)
         else:
             print(f"[WebcamLoop] No face DB at '{faces_path}' — starting empty")
+        # Debounced persistence for views learned at runtime (see _drain_adapt_events).
+        self._faces_dirty     = False
+        self._last_faces_save = time.time()
 
         self.store   = InMemoryGraphStore()
         if os.path.exists(kg_path):
@@ -866,6 +1194,19 @@ class WebcamKGLoop:
         # Demographics (region/heritage + age) — display only, no KG/prompt use.
         self._demographics_enabled = demographics_enabled
         self._demographics_backend = demographics_backend
+        # Sampled identity (sample-and-hold) — check who it is every id_check_interval
+        # seconds via a id_sample_window-second vote instead of re-identifying 24/7.
+        self._id_check_interval = id_check_interval
+        self._id_sample_window  = id_sample_window
+        self._id_confirm_ratio  = id_confirm_ratio
+        self._id_miss_grace     = id_miss_grace
+        self._id_debug          = id_debug
+        # Adaptive capture (learn new views of a known person during conversation).
+        self._adapt_enabled  = adapt_enabled
+        self._adapt_floor    = adapt_floor
+        self._adapt_interval = adapt_interval
+        self._adapt_max      = adapt_max
+        self._adapt_min_px   = adapt_min_px
         # Print the 3 prompt-feeding modules (KG / RAG / BN) at each chat turn.
         self._debug_prompt = debug_prompt
         self._matcher          = matcher
@@ -1244,6 +1585,28 @@ class WebcamKGLoop:
                                 mood=valence, emotion=emotion, create=False,
                                 source="live-mood")
         return changed
+
+    # ── Adaptive capture: apply the worker's learned views (main thread only) ──
+
+    def _drain_adapt_events(self, worker) -> None:
+        """Fold any views the worker learned into the gallery and persist them.
+
+        Runs on the main thread so `face_id` keeps exactly one writer (the worker
+        only queues events). Saves are debounced — enrolment already saves eagerly.
+        """
+        from modules.face_webcam.face_id import ADAPTIVE
+        for ev in worker.pop_adapt_events():
+            what = self.face_id.add_prototype(
+                ev["pid"], ev["emb"], origin=ADAPTIVE, now=ev["t"])
+            if what in ("inserted", "replaced"):
+                na, nd = self.face_id.gallery_size(ev["pid"])
+                print(f"[FaceID] learned a new view of '{ev['pid']}' "
+                      f"(sim {ev['sim']:.2f}) — {na} enrolled + {nd} learned views")
+                self._faces_dirty = True
+        if self._faces_dirty and time.time() - self._last_faces_save > 30.0:
+            self.face_id.save(self.faces_path)
+            self._faces_dirty    = False
+            self._last_faces_save = time.time()
 
     # ── First impression: auto-enrol an unknown face + learn their name ────────
 
@@ -1876,6 +2239,16 @@ class WebcamKGLoop:
             detect_emotion=self._emotion_enabled,
             detect_demographics=self._demographics_enabled,
             demographics_backend=self._demographics_backend,
+            id_check_interval=self._id_check_interval,
+            id_sample_window=self._id_sample_window,
+            id_confirm_ratio=self._id_confirm_ratio,
+            id_miss_grace=self._id_miss_grace,
+            id_debug=self._id_debug,
+            adapt_enabled=self._adapt_enabled,
+            adapt_floor=self._adapt_floor,
+            adapt_interval=self._adapt_interval,
+            adapt_max=self._adapt_max,
+            adapt_min_px=self._adapt_min_px,
         )
         worker.start()
 
@@ -1919,13 +2292,18 @@ class WebcamKGLoop:
         input_text      : str  = ""
         input_error     : str  = ""
 
-        # ── Enroll capture state ──────────────────────────────────────────────
+        # ── Enroll capture state (guided, one pose at a time) ─────────────────
+        from modules.face_webcam.face_id import DEFAULT_POSES as _POSES
         enroll_capturing : bool = False
         enroll_name      : str  = ""
         enroll_progress  : int  = 0
-        enroll_total     : int  = 12
+        enroll_per_pose  : int  = 3
+        enroll_total     : int  = enroll_per_pose * len(_POSES)
         enroll_attempts  : int  = 0
-        enroll_max_att   : int  = enroll_total * 5
+        enroll_max_att   : int  = enroll_total * 8
+        enroll_pose_i    : int  = 0     # which pose we are collecting
+        enroll_pose_done : int  = 0     # frames accepted for THIS pose
+        enroll_prompt    : str  = ""    # on-screen instruction
 
         fps_t0, fps_frames, fps_display = time.time(), 0, 0.0
 
@@ -1951,6 +2329,7 @@ class WebcamKGLoop:
                 self._reload_if_externally_changed()   # adopt viz deletions (persist)
                 self._drain_pending_topics()
                 self._drain_pending_culture()   # mid-session culture auto-attach
+                self._drain_adapt_events(worker)  # learn new face views (main thread)
                 # viz highlight (debounced). `present` = a face (even unknown) is on
                 # camera, so an unrecognised person drops the highlight to ChatBox only.
                 self._write_active_state(last_person_id, present=bool(last_all_detections))
@@ -1965,18 +2344,43 @@ class WebcamKGLoop:
                     fps_frames  = 0
                     fps_t0      = time.time()
 
-                # ── Enrollment capture (frame-by-frame) ───────────────────────
+                # ── Enrollment capture (guided: one head pose at a time) ──────
                 if enroll_capturing:
                     if enroll_progress < enroll_total and enroll_attempts < enroll_max_att:
                         enroll_attempts += 1
-                        if self.face_id.enroll(enroll_name, frame):
-                            enroll_progress += 1
+                        prompt, _tag = _POSES[enroll_pose_i]
+                        enroll_prompt = f"{prompt}   [{enroll_pose_done}/{enroll_per_pose}]"
+
+                        emb, _bx = self.face_id._get_embedding_and_box(frame)
+                        if emb is None:
+                            enroll_prompt = f"{prompt}   (no face — adjust position)"
+                        else:
+                            # After the first pose insist on a genuinely NEW view,
+                            # otherwise ignoring the prompt just re-records the front.
+                            P = self.face_id._protos.get(enroll_name)
+                            dup = (enroll_pose_i > 0 and P is not None and len(P)
+                                   and float((P @ emb).max()) >= self.face_id.tau_dup)
+                            if dup:
+                                enroll_prompt = f"{prompt}   (turn further — already have this view)"
+                            else:
+                                from modules.face_webcam.face_id import ANCHOR
+                                self.face_id.add_prototype(enroll_name, emb, origin=ANCHOR)
+                                self.face_id._counts[enroll_name] = \
+                                    self.face_id._counts.get(enroll_name, 0) + 1
+                                enroll_progress  += 1
+                                enroll_pose_done += 1
+                                if enroll_pose_done >= enroll_per_pose:
+                                    enroll_pose_done = 0
+                                    enroll_pose_i    = min(enroll_pose_i + 1,
+                                                           len(_POSES) - 1)
                     else:
                         # Finished
                         if enroll_progress > 0:
-                            print(f"[Enroll] '{enroll_name}' captured {enroll_progress} frames. Saving …")
+                            na, _nd = self.face_id.gallery_size(enroll_name)
+                            print(f"[Enroll] '{enroll_name}': {na} distinct view(s) "
+                                  f"from {enroll_progress} frames. Saving …")
                             self.face_id.save(self.faces_path)
-                            input_error = f"'{enroll_name}' enrolled!"
+                            input_error = f"'{enroll_name}' enrolled ({na} views)!"
                         else:
                             print(f"[Enroll] No face found for '{enroll_name}'.")
                             input_error = "No face detected — try again"
@@ -1984,6 +2388,9 @@ class WebcamKGLoop:
                         enroll_name      = ""
                         enroll_progress  = 0
                         enroll_attempts  = 0
+                        enroll_pose_i    = 0
+                        enroll_pose_done = 0
+                        enroll_prompt    = ""
 
                 # ── Submit frame to background worker ─────────────────────────
                 if not enroll_capturing:
@@ -2132,6 +2539,7 @@ class WebcamKGLoop:
                         enroll_capturing = enroll_capturing,
                         enroll_progress  = enroll_progress,
                         enroll_total     = enroll_total,
+                        enroll_prompt    = enroll_prompt,
                         llm_on          = bool(self.llm and self.llm.available),
                         all_detections  = last_all_detections,
                     )
@@ -2292,16 +2700,70 @@ class WebcamKGLoop:
 
 def run_enroll_mode(name: str, faces_path: str,
                     camera_index: int, n_captures: int, threshold: float,
-                    detector: str = "opencv") -> None:
+                    detector: str = "opencv",
+                    poses: Optional[str] = None) -> None:
+    from modules.face_webcam.face_id import DEFAULT_POSES
     fi = FaceIdentifier(threshold=threshold, detector=detector)
     if os.path.exists(faces_path):
         fi.load(faces_path)
-    ok = fi.enroll_from_camera(name, camera_index=camera_index, n_captures=n_captures)
+    pose_list = None
+    if poses:
+        wanted = [p.strip().lower() for p in poses.split(",") if p.strip()]
+        pose_list = [(pr, tg) for pr, tg in DEFAULT_POSES if tg in wanted] or None
+    ok = fi.enroll_from_camera(name, camera_index=camera_index,
+                               n_captures=n_captures, poses=pose_list)
     if ok:
         fi.save(faces_path)
-        print(f"Done. Known people: {fi.known_people()}")
+        na, nd = fi.gallery_size(name)
+        print(f"Done. '{name}' now has {na} enrolled view(s). "
+              f"Known people: {fi.known_people()}")
     else:
         print("Enrollment failed — no faces captured.")
+
+
+def run_reset_adaptive(faces_path: str, name: Optional[str]) -> None:
+    """Drop self-learned views, keeping deliberately enrolled ones. The undo for
+    adaptive capture if it ever learns a bad view."""
+    fi = FaceIdentifier()
+    if not (os.path.exists(faces_path) and fi.load(faces_path)):
+        print(f"[reset-adaptive] no face DB at '{faces_path}'")
+        return
+    who = name or "all people"
+    n = fi.reset_adaptive(name)
+    fi.save(faces_path)
+    print(f"[reset-adaptive] removed {n} self-learned view(s) for {who}; "
+          "enrolled views kept.")
+    for p in fi.known_people():
+        na, nd = fi.gallery_size(p)
+        print(f"    {p}: {na} enrolled + {nd} learned")
+
+
+def run_faces_info(faces_path: str) -> None:
+    """Print the stored gallery per person — how many views, how distinct they are.
+    Use it to answer 'why does it still fail at 60 degrees?'."""
+    fi = FaceIdentifier()
+    if not (os.path.exists(faces_path) and fi.load(faces_path)):
+        print(f"[faces-info] no face DB at '{faces_path}'")
+        return
+    from modules.face_webcam.face_id import ANCHOR
+    print(f"\nFace DB: {os.path.abspath(faces_path)}")
+    for p in fi.known_people():
+        na, nd = fi.gallery_size(p)
+        P, M = fi._protos[p], fi._meta[p]
+        print(f"\n  {p}:  {na} enrolled + {nd} learned "
+              f"({fi._counts.get(p, 0)} frames total)")
+        for i in range(len(P)):
+            kind = "enrolled" if M[i, 1] == ANCHOR else "learned "
+            print(f"      view {i}: {kind}  weight={M[i,0]:5.1f}")
+        if len(P) > 1:
+            S = P @ P.T
+            np.fill_diagonal(S, -9.0)
+            print(f"      most-similar pair = {S.max():.3f}  "
+                  f"(closer to 1.0 = views are redundant; add more angles)")
+        else:
+            print("      only ONE view — recognition will be angle-brittle. "
+                  "Re-enroll with the guided poses.")
+    print()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2487,6 +2949,68 @@ def main() -> None:
                    help="Face locator: 'opencv' (single Haar pass shared by "
                         "face-reco + emotion, default) or 'mtcnn' (landmark-aligned, "
                         "more accurate). Re-enroll people after switching.")
+    p.add_argument("--id-interval", type=float, default=3.0,
+                   help="Seconds to HOLD a confirmed identity before re-checking "
+                        "(no re-identification during this window). Default 3.")
+    p.add_argument("--id-sample",   type=float, default=1.0,
+                   help="Seconds to SAMPLE/vote face recognition when re-checking. "
+                        "Default 1.")
+    p.add_argument("--id-confirm",  type=float, default=0.6,
+                   help="Fraction of sampled frames a person must be recognised in "
+                        "to confirm identity (0-1). Default 0.6.")
+    p.add_argument("--id-miss-grace", type=int, default=2,
+                   help="Vote windows a known person may be missed (hard pose) before "
+                        "the label drops. A rival face or an empty frame drops it at "
+                        "once. Default 2.")
+    p.add_argument("--id-debug", action="store_true",
+                   help="Print a per-frame identification trace (box, similarity, "
+                        "votes) — use it to calibrate the thresholds below.")
+    # ── Angle robustness: detection ───────────────────────────────────────────
+    p.add_argument("--no-multi-pose", dest="multi_pose", action="store_false",
+                   help="Only run the FRONTAL face cascade. By default the profile "
+                        "cascades run too, so turned heads are detected at all.")
+    p.set_defaults(multi_pose=True)
+    # ── Angle robustness: multi-view gallery ──────────────────────────────────
+    p.add_argument("--proto-max", type=int, default=12,
+                   help="Max deliberately-enrolled views stored per person (default 12).")
+    p.add_argument("--proto-adapt-max", type=int, default=6,
+                   help="Max self-learned views stored per person (default 6).")
+    p.add_argument("--proto-dup", type=float, default=0.92,
+                   help="Similarity at/above which a face is the SAME view as one "
+                        "already stored (refine it) rather than a new one. Default 0.92.")
+    # ── Flicker: hysteresis ───────────────────────────────────────────────────
+    p.add_argument("--retain-threshold", type=float, default=0.62,
+                   help="Lower similarity bar to KEEP the identity already held "
+                        "(vs --threshold to acquire one). Default 0.62.")
+    p.add_argument("--switch-margin", type=float, default=0.08,
+                   help="How far a rival must beat the held identity to take over "
+                        "(default 0.08).")
+    p.add_argument("--id-margin", type=float, default=0.05,
+                   help="Runner-up margin required to accept a match; only applied "
+                        "with 2+ people enrolled. Default 0.05.")
+    # ── Adaptive capture ──────────────────────────────────────────────────────
+    p.add_argument("--no-adapt", dest="adapt", action="store_false",
+                   help="Disable learning new views of a person during conversation.")
+    p.set_defaults(adapt=True)
+    p.add_argument("--adapt-floor", type=float, default=None,
+                   help="Never learn a view below this similarity. Defaults to "
+                        "--threshold (conservative). Lowering it also learns from the "
+                        "marginal band, which needs unanimous votes.")
+    p.add_argument("--adapt-interval", type=float, default=20.0,
+                   help="Minimum seconds between learned views, per person (default 20).")
+    p.add_argument("--adapt-max", type=int, default=20,
+                   help="Max views learned per session (default 20).")
+    p.add_argument("--adapt-min-px", type=int, default=90,
+                   help="Minimum face box side (px) to learn from (default 90).")
+    p.add_argument("--reset-adaptive", nargs="?", const="__ALL__", default=None,
+                   metavar="NAME",
+                   help="Delete self-learned views (all people, or just NAME) from the "
+                        "face DB and exit. Enrolled views are kept.")
+    p.add_argument("--faces-info", action="store_true",
+                   help="Print each enrolled person's stored views and exit.")
+    p.add_argument("--enroll-poses", default=None,
+                   help="Comma-separated poses for guided enrollment "
+                        "(default: front,left,right,up,down).")
     p.add_argument("--no-window",  action="store_true",
                    help="Headless — terminal output only")
     p.add_argument("--esp32-host", default="",
@@ -2527,11 +3051,21 @@ def main() -> None:
                    help="consolidate mode: preview merges without writing")
     args = p.parse_args()
 
+    if args.reset_adaptive is not None:
+        run_reset_adaptive(args.faces,
+                           None if args.reset_adaptive == "__ALL__" else args.reset_adaptive)
+        return
+
+    if args.faces_info:
+        run_faces_info(args.faces)
+        return
+
     if args.mode == "enroll":
         if not args.name:
             p.error("--name is required for enroll mode")
         run_enroll_mode(args.name, args.faces, args.camera,
-                        args.n_captures, args.threshold, detector=args.detector)
+                        args.n_captures, args.threshold, detector=args.detector,
+                        poses=args.enroll_poses)
         return
 
     if args.mode == "consolidate":
@@ -2596,6 +3130,23 @@ def main() -> None:
         demographics_enabled = args.culture,
         demographics_backend = args.culture_backend,
         detector             = args.detector,
+        id_check_interval    = args.id_interval,
+        id_sample_window     = args.id_sample,
+        id_confirm_ratio     = args.id_confirm,
+        id_miss_grace        = args.id_miss_grace,
+        id_debug             = args.id_debug,
+        multi_pose           = args.multi_pose,
+        retain_threshold     = args.retain_threshold,
+        switch_margin        = args.switch_margin,
+        id_margin            = args.id_margin,
+        proto_dup            = args.proto_dup,
+        proto_max            = args.proto_max,
+        proto_adapt_max      = args.proto_adapt_max,
+        adapt_enabled        = args.adapt,
+        adapt_floor          = args.adapt_floor,
+        adapt_interval       = args.adapt_interval,
+        adapt_max            = args.adapt_max,
+        adapt_min_px         = args.adapt_min_px,
         debug_prompt         = args.debug_prompt,
     )
     loop.run(camera_index=args.camera)

@@ -865,3 +865,73 @@ notes into the system prompt; records real turns onto `SessionNode.turns`.
 - **Didn't / caveat:** Haar boxes are unaligned vs MTCNN's landmark alignment, so recognition
   is a bit looser — **re-enroll people after switching modes** (a face enrolled under MTCNN
   matches poorly against an opencv-cropped probe). `--detector mtcnn` restores the old path.
+
+## Sampled face identity (sample-and-hold) — stop 24/7 re-identification flicker
+
+**Goal:** face recognition flickered (jay ↔ unknown frame-to-frame) and ran every
+frame. Don't check identity 24/7 — check periodically and hold a confirmed result.
+
+- **Tried:** duty cycle in `_DetectionWorker`. SAMPLE window (`--id-sample`, 1 s):
+  identify every frame and vote on the primary (largest) face. Confirm the identity
+  only if it was recognised in >= `--id-confirm` (0.6) of the sampled frames. Then
+  HOLD (`--id-interval`, 3 s): detect boxes only (new `FaceIdentifier.detect_boxes`,
+  no embedding) for emotion/display, and reuse the confirmed identity — never
+  re-identify. Displayed label is always the held identity → zero flicker.
+- **Worked:** helpers unit-tested (primary pick, relabel, boxes→raw, vote ratio
+  confirm/reject); 12/12 face+culture tests still pass; opencv & mtcnn both get a
+  box-only path. Big CPU saving too (embedding runs ~1 s in 4 instead of every frame).
+- **Caveat / trade-off:** during a HOLD window the largest box is labelled with the
+  held identity, so if a *different* person appears mid-hold they're mislabelled for
+  up to `--id-interval` s until the next sample corrects it. Tune interval down if
+  that matters. Multi-face identity is primary-focused (non-primary faces show as
+  unknown during hold).
+
+## Angle-robust, self-improving face recognition (multi-view gallery + adaptive capture)
+
+**Problem:** recognition only worked at one head angle and flickered — the label dropped whenever
+the person turned or looked away. Four separate causes, not one.
+
+- **Tried / found (diagnosis first):**
+  1. *One averaged prototype per person.* `faces.npz` held `jay = (1,512), counts=[50]` — 50 frames
+     collapsed into ONE centroid. Averaging across poses matches no pose well.
+  2. *Detection, not recognition.* The default `opencv` detector was the FRONTAL-only Haar cascade,
+     so a turned head produced **no box at all**. `haarcascade_profileface.xml` measured **2.6 ms**
+     (vs 12.7 ms frontal) — essentially free.
+  3. *A real bug in the sample-and-hold code from the previous commit*: `_id_samples += 1` counted
+     frames with NO face, inflating the vote denominator so looking away pushed the ratio under
+     `id_confirm_ratio` and dropped a good identity.
+  4. *Binary threshold* (0.75) with no hysteresis — an off-angle dip flipped the label instantly.
+
+- **Worked:**
+  - **Phase 0:** vote only counts frames containing a face; HOLD-phase boxes report `sim=-1` and
+    render as `held` (they were fabricating `1.00`, which would have poisoned any calibration);
+    `--id-debug` trace.
+  - **Phase 1:** frontal + profile + mirrored-profile cascades, deduped by IoU **and**
+    centre-containment (offset frontal/profile boxes on one head sit at IoU 0.25-0.35 and slip past
+    pure IoU → phantom "unknown" face, which would also silently disable adaptive capture);
+    source-aware crop margins; `_embed_opencv` now detects at the same 0.5 scale as `identify_all`.
+  - **Phase 2:** `_protos`/`_meta` multi-view gallery (K=12 enrolled + 6 learned), merge-vs-insert on
+    `tau_dup=0.92`, farthest-point eviction, `retain`/`acquire` (top-2) scoring, concat-not-average
+    rename, npz **schema 2** with automatic schema-1 migration (jay survived losslessly).
+  - **Phase 3:** acquire 0.75 / retain 0.62 / switch-margin 0.08 hysteresis in `_match`, applied to
+    the largest face only; worker miss-grace of 2 windows, but instant drop on a rival or empty frame.
+  - **Phase 4:** adaptive capture — learns a new view only from a confirmed, single-face, unanimous,
+    quality-checked window, rate-limited 20 s/person and 20/session, in `[adapt_floor, tau_dup)` with
+    `adapt_floor` defaulting to `threshold` (conservative). Worker queues, main thread applies →
+    gallery keeps a single writer. `--reset-adaptive` undoes it; learned views can never displace
+    enrolled ones.
+  - **Phase 5:** guided five-pose enrollment (CLI + in-window E-key), which REJECTS frames that
+    repeat a stored view — otherwise ignoring the prompts silently re-records the front.
+  - `--faces-info` prints each person's views + closest-pair similarity ("only ONE view" diagnosis).
+  - Tests: new `test_face_multiview.py` (16 cases incl. the centroid-vs-multi-view regression and 7
+    poisoning cases the adaptive gate must refuse); `test_face_rename` updated for concat semantics.
+    **68/68 repo tests green.** Integration-smoked the worker end-to-end with a stubbed detector:
+    confirm → hold through an off-angle turn → learn the new view.
+
+- **Didn't / watch:** thresholds are priors, NOT calibrated on real faces — run `--id-debug` through
+  0/±30/±60/±90/chin-up/chin-down and tune `--retain-threshold` (10th pct of ±45 sims) and
+  `--proto-dup` (40th pct of consecutive still-frame sims). With only ONE person enrolled nothing
+  competes, so recall gains also raise false accepts — enrolling a decoy identity would turn the
+  absolute threshold into a relative one. jay still has a single enrolled view until re-enrolled
+  with the guided poses. Emotion now receives profile crops it was not validated on (emotion is off
+  by default).

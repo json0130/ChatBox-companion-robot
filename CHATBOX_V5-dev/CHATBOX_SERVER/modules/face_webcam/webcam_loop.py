@@ -1295,10 +1295,14 @@ class WebcamKGLoop:
                     except Exception:  # noqa: BLE001
                         rag_hits = []
                 with self._store_lock:
-                    if self._pad_enabled and self._last_pad_result:
-                        sys_prompt = self._last_pad_result["system_prompt"]
-                    else:
-                        sys_prompt = self._build_system_prompt(pid, rag_hits=rag_hits)
+                    # ONE prompt builder, always. PAD used to substitute a prompt
+                    # of its own here, which silently dropped the identity block,
+                    # the KG memory, the RAG hits and the anti-hallucination rules
+                    # — so affect and memory never actually ran together. PAD now
+                    # contributes two fragments INTO this prompt instead.
+                    sys_prompt = self._build_system_prompt(
+                        pid, rag_hits=rag_hits,
+                        pad=self._last_pad_result if self._pad_enabled else None)
                 raw_reply = self.llm.respond(sys_prompt, msg, history=history)
                 tag, verbal = _parse_llm_response(raw_reply)
                 self._chat_results.put({**req, "verbal": verbal, "tag": tag})
@@ -1632,10 +1636,16 @@ class WebcamKGLoop:
         return "\n".join(lines)
 
     def _build_system_prompt(self, pid: Optional[str], *,
-                             rag_hits: Optional[list] = None) -> str:
+                             rag_hits: Optional[list] = None,
+                             pad: Optional[dict] = None) -> str:
         """Assemble the system prompt from the seeded RobotNode + retrieved memory,
-        in three labelled blocks. Used when PAD is disabled (no PAD system_prompt).
-        Mood/emotion is deliberately not injected (kept for the graph/viz only)."""
+        in three labelled blocks. THE only prompt builder — PAD contributes two
+        small fragments through `pad` rather than substituting a prompt of its own.
+
+        The raw detected emotion is still deliberately not injected: it pulled
+        replies into unsolicited emotional support. What PAD adds is the ROBOT's
+        own manner, which is a different thing and is worded to say so.
+        """
         from modules.graph_relationship.topics import robot_capability
         personas = [n.descriptor for _e, n in
                     self.store.query_neighbors(self.robot_id, "has_persona")
@@ -1685,11 +1695,33 @@ class WebcamKGLoop:
             "• Reply to what they actually said or asked. Do not comment on how they "
             "seem to feel or offer emotional support unless they bring up their "
             "feelings themselves.")
+        # PAD fragment A — the robot's own manner, from the three descriptor words.
+        # Placed LAST in this block on purpose: it must sit after the rule above,
+        # so the last thing the model reads is not an invitation to emote. The
+        # wording is explicit that this colours delivery, never content — the
+        # earlier attempt at mood injection failed by reading as a fact about the
+        # PERSON rather than a manner for the ROBOT.
+        if pad and pad.get("words"):
+            p_word, a_word, d_word = pad["words"]
+            how_to_reply += (
+                f"\n• Your manner right now is {p_word}, {a_word}, {d_word}. That "
+                "colours your WORDING only — it never changes what you know, what "
+                "you answer, or whether you bring up how they feel.")
         blocks.append(how_to_reply)
 
         # ── WHO YOU'RE TALKING TO ──
         if pid:
             who = [f"━━━ WHO YOU'RE TALKING TO: {pid} ━━━"]
+            # PAD fragment B — one sentence on how well they know each other.
+            # Deliberately no numbers: injecting rapport/trust/count invites the
+            # model to narrate its own metrics back at the child.
+            if pad and pad.get("tier"):
+                from modules.graph_relationship.interactions import get_interaction
+                from modules.pad_persona.prompt_builder import tier_note
+                interaction = get_interaction(self.store, pid, self.robot_id)
+                who.append(tier_note(
+                    pad["tier"],
+                    interaction.interaction_count if interaction else 0))
             mem = self._person_memory(pid)
             who.append(mem if mem else "You don't remember much about them yet.")
             # NOTE: the detected mood/emotion is intentionally NOT injected into the

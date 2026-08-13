@@ -64,6 +64,9 @@ flowchart TD
     SV --> M["the robot moves"]
 ```
 
+The pipeline is unchanged. What changed is only where the numbers in the
+PAD → style step come from — §7.
+
 Every stage is built except the relationship → Dominance path, which needs the
 knowledge graph. `idle` is computed and sent but the firmware does not act on it
 yet.
@@ -182,40 +185,122 @@ prompt so word choice follows the affective state.
 CHATBOX's published coordinate returns **"warm, calm, reserved"** — which is the
 paper's own worked example, so the bands are calibrated against it.
 
-### Movement: four parameters
+### Movement: five parameters
+
+Five values, computed straight from the PAD coordinate and clamped. **Two come
+from a published equation; three are ours.** The split is marked on every one.
 
 ```
-amplitude = 0.75 + 0.45·Ar + 0.20·D      clamp 0.30 … 1.30
-tempo     = 0.85 + 0.55·Ar + 0.15·D      clamp 0.50 … 1.60
-posture   = 0.70·D  + 0.30·P             clamp −1 … +1
-idle      = 0.45 + 0.40·Ar               clamp 0.05 … 1.00
+amplitude = Sp = (D + 1) / 2            PUBLISHED   clamp 0.30 … 1.00
+tempo     = Ve = fv(P, Ar, D)           PUBLISHED   clamp 0.50 … 1.60
+posture   = 0.70·D + 0.30·P             ours        clamp −1 … +1
+idle      = 0.45 + 0.40·Ar              ours        clamp 0.05 … 1.00
+droop     = −P × 1.4                    ours        clamp −1 … +1
 ```
 
-| parameter | means | driven by |
-|---|---|---|
-| **amplitude** | how *far* a gesture travels from neutral | Arousal, then Dominance |
-| **tempo** | how *fast* it plays | Arousal |
-| **posture** | resting carriage of neck and shoulders, withdrawn ↔ open | Dominance, then Pleasure |
-| **idle** | how often it stirs between gestures | Arousal |
+#### The published half
 
-**Pleasure is absent from amplitude and tempo on purpose.** Valence decides
-*which* gesture plays — a wave rather than a slump. Arousal and Dominance decide
-*how* it is performed. Mixing valence into speed would make a happy robot fast
-and a sad robot slow, which is not what sadness looks like.
+[Hagane & Venture (2022)][hagane], *Machines* 10(12):1118, following
+[Claret, Venture & Basañez (2017)][claret], *Int. J. Social Robotics* 9:277–292.
+Both map PAD to motion features by — their words — "a simple linear formula".
+Their **Eq. 9** gives three features on [0,1] from a PAD point on [−1,1]³:
+
+```
+Jr (jerkiness)      = (1 − P) / 2
+Ve (velocity)       = fv(P, A, D)
+Sp (spatial extent) = (D + 1) / 2
+```
+
+and **Eq. A1** defines `fv`:
+
+```
+Pn, An, Dn = P+1, A+1, D+1
+r  = √(An² + Dn²)
+β  = arccos(Dn / r)
+S  = 2 + (2−√2)·sin(2β + π)
+fv = 0.125 · (r / S) · (4 − Pn)
+```
+
+`Sp` is amplitude — the paper defines Extent as *"how large the gestures of the
+hands and arms are"*. `Ve` is tempo. `Jr` is dropped: this firmware plays a
+fixed five-step sequence and controls only `step_ms`, so there is no actuator
+for jerk. Claret's third feature is *gaze*, which Hagane replaced with `Sp`
+because a robot arm has no eyes; this robot has no gaze servos either.
+
+Test §9 reproduces all four anchor values the paper states in its Eq. 10 —
+Hostile → 1.0, Exuberant → 0.5, Anxious → 0.5, Bored → 0.0 — which is the check
+that the transcription is faithful.
+
+The only added step: `Sp` and `Ve` are dimensionless indices on [0,1], while
+amplitude is a fraction of authored servo travel and tempo a playback
+multiplier. Each is mapped affinely onto the range already documented in
+`STYLE_LIMITS`. That is a unit conversion onto our own range — no coefficient is
+chosen.
+
+#### Two things this equation does that are worth knowing
+
+**Amplitude cannot respond to the person.** `Sp` depends on Dominance alone, and
+the face never moves Dominance (§4). So amplitude is fixed per persona —
+CHATBOX 0.42, ELLEBOT 0.80 — whatever expression is detected. Consistent with
+this project's own design, but a real consequence, and test §13 pins it.
+
+**Tempo rises as Pleasure falls.** `fv`'s last term is `(4 − Pn)`, so an
+unpleasant face comes out *faster*. That follows Wallbott's finding that high
+kinetic energy reads as anger, and it is why the paper's fastest anchor is
+Hostile. **It contradicts the deck's p.15 claim** that mixing valence into speed
+"would make a sad robot merely slow" — the published equation mixes valence into
+speed, in the opposite direction. It also sits against
+[Gross, Crane & Fredrickson (2012)][gross], who found sadness *slowest* in gait.
+Measured output: anger 0.88, happy 0.76, neutral 0.76, sad 0.75. Anger separates
+well; happy and sad barely differ.
+
+The authors flag a related limitation themselves (their §7): the `Ve` values
+*"were not scattered between 0 and 1 but clustered between 0 and 0.5, resulting
+in similar movements … except for the case of 'hostile'."*
+
+#### The unpublished half
+
+`posture`, `idle` and `droop` are the deck's own equations, unchanged. **No
+published PAD equation for any of the three could be found.** Claret uses gaze
+for Dominance, Hagane uses spatial extent, and neither models carriage, resting
+stir rate, or a signed vertical tint. They stay proposals — §10 keeps the tally.
 
 At rest, the two personas:
 
-| | amplitude | tempo | posture | idle |
-|---|---|---|---|---|
-| CHATBOX | 0.62 | 0.75 | −0.37 | 0.45 |
-| ELLEBOT | 1.05 | 1.18 | +0.42 | 0.64 |
+| | amplitude | tempo | posture | droop | idle |
+|---|---|---|---|---|---|
+| CHATBOX | 0.42 | 0.74 | −0.37 | −0.37 | 0.45 |
+| ELLEBOT | 0.80 | 1.01 | +0.42 | −0.59 | 0.64 |
 
-Small slow gestures from a withdrawn posture, versus big quick ones from an open
-posture. That is the paper's "a broad, brisk wave from ELLEBOT, a slow, gentle
-one from CHATBOX" — as numbers rather than adjectives.
+[hagane]: https://doi.org/10.3390/machines10121118
+[claret]: https://link.springer.com/article/10.1007/s12369-016-0387-2
 
-Note these are computed from **`felt`**, not `shown`. The body's display fraction
-and amplitude describe the same restraint; applying both would count it twice.
+### Superseded: what else was tried
+
+[PERFORM][perform] (Durupinar, Kapadia, Deutsch, Neff & Badler, ACM TOG 36(4),
+2017) publishes `OCEAN → Laban Effort → motion parameters`, validated by a
+perception study, and is a tempting fit because it already uses OCEAN. It was
+built and then dropped, for two reasons worth recording:
+
+- It takes **OCEAN**, not PAD, and has no emotion term. Bridging it into PAD
+  required a least-squares fit whose R² was 0.994 on one Effort factor but
+  0.36–0.56 on the other three — PAD is a 3-dimensional projection of a
+  5-dimensional trait space, so most of what PERFORM keys on is unrecoverable.
+- Those bridge coefficients would have been **computed here rather than cited**,
+  which is exactly what this model is trying to stop doing.
+
+The Hagane & Venture equation above is used instead because it takes PAD
+directly, needs no bridge, and reproduces its own published anchor values.
+
+One artefact of that work is worth keeping, because it explains §10's long-
+standing quirk. Mehrabian has `Ar = … − 0.57N` while PERFORM has
+`Time = … + 0.97N`: the two disagree about neuroticism. The reason is that
+Mehrabian's Arousal is *trait arousability*, a disposition, while Laban's Time
+is momentary agitation. Different quantities sharing a name. Anything that
+routes movement through PAD's Arousal axis inherits that, and it is worth a
+sentence in the paper.
+
+[perform]: https://www.cs.ucdavis.edu/~neff/papers/PERFORM_TOG.pdf
 
 ---
 
@@ -226,35 +311,41 @@ paper does not describe.
 
 ### The fifth parameter
 
-The paper's four cannot make a greeting look sad. Amplitude only makes it
+Four parameters cannot make a greeting look sad. Amplitude only makes it
 *smaller* — a small wave is still a happy wave. Tempo only makes it slower.
 Neither carries valence.
 
 So there is a fifth, **`droop`**: a signed offset that pushes the expressive
-servos down when the coordinate is unpleasant and lifts them when it is pleasant,
-on top of whatever gesture is playing.
+servos down when the expression is unpleasant and lifts them when it is
+pleasant, on top of whatever gesture is playing.
+
+**This is not an invention of ours, and this document used to claim it was.**
+`droop` is **Sinking/Rising**, the vertical axis of Laban Shape — one of the
+three Shape dimensions, and a named movement parameter since Laban. What is
+genuinely ours is the *gain*: `droop = −P × 1.4`, with the 1.4 chosen by eye.
+No published equation maps PAD to a signed vertical tint.
+
+It is also the parameter that now does the most work, because of the two
+properties in §7: amplitude is fixed per persona, and tempo speeds *up* as
+Pleasure falls. Neither can make a greeting look sad, so droop carries valence
+alone.
+
+### Embodiment enters once, not twice
 
 ```
-droop = −felt.P × 1.4 × travel        clamped −1 … +1
+shown = show_fraction × felt        CHATBOX 0.30, ELLEBOT 1.00
 ```
 
-Derived from `felt`, not `shown`: the body's display fraction and amplitude
-describe the same restraint, so using the scaled coordinate would apply it twice.
+That is the only embodiment scaling. There used to be a second one — a per-robot
+`TRAVEL` fraction (CHATBOX 0.65, ELLEBOT 1.00) multiplying amplitude and droop
+on the way to the servos — and it has been **removed**.
 
-### Travel — the mechanical half of embodiment
-
-```
-amplitude_sent = amplitude × travel
-```
-
-| | travel | |
-|---|---|---|
-| CHATBOX | 0.65 | tabletop: the same gestures, kept small |
-| ELLEBOT | 1.00 | mobile: performed at authored size |
-
-Deliberately **not** the `show` fractions from §6 (0.30 / 1.00). Reusing those
-multiplies the restraint twice and lands CHATBOX at 0.19 amplitude, which does not
-read as reserved — it reads as broken.
+Two reasons. It no longer matched the deck's own worked numbers (§9). And it was
+harmful: with travel, CHATBOX's amplitude came out at 0.28 and saturated against
+the 0.30 clamp floor, so it played every gesture at minimum size in every mood.
+Without it CHATBOX sits at 0.42 with room to vary, and the two robots still
+separate cleanly because `amplitude = (D+1)/2` already carries the persona
+difference.
 
 ### What the firmware already had
 
@@ -290,6 +381,28 @@ Degrees at full deflection. Left-hand servos take the negated weight, because
 both sides sit at 90 ± an offset — a mood has to move them oppositely or the robot
 ends up lopsided. Hands get zero droop: a drooping hand reads as a failed servo,
 not a mood.
+
+**The channel set is well supported; the magnitudes are not.**
+[Coulson (2004)][coulson] built postural emotion expression out of six joint
+rotations — head bend, chest bend, abdomen twist, shoulder ad/abduction,
+shoulder swing, elbow bend — and found sadness at forward head bend with the
+arms at the side of the trunk, anger at backward head bend with the arms out.
+The table above is essentially Coulson's six minus the joints this hardware does
+not have, plus ears and lids. The *signs* and the *rank order* follow him and
+[Wallbott (1998)][wallbott]. The *degrees* are ours and are still tuned by eye —
+nobody publishes them, because they are specific to a robot's geometry.
+
+One finding argues against a choice here.
+[Xu, Broekens, Hindriks & Neerincx (2013)][xu] modulated NAO behaviours for mood
+and found the parameters that carried it best were **hand height**, amplitude,
+head position, and motion speed. Hand height is on that list, and `DROOP_DEG`
+sets both hands to **0**. The reasoning above ("a drooping hand reads as a
+failed servo") is a plausible hardware-specific objection, but it is untested
+and it discards a channel the literature ranks highly. Worth trying on the real
+robot before publication.
+
+[coulson]: https://link.springer.com/article/10.1023/B:JONB.0000023655.25550.be
+[xu]: https://ieeexplore.ieee.org/document/6628534/
 
 | servo | DROOP_DEG | POSTURE_DEG |
 |---|---|---|
@@ -351,11 +464,13 @@ figure below came from running the code.
 | face `sad` | v −0.70, a −0.38 | v −0.70, a −0.38 |
 | felt (empathy 0.60) | −0.314, −0.232, −0.643 | −0.250, −0.035, +0.421 |
 | shown | −0.094, −0.069, −0.193 *(30%)* | −0.250, −0.035, +0.421 *(100%)* |
-| four params | amp 0.517, tempo 0.626, post −0.544 | amp 0.819, tempo 0.894, post +0.220 |
-| × travel | 0.517 × 0.65 = **0.336** | 0.819 × 1.00 = **0.819** |
-| droop | 0.314 × 1.4 × 0.65 = **+0.285** | 0.250 × 1.4 × 1.00 = **+0.350** |
-| **wire** | `STYLE 0.34 0.63 -0.54 +0.29 0.36` | `STYLE 0.82 0.89 +0.22 +0.35 0.44` |
-| step timing | 900 / 0.63 = **1437 ms** | 900 / 0.89 = **1007 ms** |
+| five params | amp **0.42**, tempo 0.81, post −0.54, droop **+0.44** | amp **0.80**, tempo 1.03, post +0.22, droop **+0.35** |
+| **wire** | `STYLE 0.42 0.75 -0.54 +0.44 0.36` | `STYLE 0.80 1.03 +0.22 +0.35 0.44` |
+| step timing | 900 / 0.75 = **1202 ms** | 900 / 1.03 = **876 ms** |
+
+`droop` at rest is about −0.55 for both robots; the sad face drives it to +0.22
+and +0.46 through the −1.181 loading on Pleasure. That crossing from lifted to
+sagging is the whole point of the parameter.
 
 ### One servo, all five steps of the conversion
 
@@ -363,39 +478,29 @@ CHATBOX's right shoulder, `greeting` step 0, where the move set says `U`:
 
 ```
 1  symbol U                          -> 170
-2  rest + amp × (target − rest)      = 140 + 0.34 × (170 − 140) = 150.1
-3  + droop × −12                     = 150.1 + (+0.29 × −12)    = 146.7
-4  + posture × +8                    = 146.7 + (−0.54 × +8)     = 142.3
-5  clamp to 50..170                  -> 142
+2  rest + amp × (target − rest)      = 140 + 0.42 × (170 − 140)  = 152.6
+3  + droop × −12                     = 151.5 + (+0.221 × −12)    = 148.8
+4  + posture × +8                    = 148.8 + (−0.212 × +8)     = 147.1
+5  clamp to 50..170                  -> 147
                                         (stock would be 170)
 ```
 
 ELLEBOT, identical gesture, identical face:
 
 ```
-2  140 + 0.82 × 30 = 164.6
-3  164.6 + (+0.35 × −12) = 160.4
-4  160.4 + (+0.22 × +8)  = 162.1
-5  -> 162
+2  140 + 0.687 × 30       = 160.6
+3  160.6 + (+0.462 × −12) = 155.1
+4  155.1 + (+0.235 × +8)  = 157.0
+5  -> 157
 ```
 
-### The whole gesture
+Same tag, same face. CHATBOX barely lifts its arm, its head dips, and the whole
+gesture takes 5.6 s against ELLEBOT's 3.9 s. ELLEBOT performs most of the
+gesture but is still visibly tinted. Neither was given a different move set, and
+the hands stay put in both — see the caveat about hand height in §8.
 
-| servo | stock | CHATBOX | ELLEBOT |
-|---|---|---|---|
-| Ears | 165 165 165 165 165 | 136 136 136 136 136 | 152 152 152 152 152 |
-| RBrow | 120 ×5 | 123 ×5 | 124 ×5 |
-| REyelid | 130 90 90 90 90 | 114 100 100 100 100 | 123 90 90 90 90 |
-| RNeck | 82 ×5 | 74 ×5 | 81 ×5 |
-| LNeck | 103 ×5 | 111 ×5 | 104 ×5 |
-| RShoulder | 170 170 50 50 50 | 142 142 102 102 102 | 162 162 64 64 64 |
-| LShoulder | 130 ×5 | 78 ×5 | 116 ×5 |
-| RHand / LHand | 90 ×5 | 90 ×5 | 90 ×5 |
-
-Same tag, same face. CHATBOX barely lifts its arm (142 rather than 170), ears down
-29°, head dipped, and the whole thing takes 7.2 s instead of 4.5. ELLEBOT performs
-most of the gesture but still visibly tinted. Neither was given a different move
-set, and the hands stay put in both.
+Reproduce all of it with `python SERVO_STYLE/preview.py greeting --emotion sad
+--wire`, which prints the full servo table.
 
 ---
 
@@ -403,34 +508,82 @@ set, and the hands stay put in both.
 
 Worth being clear about, because the two get cited very differently.
 
+Note on wording: earlier versions of this document said "the paper" throughout,
+meaning our own RO-MAN design-competition deck. That is circular — a reviewer
+asking "which paper?" gets pointed back at us. Below, *published* means someone
+else's peer-reviewed result.
+
+### Published, and used as published
+
+| | source |
+|---|---|
+| OCEAN → PAD equations | Mehrabian via ALMA. Reproduces our Table I to two decimals. **Unchanged.** |
+| Russell's two axes for the face | And the reason Dominance is excluded. **Unchanged.** |
+| **`amplitude` = (D+1)/2** | [Hagane & Venture (2022)][hagane] Eq. 9, `Sp`. Used verbatim. |
+| **`tempo` = fv(P,Ar,D)** | [Hagane & Venture (2022)][hagane] Eq. A1, `Ve`. Used verbatim; test §9 reproduces all four anchor values from their Eq. 10. |
+| `DROOP_DEG` channel set and signs | [Coulson (2004)][coulson]'s six joint rotations, minus what this hardware lacks. |
+| Symbol → angle tables | **Transcribed** from `ServoControl.ino`; tests assert a neutral style reproduces stock firmware exactly. |
+
+The only step added around the published equations: `Sp` and `Ve` are
+dimensionless indices on [0,1], so each is mapped affinely onto the range this
+project already documents. A unit conversion, not a coefficient.
+
+### Still ours — no published equation exists for these
+
+Searched for and not found: no paper maps PAD to carriage, resting stir rate, or
+a signed vertical tint. Claret uses gaze for Dominance; Hagane uses spatial
+extent; neither models these three.
+
 | | status |
 |---|---|
-| OCEAN → PAD equations | **Published.** Mehrabian via ALMA. Reproduces the paper's Table I to two decimals. |
-| Russell's two axes for the face | **Published**, and the reason Dominance is excluded. |
-| Symbol → angle tables | **Transcribed** from `ServoControl.ino`, and the tests assert a neutral style reproduces the stock firmware exactly. |
-| Descriptor bands | **Fitted** so CHATBOX returns the paper's own example. Surrounding words are mine. |
-| `empathy = 0.60` | **Proposal.** Not specified anywhere. Tune with `[` and `]` in the demo. |
-| `show`: 0.30 / 1.00 | **Proposal.** The paper describes ELLEBOT's extra channels but gives no number. |
-| The four style equations | **Proposal.** Axis assignments follow the nonverbal literature; weights are tuning. |
-| **`droop`, the fifth parameter** | **Addition, not implementation.** The paper names four, and none of them can carry valence. |
-| `travel`: 0.65 / 1.00 | **Proposal.** Mechanical fractions, distinct from `show`. |
-| The droop gain (1.4) | **Proposal.** Pleasure rarely reaches ±1 in practice, so a straight copy barely tints anything. |
-| `DROOP_DEG` / `POSTURE_DEG` | **Proposal.** Tuned by eye in the angle table, never against a real servo. |
+| `posture = 0.70·D + 0.30·P` | **Proposal.** The deck, p.15. |
+| `idle = 0.45 + 0.40·Ar` | **Proposal.** The deck, p.15. Firmware ignores it today anyway. |
+| `droop = −P × 1.4` | **Proposal.** The deck, p.16. The gain is by eye. |
+| **`droop` as a parameter** | Not an invention, even if its gain is: it is Laban **Sinking/Rising**, the vertical Shape axis. This document previously called it "an addition, not an implementation". That was wrong. |
+| `empathy = 0.60` | **Proposal.** Tune with `[` and `]` in the demo. |
+| `show`: 0.30 / 1.00 | **Proposal.** No published number for expressive bandwidth. |
+| `DROOP_DEG` / `POSTURE_DEG` **magnitudes** | **Proposal.** Signs and rank order are Coulson's; the degrees are tuned by eye and robot-specific. |
+| Descriptor bands | **Fitted** so CHATBOX returns our own worked example. |
+| Zero droop on the hands | **Ours, and contradicted** — see the Xu et al. note in §8. |
 | Relationship → Dominance | **Not written.** Needs the knowledge graph. |
-| `idle` frequency | **Computed and sent, but the firmware ignores it.** The stirring behaviour is optional Edit 4 in `SERVO_STYLE/firmware/INTEGRATION.md`. |
 
-### One quirk to resolve
+### Two places the published equation disagrees with this deck
 
-In the published regressions, Neuroticism *raises* Pleasure (`+0.19N`) and
-*lowers* Arousal (`−0.57N`). So a high-N persona comes out calm and faintly
-pleasant rather than anxious. Set N to +0.7 in the explorer and it reports
-"serene".
+Both are consequences of using [Hagane & Venture][hagane] as published, and both
+belong in the paper rather than being quietly absorbed.
 
-That is what the equations say, but anxiety normally reads as *high* arousal.
-Either that arousal term means trait energy rather than momentary agitation, or
-the sign convention differs from what you would expect. Worth confirming against
-Mehrabian before a reviewer asks — the deployed config has `N = +0.3`, already
-pulling arousal down by 0.17.
+**1. Amplitude no longer responds to the person.** `Sp = (D+1)/2` uses Dominance
+alone, and the face never moves Dominance. So amplitude is fixed per persona
+(CHATBOX 0.42, ELLEBOT 0.80) whatever expression is detected. The deck's p.15
+had amplitude Arousal-led, which did respond. Test §13 pins the new behaviour.
+
+**2. Tempo now rises as Pleasure falls.** `fv`'s last term is `(4 − Pn)`, so an
+unpleasant face is *faster*. The deck's p.15 says Pleasure is excluded from
+tempo precisely so a sad robot is not "merely slow"; the published equation
+includes it, with the opposite sign to intuition. It follows Wallbott's finding
+that high kinetic energy reads as anger, but it sits against
+[Gross, Crane & Fredrickson (2012)][gross], who found sadness slowest in gait.
+Measured: anger 0.88, happy 0.76, neutral 0.76, sad 0.75 — anger separates,
+happy and sad barely differ. The authors note the same clustering themselves.
+
+If either matters more than having a citation, say so and the deck's original
+equation goes back in for that row.
+
+### The quirk, still open
+
+In Mehrabian's regressions Neuroticism *raises* Pleasure (`+0.19N`) and *lowers*
+Arousal (`−0.57N`), so a high-N persona comes out calm and faintly pleasant
+rather than anxious.
+
+Building and discarding a [PERFORM][perform]-based model (§7) turned up a likely
+explanation: PERFORM has `Time = … + 0.97N`, treating high neuroticism as quick
+and agitated, the opposite of Mehrabian. The two are measuring different things
+— Mehrabian's Arousal is *trait arousability*, a disposition, while Laban's Time
+is momentary agitation. Different quantities sharing a name.
+
+That resolves the confusion but does not change any equation here, since
+`fv` takes Arousal directly rather than through a trait model. Worth one
+sentence in the paper.
 
 ---
 
@@ -447,7 +600,8 @@ pulling arousal down by 0.17.
 | body scaling | `affect.show` |
 | naming a coordinate | `affect.affect_name`, `affect.SECTORS` |
 | descriptor words | `affect.descriptors`, `affect.BANDS` |
-| the four parameters | `affect.gesture_style`, limits in `affect.STYLE_LIMITS` |
+| PAD → the five values | `affect.gesture_style`, limits in `affect.STYLE_LIMITS` |
+| the two published ones | `affect._spatial_extent` (Eq. 9), `affect._velocity` (Eq. A1) |
 | whole chain in one call | `affect.pipeline` |
 
 ### SERVO_STYLE — parameters to angles, and the wire
@@ -456,7 +610,6 @@ pulling arousal down by 0.17.
 |---|---|
 | move sets and symbol→angle tables | `servo_style.MOVE_SETS`, `servo_style.SERVOS` |
 | droop / posture weights | `servo_style.DROOP_DEG`, `POSTURE_DEG` |
-| mechanical fractions | `servo_style.TRAVEL` |
 | one servo, one step | `servo_style.resolve_servo` |
 | a whole tag | `servo_style.resolve_gesture` |
 | the wire format | `servo_style.wire_message`, `parse_wire` |

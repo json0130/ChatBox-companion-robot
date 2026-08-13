@@ -226,7 +226,7 @@ STYLE_BLOCK_H = 16 + BAR_TOP_PAD + (len(A.STYLE_LIMITS) - 1) * BAR_GAP + BAR_H
 
 
 def draw_style_bars(panel, style, y):
-    """The four gesture parameters as small bars — the servo-facing output.
+    """The five gesture parameters as small bars — the servo-facing output.
 
     Bars rather than bare numbers because what matters when tuning is the
     relative shape of the four, not their third decimal place.

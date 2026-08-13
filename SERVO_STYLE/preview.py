@@ -32,13 +32,14 @@ except ImportError:
 def style_from_affect(robot: str, emotion: str) -> dict:
     """Persona + detected emotion -> the five servo-style values.
 
-    amplitude/tempo/posture/idle come from AFFECT_LAB's gesture_style, which is
-    the paper's four parameters. `droop` is the extra one: a signed valence tint,
-    because none of the paper's four can make a happy gesture read as sad.
+    All five come out of AFFECT_LAB's `gesture_style` from the felt PAD
+    coordinate, and nothing is scaled afterwards. `amplitude` and `tempo` are
+    Hagane & Venture (2022); `posture`, `idle` and `droop` are the deck's.
 
-    Amplitude is additionally multiplied by the body's `show` fraction. That is
-    where the two robots diverge mechanically — CHATBOX physically travels less
-    of the authored gesture than ELLEBOT does.
+    The per-robot `travel` fraction that used to multiply amplitude and droop
+    here has been removed — the deck now carries only one embodiment scaling
+    (`shown = show_fraction × felt`), and these values reproduce its worked
+    numbers exactly: CHATBOX amp 0.42 droop +0.44, ELLEBOT amp 0.80 droop +0.35.
     """
     if A is None:
         raise SystemExit("cannot import AFFECT_LAB/affect.py — run from "
@@ -46,22 +47,7 @@ def style_from_affect(robot: str, emotion: str) -> dict:
 
     valence, arousal = A.category_to_va(emotion)
     out = A.pipeline(A.ROBOTS[robot]["ocean"], valence, arousal, robot)
-    four = out["style"]
-    travel = S.TRAVEL.get(robot, 1.0)
-
-    # Droop follows what the robot *feels*, not the display-scaled coordinate —
-    # then the body's travel fraction decides how much of that reaches a servo.
-    # Using the already-scaled coordinate would apply the same restraint twice
-    # and leave CHATBOX barely tinted at all.
-    droop = -out["felt"]["P"] * 1.4
-
-    return {
-        "amplitude": four["amplitude"] * travel,
-        "tempo": four["tempo"],
-        "posture": four["posture"],
-        "droop": max(-1.0, min(1.0, droop * travel)),
-        "idle": four["idle"],
-    }, out
+    return dict(out["style"]), out
 
 
 def main():

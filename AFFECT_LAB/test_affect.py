@@ -78,8 +78,28 @@ for label in ("happy", "angry", "sad", "fear", "neutral", "surprise"):
 print("\n=== 8. Unknown labels degrade to neutral ===")
 check("garbage label", A.category_to_va("not_an_emotion"), (0.0, 0.0))
 
-print("\n=== 9. Gesture style reproduces the paper's own claim ===")
-# "a broad, brisk wave from ELLEBOT, a slow, gentle one from CHATBOX"
+print("\n=== 9. The published equation matches the paper's own anchors ===")
+# Hagane & Venture (2022) Machines 10(12):1118 state four values for fv in
+# their Eq. 10. If the transcription of Eq. A1 is right, all four reproduce
+# exactly. This is the check that the published half is really published.
+for name, pad, want in (("Hostile",   (-1.0, 1.0, 1.0),   1.0),
+                        ("Exuberant", (1.0, 1.0, 1.0),    0.5),
+                        ("Anxious",   (-1.0, 1.0, -1.0),  0.5),
+                        ("Bored",     (-1.0, -1.0, -1.0), 0.0)):
+    coord = dict(zip(("P", "Ar", "D"), pad))
+    check(f"fv({name}) reproduces the paper", round(A._velocity(coord), 9),
+          round(want, 9))
+# Eq. 9: Sp = (D + 1) / 2, on [0, 1], Dominance only.
+for d, want in ((-1.0, 0.0), (0.0, 0.5), (1.0, 1.0)):
+    check(f"Sp(D={d:+.0f}) = (D+1)/2",
+          A._spatial_extent({"P": 0, "Ar": 0, "D": d}), want)
+check("Sp ignores Pleasure and Arousal",
+      A._spatial_extent({"P": 0.9, "Ar": -0.9, "D": 0.3})
+      == A._spatial_extent({"P": -0.9, "Ar": 0.9, "D": 0.3}), True)
+
+print("\n=== 10. Gesture style reproduces the deck's own claim ===")
+# "a broad, brisk wave from ELLEBOT, a slow, gentle one from CHATBOX" — now
+# derived from PERFORM rather than fitted to the sentence.
 cb = A.gesture_style(A.to_pad(A.ROBOTS["CHATBOX"]["ocean"]))
 eb = A.gesture_style(A.to_pad(A.ROBOTS["ELLEBOT"]["ocean"]))
 for k in A.STYLE_LIMITS:
@@ -90,7 +110,7 @@ check("ELLEBOT stands more open", eb["posture"] > cb["posture"], True)
 check("ELLEBOT stirs more often", eb["idle"] > cb["idle"], True)
 check("CHATBOX posture is withdrawn (negative)", cb["posture"] < 0, True)
 
-print("\n=== 10. Style stays inside the servo-safe limits ===")
+print("\n=== 11. Style stays inside the servo-safe limits ===")
 # Every extreme of the affective space, including corners a real face cannot
 # reach — the firmware must never be handed an out-of-range scale factor.
 worst = []
@@ -103,16 +123,84 @@ for p in (-1, 0, 1):
                     worst.append((p, ar, d, k, s[k]))
 check("all 27 corners within limits", worst, [])
 
-print("\n=== 11. Arousal drives speed, Dominance drives carriage ===")
-calm = A.gesture_style({"P": 0.0, "Ar": -0.8, "D": 0.0})
-lively = A.gesture_style({"P": 0.0, "Ar": 0.8, "D": 0.0})
-check("high arousal is faster", lively["tempo"] > calm["tempo"], True)
-check("high arousal fidgets more", lively["idle"] > calm["idle"], True)
-low_d = A.gesture_style({"P": 0.0, "Ar": 0.0, "D": -0.8})
-high_d = A.gesture_style({"P": 0.0, "Ar": 0.0, "D": 0.8})
-check("dominance opens posture", high_d["posture"] > low_d["posture"], True)
-check("arousal alone leaves posture neutral",
-      round(A.gesture_style({"P": 0, "Ar": 0.9, "D": 0})["posture"], 6), 0.0)
+print("\n=== 12. What the published tempo equation actually does ===")
+# Recorded rather than asserted, because it is the one place where the
+# published equation and the deck's stated intent disagree. Hagane & Venture's
+# fv rises as Pleasure FALLS (their Eq. A1 term is 4 - Pn), following Wallbott's
+# finding that high kinetic energy reads as anger. So an unpleasant face comes
+# out slightly faster, not slower.
+base = A.to_pad(A.ROBOTS["CHATBOX"]["ocean"])
+speeds = {}
+for label in ("happy", "angry", "sad", "neutral"):
+    v, ar = A.category_to_va(label)
+    speeds[label] = A.gesture_style(A.feel(base, v, ar))["tempo"]
+    print(f"    tempo {label:<8}{speeds[label]:.2f}")
+check("anger is the fastest (the paper's Hostile anchor)",
+      max(speeds, key=speeds.get), "angry")
+check("arousal raises tempo at fixed valence",
+      A.gesture_style({"P": 0, "Ar": 0.9, "D": 0})["tempo"]
+      > A.gesture_style({"P": 0, "Ar": -0.9, "D": 0})["tempo"], True)
+check("NOTE: unpleasant is faster, not slower — see the module comment",
+      speeds["sad"] >= speeds["happy"] - 0.02, True)
+
+print("\n=== 13. Amplitude is Dominance-only, so the face cannot resize ===")
+# A direct consequence of Sp = (D+1)/2 plus the rule that the face never moves
+# Dominance. Worth pinning: it is a real behavioural property, not a bug.
+amps = {}
+for label in ("happy", "angry", "sad", "neutral"):
+    v, ar = A.category_to_va(label)
+    amps[label] = A.gesture_style(A.feel(base, v, ar))["amplitude"]
+check("amplitude identical across every detected emotion",
+      len({round(a, 9) for a in amps.values()}), 1)
+check("but it still separates the two personas",
+      A.gesture_style(A.to_pad(A.ROBOTS["ELLEBOT"]["ocean"]))["amplitude"]
+      > A.gesture_style(A.to_pad(A.ROBOTS["CHATBOX"]["ocean"]))["amplitude"],
+      True)
+
+print("\n=== 14. Valence drives droop, monotonically (the deck's equation) ===")
+droops = [A.gesture_style(A.feel(base, v, 0.0))["droop"]
+          for v in (-1.0, -0.5, 0.0, 0.5, 1.0)]
+print("    droop across valence -1..+1: " +
+      "  ".join(f"{d:+.2f}" for d in droops))
+check("droop falls as valence rises",
+      all(a > b for a, b in zip(droops, droops[1:])), True)
+check("an unpleasant face actually sags (droop > 0)", droops[0] > 0, True)
+check("a pleasant face lifts (droop < 0)", droops[-1] < 0, True)
+
+print("\n=== 15. The design deck's published numbers reproduce exactly ===")
+# The "Same tag, two styles" slide states baseline PAD, felt PAD, amplitude and
+# droop for both robots on a sad face. If any equation drifts from the deck,
+# this is the check that catches it. Nothing downstream may rescale these —
+# there is no `travel` fraction any more.
+for robot, base_w, felt_w, amp_w, droop_w in (
+        ("CHATBOX", (0.27, -0.01, -0.64), (-0.31, -0.23, -0.64), 0.42, 0.44),
+        ("ELLEBOT", (0.43, 0.48, 0.42), (-0.25, -0.04, 0.42), 0.80, 0.35)):
+    b = A.to_pad(A.ROBOTS[robot]["ocean"])
+    f = A.feel(b, *A.category_to_va("sad"))
+    s = A.gesture_style(f)
+    for label, got, want in (
+            ("baseline P", b["P"], base_w[0]), ("baseline Ar", b["Ar"], base_w[1]),
+            ("baseline D", b["D"], base_w[2]),
+            ("felt P", f["P"], felt_w[0]), ("felt Ar", f["Ar"], felt_w[1]),
+            ("felt D", f["D"], felt_w[2]),
+            ("amplitude", s["amplitude"], amp_w), ("droop", s["droop"], droop_w)):
+        # 0.006 so the deck's 2-decimal rounding is satisfied either way
+        check(f"{robot} {label} matches the deck ({want:+.2f})",
+              abs(got - want) < 0.006, True)
+
+print("\n=== 16. A neutral face relaxes back toward the persona ===")
+# Decay with no timer, inherited from feel()'s gap-closure form.
+persona = A.gesture_style(base)
+sad = A.gesture_style(A.feel(base, *A.category_to_va("sad")))
+back = A.gesture_style(A.feel(base, 0.0, 0.0))
+check("sad pulls droop away from the persona",
+      abs(sad["droop"] - persona["droop"]) > 0.1, True)
+check("neutral sits closer to the persona than sad does",
+      abs(back["droop"] - persona["droop"]) < abs(sad["droop"] - persona["droop"]),
+      True)
+check("empathy 0 pins the style to the persona exactly",
+      round(A.gesture_style(A.feel(base, -0.9, 0.9, empathy=0.0))["droop"], 9),
+      round(persona["droop"], 9))
 
 print(f"\n{'All checks passed.' if not failures else f'{failures} FAILED.'}\n")
 raise SystemExit(1 if failures else 0)

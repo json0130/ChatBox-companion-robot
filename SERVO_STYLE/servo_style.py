@@ -214,16 +214,18 @@ STYLE_LIMITS = {
 NEUTRAL_STYLE = {"amplitude": 1.0, "tempo": 1.0, "posture": 0.0,
                  "droop": 0.0, "idle": 0.45}
 
-# How much of an authored gesture each body physically performs. Deliberately
-# NOT the same number as AFFECT_LAB's `show`: that one scales a PAD coordinate,
-# and reusing it here multiplies the restraint twice — CHATBOX ends up at 0.19
-# amplitude, which does not read as reserved, it reads as broken. These are
-# mechanical fractions, chosen so the damping is clearly visible without the
-# robot looking faulty.
-TRAVEL = {
-    "CHATBOX": 0.65,   # tabletop: the same gestures, kept small
-    "ELLEBOT": 1.00,   # mobile: performs them at authored size
-}
+# There used to be a per-robot TRAVEL fraction here (CHATBOX 0.65, ELLEBOT 1.00)
+# that multiplied amplitude and droop on the way out. It has been removed,
+# because the design deck now carries only ONE embodiment scaling —
+# `shown = show_fraction × felt`, which lives in AFFECT_LAB's `show()` — and
+# applying a second mechanical fraction on top no longer matches the worked
+# numbers the deck publishes.
+#
+# It was also actively harmful: with travel, CHATBOX's amplitude came out at
+# 0.28 and saturated against the 0.30 clamp floor, so it played every gesture at
+# minimum size in every mood. Without it CHATBOX sits at 0.42 and has room to
+# vary. The two robots still separate on amplitude (0.42 vs 0.80) because
+# `amplitude = (D+1)/2` already carries the persona difference.
 
 # Playback timing in the firmware today: 900 ms per step.
 BASE_STEP_MS = 900

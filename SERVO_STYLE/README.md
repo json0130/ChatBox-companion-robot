@@ -42,14 +42,19 @@ Per servo, per step:
 
 ### Why there are five, not four
 
-The paper names four: amplitude, tempo, posture, idle frequency. **None of them
-can make a greeting look sad.** Amplitude only makes it smaller; a small wave is
-still a happy wave. Tempo only makes it slower.
+Four parameters — amplitude, tempo, posture, idle frequency — **cannot make a
+greeting look sad.** Amplitude only makes it smaller; a small wave is still a
+happy wave. Tempo only makes it slower.
 
 Valence needs a *signed* offset of its own, which is `droop`: ears fall, brows
-lower, lids drop, head dips, shoulders slump — added on top of whatever gesture is
-playing. It is the parameter that answers the actual question, and it is an
-addition to the paper rather than an implementation of it.
+lower, lids drop, head dips, shoulders slump — added on top of whatever gesture
+is playing.
+
+That parameter has a published name: it is **Sinking/Rising**, the vertical axis
+of Laban Shape, and it is one of the three Shape dimensions rather than an
+invention of this project. Its *gain* here (`−P × 1.4`) is still ours and still
+chosen by eye — no published equation maps PAD to a signed vertical tint. See
+`AFFECT_LAB/CONCEPT.md` §10.
 
 ## The whole chain, live
 
@@ -83,21 +88,27 @@ python preview.py greeting --emotion sad
 tag: greeting    person looks: sad
 
   CHATBOX
-    style        amp 0.34   tempo 0.63   posture -0.54   droop +0.29
-    step timing  1437 ms  (stock 900 ms)
+    style        amp 0.42   tempo 0.75   posture -0.54   droop +0.44
+    step timing  1202 ms  (stock 900 ms)
   ELLEBOT
-    style        amp 0.82   tempo 0.89   posture +0.22   droop +0.35
-    step timing  1007 ms  (stock 900 ms)
+    style        amp 0.80   tempo 1.03   posture +0.22   droop +0.35
+    step timing  876 ms  (stock 900 ms)
 
   servo      stock                 CHATBOX               ELLEBOT
-  Ears       165 165 165 165 165   136 136 136 136 136   152 152 152 152 152  *
-  RNeck       82  82  82  82  82    74  74  74  74  74    81  81  81  81  81  *
-  RShoulder  170 170  50  50  50   142 142 102 102 102   162 162  64  64  64  *
+  Ears       165 165 165 165 165   136 136 136 136 136   151 151 151 151 151  *
+  RNeck       82  82  82  82  82    73  73  73  73  73    81  81  81  81  81  *
+  RShoulder  170 170  50  50  50   143 143  92  92  92   161 161  66  66  66  *
+  RHand       90  90  90  90  90    90  90  90  90  90    90  90  90  90  90
 ```
 
-Same tag. CHATBOX barely raises its arm (142 rather than 170), ears down 29°, head
-dipped, all of it 60% slower. ELLEBOT performs most of the gesture but still
-tinted. Neither has been given a different move set.
+Same tag. CHATBOX raises its arm to 143 where stock commands 170, ears down 29°,
+head dipped, the whole gesture taking 6.0 s where ELLEBOT takes 4.4 s. ELLEBOT
+performs most of the gesture but is still visibly tinted. Neither has been given
+a different move set, and the hands stay put in both.
+
+These are the values the design deck publishes on its "Same tag, two styles"
+slide — amplitude 0.42 / 0.80 and droop +0.44 / +0.35 — so `preview.py` is the
+check that the code and the deck have not drifted apart.
 
 Other flags: `--emotion happy|angry|fear|neutral|…`, `--servo RShoulder` for one
 row, `--wire` to see the message the Jetson would send, `--tags` to list what is
@@ -149,16 +160,32 @@ resolves angles.
 
 ## Numbers that are proposals, not findings
 
-- **`DROOP_DEG`** — the per-servo degrees at full droop. Tuned by eye in the
-  table, never on a real robot. Start here if a mood does not read right.
-- **`POSTURE_DEG`** — same.
-- **`TRAVEL`** — CHATBOX 0.65, ELLEBOT 1.00. Deliberately *not* the same numbers
-  as `AFFECT_LAB`'s `show` (0.30 / 1.00): reusing those multiplies the restraint
-  twice and lands CHATBOX at 0.19 amplitude, which does not read as reserved, it
-  reads as broken.
-- **The droop-from-Pleasure gain** (1.4, in `preview.py`) — chosen because the
-  Pleasure axis rarely reaches ±1 in practice, so a straight copy would barely
-  tint anything.
+- **`DROOP_DEG` / `POSTURE_DEG` magnitudes** — the per-servo degrees at full
+  deflection. The *channel set* and *signs* follow
+  [Coulson (2004)](https://link.springer.com/article/10.1023/B:JONB.0000023655.25550.be)'s
+  six postural joint rotations and
+  [Wallbott (1998)](https://onlinelibrary.wiley.com/doi/abs/10.1002/(SICI)1099-0992(1998110)28:6%3C879::AID-EJSP901%3E3.0.CO;2-W);
+  the degrees are tuned by eye and are specific to this geometry. Start here if
+  a mood does not read right.
+- **Zero droop on the hands** — ours, and arguably wrong.
+  [Xu et al. (2013)](https://ieeexplore.ieee.org/document/6628534/) found hand
+  height among the four parameters that carried robot mood best. Worth testing.
+**Removed:** there used to be a per-robot `TRAVEL` fraction here (CHATBOX 0.65,
+ELLEBOT 1.00) multiplying amplitude and droop. It is gone. The design deck now
+carries only one embodiment scaling — `shown = show_fraction × felt` in
+`AFFECT_LAB` — and a second mechanical fraction on top no longer matched the
+deck's worked numbers. It was also harmful: with travel, CHATBOX's amplitude
+came out at 0.28 and saturated against the 0.30 clamp floor, so it played every
+gesture at minimum size in every mood. The two robots still separate on
+amplitude (0.42 vs 0.80) because `amplitude = (D+1)/2` already carries the
+persona difference.
 
-The symbol→angle tables, by contrast, are transcribed from `ServoControl.ino` and
-the test suite asserts a neutral style reproduces the stock firmware exactly.
+Of the five style values arriving over the wire, **`amplitude` and `tempo` are
+now published** — [Hagane & Venture (2022)](https://doi.org/10.3390/machines10121118),
+*Machines* 10(12):1118, Eq. 9 and A1, following
+[Claret, Venture & Basañez (2017)](https://link.springer.com/article/10.1007/s12369-016-0387-2).
+`posture`, `idle` and `droop` remain proposals; no published PAD equation for
+them could be found. `AFFECT_LAB/CONCEPT.md` §10 keeps the tally.
+
+The symbol→angle tables are transcribed from `ServoControl.ino`, and the test
+suite asserts a neutral style reproduces the stock firmware exactly.

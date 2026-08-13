@@ -146,20 +146,15 @@ class RobotLink:
 # ── Style for the current moment ────────────────────────────────────────────
 
 def current_style(robot, valence, arousal, empathy):
-    """Persona + what the camera sees -> the five values the firmware wants."""
+    """Persona + what the camera sees -> the five values the firmware wants.
+
+    All five come from `A.gesture_style` via the pipeline — `amplitude` and
+    `tempo` from Hagane & Venture (2022), the other three from the deck.
+    Nothing is scaled afterwards: the per-robot `travel` fraction that used to
+    be applied here has been removed, so these are the deck's published values.
+    """
     out = A.pipeline(A.ROBOTS[robot]["ocean"], valence, arousal, robot, empathy)
-    travel = S.TRAVEL.get(robot, 1.0)
-    # Droop follows what the robot *feels*; the body's travel fraction then
-    # decides how much of it reaches a servo. Using the display-scaled coordinate
-    # would apply the same restraint twice.
-    droop = -out["felt"]["P"] * 1.4
-    return S.clamp_style({
-        "amplitude": out["style"]["amplitude"] * travel,
-        "tempo": out["style"]["tempo"],
-        "posture": out["style"]["posture"],
-        "droop": droop * travel,
-        "idle": out["style"]["idle"],
-    }), out
+    return S.clamp_style(dict(out["style"])), out
 
 
 # ── The gesture column ──────────────────────────────────────────────────────

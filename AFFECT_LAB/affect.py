@@ -93,6 +93,63 @@ def feel(baseline: Dict[str, float], valence: float, arousal: float,
     }
 
 
+# ── Relationship -> Dominance ──────────────────────────────────────────────
+# The third influence, and the one the face is deliberately silent on (see
+# `feel`). Dominance reflects social standing between two parties, so it has to
+# come from recognising *who* the person is rather than how they look. That
+# recognition lives in the knowledge graph: a person and a robot share one
+# InteractionNode carrying rapport, trust and a turn count, and the graph's
+# `kg_bridge.derive_tier` reduces those to one of these five tiers. This table
+# is the only thing that crosses back, which is what keeps this module free of
+# any graph dependency.
+#
+# PROPOSAL. No published equation maps a relationship tier onto a PAD offset.
+# The DIRECTION is not a guess -- a familiar partner licenses more assertive
+# behaviour and a stranger less -- but the magnitudes are tuned by eye.
+TIER_OFFSETS: Dict[str, Tuple[float, float, float]] = {
+    "close":   (0.00, +0.10, +0.40),
+    "family":  (0.00, +0.05, +0.20),
+    "known":   (0.00,  0.00,  0.00),   # reference tier: no displacement at all
+    "visitor": (0.00,  0.00, -0.20),
+    "unknown": (0.00,  0.00, -0.40),
+}
+
+TIERS = tuple(TIER_OFFSETS)
+
+
+def _clamp(v: float) -> float:
+    return max(-1.0, min(1.0, v))
+
+
+def tier_offset(tier: str) -> Tuple[float, float, float]:
+    """(dP, dAr, dD) for a relationship tier. Unrecognised -> 'unknown'."""
+    return TIER_OFFSETS.get(tier, TIER_OFFSETS["unknown"])
+
+
+def feel_with_relationship(baseline: Dict[str, float],
+                           valence: float, arousal: float, tier: str,
+                           empathy: float = EMPATHY) -> Dict[str, float]:
+    """All three influences in one coordinate.
+
+    `feel` moves P and Ar toward the detected face; the tier then displaces
+    Dominance (and nudges Arousal at the two closest tiers). They never fight,
+    because each pushes along its own axis.
+
+    Applied BEFORE `show`, deliberately: `gesture_style` reads the *felt*
+    coordinate, not the shown one, so a tier applied after `show` would never
+    reach a servo at all. The design also admits exactly one embodiment scaling.
+
+    Clamped to [-1, +1] -- CHATBOX's baseline D of -0.643 plus the 'unknown'
+    offset lands at -1.043, outside the space PAD is defined on and outside the
+    domain the published Eq. 9 / Eq. A1 assume.
+    """
+    felt = feel(baseline, valence, arousal, empathy)
+    dP, dAr, dD = tier_offset(tier)
+    return {"P":  _clamp(felt["P"] + dP),
+            "Ar": _clamp(felt["Ar"] + dAr),
+            "D":  _clamp(felt["D"] + dD)}
+
+
 def show(coord: Dict[str, float], fraction: float) -> Dict[str, float]:
     """Scale an internal coordinate down to what a given body can display."""
     return {k: fraction * v for k, v in coord.items()}
@@ -283,15 +340,23 @@ def gesture_style(coord: Dict[str, float]) -> Dict[str, float]:
 
 
 def pipeline(traits: Dict[str, float], valence: float, arousal: float,
-             robot: str, empathy: float = EMPATHY) -> Dict[str, object]:
-    """The whole chain, in one call — what the demo overlay renders."""
+             robot: str, empathy: float = EMPATHY,
+             tier: str = "known") -> Dict[str, object]:
+    """The whole chain, in one call — what the demo overlay renders.
+
+    `tier` defaults to "known", whose offset is (0, 0, 0), so a call that omits
+    it is bit-identical to the pre-relationship pipeline. That identity is what
+    makes the relationship path a strict superset rather than a change, and it
+    is asserted in the test suite.
+    """
     baseline = to_pad(traits)
-    felt = feel(baseline, valence, arousal, empathy)
+    felt = feel_with_relationship(baseline, valence, arousal, tier, empathy)
     shown = show(felt, ROBOTS[robot]["show"])
     return {
         "baseline": baseline,
         "felt": felt,
         "shown": shown,
+        "tier": tier,
         "name": affect_name(shown["P"], shown["Ar"]),
         "words": descriptors(shown),
         # Derived from `felt`, not `shown`. The body's display fraction and

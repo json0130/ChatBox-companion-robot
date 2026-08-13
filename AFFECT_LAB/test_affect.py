@@ -202,5 +202,70 @@ check("empathy 0 pins the style to the persona exactly",
       round(A.gesture_style(A.feel(base, -0.9, 0.9, empathy=0.0))["droop"], 9),
       round(persona["droop"], 9))
 
+print("\n=== 17. 'known' is the reference tier — the identity holds ===")
+# The whole relationship path is a strict SUPERSET of the old model: with the
+# reference tier it must reproduce the previous numbers bit for bit, so every
+# figure published before this feature is still valid.
+for robot in ("CHATBOX", "ELLEBOT"):
+    b = A.to_pad(A.ROBOTS[robot]["ocean"])
+    for emo in ("happy", "sad", "neutral", "anger"):
+        v, ar = A.category_to_va(emo)
+        old = A.feel(b, v, ar)
+        new = A.feel_with_relationship(b, v, ar, "known")
+        for axis in ("P", "Ar", "D"):
+            check(f"{robot}/{emo} {axis}: known == no-tier",
+                  round(new[axis], 12), round(old[axis], 12))
+
+print("\n=== 18. The face still never moves Dominance ===")
+# Section 4's invariant, now that a second influence writes to D: whatever the
+# camera reports, D is exactly baseline + the tier's offset and nothing else.
+for robot in ("CHATBOX", "ELLEBOT"):
+    b = A.to_pad(A.ROBOTS[robot]["ocean"])
+    for tier in A.TIERS:
+        want = max(-1.0, min(1.0, b["D"] + A.tier_offset(tier)[2]))
+        ds = {round(A.feel_with_relationship(b, v, ar, tier)["D"], 12)
+              for v in (-0.9, 0.0, 0.9) for ar in (-0.9, 0.0, 0.9)}
+        check(f"{robot}/{tier}: D independent of the face", len(ds), 1)
+        check(f"{robot}/{tier}: D == baseline + offset", ds.pop(), round(want, 12))
+
+print("\n=== 19. The tier ladder is monotone in amplitude ===")
+# This is the payoff: Eq. 9 reads Dominance alone, so before the relationship
+# existed amplitude was fixed per persona and no detected emotion could resize a
+# gesture. Feeding D a social signal makes amplitude respond to WHO is present.
+ladder = ("unknown", "visitor", "known", "family", "close")
+for robot in ("CHATBOX", "ELLEBOT"):
+    b = A.to_pad(A.ROBOTS[robot]["ocean"])
+    amps = [A.gesture_style(A.feel_with_relationship(b, 0.0, 0.0, t))["amplitude"]
+            for t in ladder]
+    check(f"{robot}: amplitude rises with familiarity {[round(a,3) for a in amps]}",
+          all(x < y for x, y in zip(amps, amps[1:])), True)
+
+print("\n=== 20. Documented saturation at the bottom of the ladder ===")
+# CHATBOX's baseline D (-0.643) plus the 'unknown' offset (-0.40) lands outside
+# [-1,1], so it clamps -- and the clamped D puts amplitude exactly on its floor.
+# Pinned rather than left to be rediscovered as a bug: at 'unknown' CHATBOX
+# plays every gesture at minimum size. There is no tier below it.
+b = A.to_pad(A.ROBOTS["CHATBOX"]["ocean"])
+u = A.feel_with_relationship(b, 0.0, 0.0, "unknown")
+check("CHATBOX @ unknown: D saturates at -1", round(u["D"], 6), -1.0)
+check("CHATBOX @ unknown: amplitude sits on the 0.30 clamp floor",
+      round(A.gesture_style(u)["amplitude"], 6), 0.30)
+
+print("\n=== 21. What the tier does to the LLM's descriptor words ===")
+# The experiment in the prompt grid depends on these words differing across
+# tiers. They differ much less on CHATBOX, whose show=0.30 compresses D by 70%
+# before the bands are read -- so expressive bandwidth gates language, not just
+# servo travel. Asserted so the compression is a known fact, not a surprise.
+for robot, want_distinct in (("CHATBOX", 2), ("ELLEBOT", 3)):
+    b = A.to_pad(A.ROBOTS[robot]["ocean"])
+    words = []
+    for t in ladder:
+        shown = A.show(A.feel_with_relationship(b, 0.0, 0.0, t),
+                       A.ROBOTS[robot]["show"])
+        words.append(A.descriptors(shown)[2])
+    print(f"    {robot:8s} " + "  ".join(f"{t}={w}" for t, w in zip(ladder, words)))
+    check(f"{robot}: {want_distinct} distinct dominance words across the ladder",
+          len(set(words)), want_distinct)
+
 print(f"\n{'All checks passed.' if not failures else f'{failures} FAILED.'}\n")
 raise SystemExit(1 if failures else 0)

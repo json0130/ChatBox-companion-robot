@@ -221,55 +221,11 @@ class ConversationNode(BaseModel):
     node_type: Literal["conversation"] = "conversation"
 
 
-class CultureNode(BaseModel):
-    """A cultural background, e.g. 'Korean'. This is the ROBOT's prior knowledge:
-    a robot links to it via KnowsCultureEdge, and the culture carries soft priors
-    over its OWN CultureTopicNodes (CulturePriorEdge). A person may (manually,
-    never auto-detected) be tagged with ONE via BelongsToCultureEdge — a starting
-    guess about their background, never a fact about them.
-
-    Deterministic id `culture:<normalized-label>` (same slug as TopicNode) so
-    re-seeding the same culture resolves to the SAME node.
-
-    `style_hint` is a single short, STATIC "how to talk" paragraph (manner/politeness)
-    for this culture — hand-written seed data, the same for every interaction. It is
-    the manner half of cultural adaptation (the topic priors are the content half).
-    Default "" → old graphs load unchanged and inject nothing. Deliberately dumb: no
-    tier/affect/situation variation (that is Approach 2's policy vector).
-    """
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    label: str
-    style_hint: str = ""
-    node_type: Literal["culture"] = "culture"
-
-
-class CultureTopicNode(BaseModel):
-    """A topic that belongs to the ROBOT's cultural knowledge, e.g. 'kimchi' under
-    Korean. Deliberately SEPARATE from the shared person-interest TopicNode so a
-    culture's background knowledge never couples unrelated people together (person
-    A's `topic:hiking` stays distinct from `ck:korean:hiking`). A person links to a
-    real TopicNode only by actually discussing it; the culture layer never writes
-    person→topic edges.
-
-    Deterministic id `ck:<culture-slug>:<topic-slug>`. `category` mirrors
-    TopicCategory for viz colouring. Not touched by topic consolidation / interest
-    machinery (different node_type), so it can't merge into a person topic.
-    """
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    label: str
-    category: TopicCategory = TopicCategory.OTHER
-    # Short cultural facts the robot can share when it brings up this topic, e.g.
-    # esports → ["Korea is the heart of competitive gaming (StarCraft, LoL)"].
-    facts: List[str] = Field(default_factory=list)
-    node_type: Literal["culture_topic"] = "culture_topic"
-
-
 # Union of all node types (discriminated on node_type for (de)serialisation)
 AnyNode = Union[
     RobotNode, PersonNode, TopicNode,
     PersonaNode, RoleNode, CapabilityNode, InterestNode,
     InteractionNode, SessionNode, ConversationNode,
-    CultureNode, CultureTopicNode,
 ]
 
 
@@ -403,15 +359,15 @@ class AboutEdge(EdgeBase):
     'knows jazz'. Left None for a person Interest → Topic edge.
 
     On a person's Interest → Topic edge this is the "observed" evidence the
-    preference BN and the person-memory prompt both read:
+    person-memory prompt reads:
       * `affinity`   — how positively the person feels about the topic, stored
-        internally in [0,1] (0.0 dislike / 0.5 neutral / 1.0 like) so it drops
-        straight into the BN clamp. The human-facing scale is 0–10; convert ONLY
-        at the boundary via scales.aff01_from_10 / aff10_from_01. Default 0.5
-        (neutral) so pre-existing edges load as neutral.
+        internally in [0,1] (0.0 dislike / 0.5 neutral / 1.0 like). The
+        human-facing scale is 0–10; convert ONLY at the boundary via
+        scales.aff01_from_10 / aff10_from_01. Default 0.5 (neutral) so
+        pre-existing edges load as neutral.
       * `confidence` — how sure the reading is, in [0,1]. Feeds prompt hedging
-        ("clearly" vs "possibly"); does NOT weight the BN clamp in this step.
-        Default 1.0 (fully trusted) so pre-existing edges load unchanged.
+        ("clearly" vs "possibly") — presentation only; it weights nothing
+        numeric. Default 1.0 (fully trusted) so pre-existing edges load unchanged.
     Robot Capability → Topic edges simply carry the neutral defaults (unused).
     """
     edge_type: Literal["about"] = "about"
@@ -459,43 +415,7 @@ class HasConversationEdge(EdgeBase):
 InteractionEdge = Union[HasInteractionEdge, HasSessionEdge, HasConversationEdge]
 
 
-# ---------------------------------------------------------------------------
-# Culture edges  (Robot → Culture → CultureTopic ;  Person → Culture)
-# ---------------------------------------------------------------------------
-# The culture layer is the ROBOT's prior knowledge:
-#   robot --knows_culture--> Culture --culture_prior--> CultureTopic
-# A person is only TAGGED with a culture (manual), never wired to its topics:
-#   person --belongs_to_culture--> Culture
-# All SLOW. Priors are authored/seeded starting guesses — NOT per-person state.
-
-class KnowsCultureEdge(EdgeBase):
-    """robot → CultureNode. The robot holds this culture as background knowledge.
-    SLOW, idempotent — one per robot-culture pair (replace-on-newer)."""
-    edge_type: Literal["knows_culture"] = "knows_culture"
-    timescale: Timescale = Timescale.SLOW
-
-
-class BelongsToCultureEdge(EdgeBase):
-    """person → CultureNode. Manual assignment only (no auto-detection). SLOW,
-    idempotent — one per person-culture pair (replace-on-newer). Tags a person
-    with a background; does NOT link them to any of the culture's topics."""
-    edge_type: Literal["belongs_to_culture"] = "belongs_to_culture"
-    timescale: Timescale = Timescale.SLOW
-
-
-class CulturePriorEdge(EdgeBase):
-    """CultureNode → CultureTopicNode soft prior in [0,1] — how likely someone
-    from this background engages with the topic (a starting guess, not a person's
-    state). SLOW; one per culture-topic pair (upsert replaces the prior value)."""
-    edge_type: Literal["culture_prior"] = "culture_prior"
-    prior: float = Field(..., ge=0.0, le=1.0)
-    timescale: Timescale = Timescale.SLOW
-
-
-CultureEdge = Union[KnowsCultureEdge, BelongsToCultureEdge, CulturePriorEdge]
-
-
 AnyEdge = Union[
     RelationshipEdge, PersonAttributeEdge, IdentityEdge, TopicEdge,
-    InteractionEdge, CultureEdge,
+    InteractionEdge,
 ]

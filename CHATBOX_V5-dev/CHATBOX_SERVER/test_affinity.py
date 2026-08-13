@@ -27,7 +27,6 @@ from modules.graph_relationship.topics import (
 )
 from modules.kg_extraction import extract_and_apply_topics
 from modules.affinity_phrasing import topic_memory_line
-from modules.preference_model import rank_suggestions
 
 _ROBOT = "chatbox"
 _PERSON = "kid"
@@ -141,44 +140,6 @@ def test_helpers_roundtrip():
 
 # ── 4. BN clamp: dislike pulls a neighbour DOWN, like pushes UP ───────────────
 
-def test_bn_signed_clamp():
-    s = _person_store()
-    # two observed topics with opposite affinity, each related to an UNOBSERVED
-    # neighbour that starts at the default prior (0.30).
-    add_person_topic(s, _PERSON, "baseball", "sport", affinity=0.10, confidence=0.9)
-    add_person_topic(s, _PERSON, "jazz",     "music", affinity=0.95, confidence=0.9)
-    resolve_topic(s, "softball", category="sport")   # unobserved neighbour
-    resolve_topic(s, "blues",    category="music")   # unobserved neighbour
-    link_related_topic(s, topic_id("baseball"), topic_id("softball"), 0.65)
-    link_related_topic(s, topic_id("jazz"),     topic_id("blues"),    0.65)
-
-    # read-only baseline
-    n0, e0 = len(s._nodes), len(s._edges)
-    f0 = tempfile.mktemp(suffix=".json"); s.save(f0); before = open(f0).read()
-
-    got = dict((s.get_node(i).label, p) for i, p in
-               rank_suggestions(s, _PERSON, k=9, floor=0.0))
-    a2 = dict((s.get_node(i).label, p) for i, p in rank_suggestions(s, _PERSON, k=9, floor=0.0))
-
-    f1 = tempfile.mktemp(suffix=".json"); s.save(f1); after = open(f1).read()
-    os.remove(f0); os.remove(f1)
-
-    # disliked baseball drags softball BELOW its prior; liked jazz lifts blues ABOVE
-    assert got["softball"] < 0.30 - 1e-9, got
-    assert got["blues"] > 0.30 + 1e-9, got
-    # observed topics excluded from suggestions
-    assert "baseball" not in got and "jazz" not in got, got
-    # read-only + deterministic
-    assert (len(s._nodes), len(s._edges)) == (n0, e0), "graph mutated"
-    assert before == after, "store bytes changed — not read-only"
-    assert got == a2, "non-deterministic"
-    print("4. BN clamp: softball {:.3f} < 0.30 (dislike pull), blues {:.3f} > 0.30 "
-          "(like push); baseball/jazz excluded; read-only + deterministic ✓".format(
-              got["softball"], got["blues"]))
-
-
-# ── 5. Prompt wording: verb (affinity) × hedge (confidence) ───────────────────
-
 def test_prompt_wording():
     cases = [
         ("jazz",     0.95, 0.90, "They clearly like jazz."),
@@ -233,7 +194,6 @@ if __name__ == "__main__":
     test_backward_compat()
     test_extraction_mapping()
     test_helpers_roundtrip()
-    test_bn_signed_clamp()
     test_prompt_wording()
     test_purity()
     print("\nALL AFFINITY (STEP 1) TESTS PASSED")

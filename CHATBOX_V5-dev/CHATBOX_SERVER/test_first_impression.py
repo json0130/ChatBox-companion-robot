@@ -1,7 +1,7 @@
 """
-Headless verification for the FIRST-IMPRESSION integration on the culture branch:
+Headless verification for the FIRST-IMPRESSION integration:
 auto-enrol an unknown face as a provisional guest, then re-key that guest to their
-real name across every store when they introduce themselves — while the FULL culture
+real name across every store when they introduce themselves — while the full
 /interest pipeline (and viz highlight) works on them as a normal person.
 
 Run:  python3 test_first_impression.py   (no camera / no LLM / no network)
@@ -23,8 +23,6 @@ from modules.graph_relationship.topics import (
     add_person_topic, update_conversation, get_conversation, interest_id,
 )
 from modules.graph_relationship.rename import rename_person
-from modules.culture_seed import seed_all_cultures, assign_person_culture
-from modules.graph_relationship.cultures import person_culture
 from modules.session_store import SessionStore
 from modules.face_webcam.face_id import FaceIdentifier
 from modules.face_webcam.webcam_loop import (
@@ -43,7 +41,7 @@ def test_name_extraction():
         assert _slug_name(_extract_name(text)) == slug, text
     for text in ("i'm fine thanks", "i am korean", "hello there", "i'm not sure"):
         assert _extract_name(text) is None, text
-    print("1. name extraction: intros parsed, feelings/filler/culture-words rejected ✓")
+    print("1. name extraction: intros parsed, feelings/filler rejected ✓")
 
 
 # ── 2. graph rename_person: re-key person + interaction + conversation ────────
@@ -55,8 +53,6 @@ def test_graph_rename():
     set_interaction_count(s, "guest_1", _ROBOT, 3, source="t")   # interaction:guest_1:chatbox
     update_conversation(s, "guest_1", _ROBOT, topic="jazz", create=True)  # conversation node
     add_person_topic(s, "guest_1", "jazz", "music", affinity=0.9)
-    seed_all_cultures(s, robot_id=_ROBOT)
-    assign_person_culture(s, "guest_1", "Korean", source="self-declared:s1")
 
     n0, e0 = len(s._nodes), len(s._edges)
     assert rename_person(s, "guest_1", "jay", _ROBOT, display_name="Jay")
@@ -67,15 +63,13 @@ def test_graph_rename():
     assert s.get_node("interaction:jay:chatbox") is not None
     assert s.get_node("interaction:guest_1:chatbox") is None
     assert get_conversation(s, "jay", _ROBOT) is not None
-    # relationship + culture edge followed the person
-    assert person_culture(s, "jay") == "culture:korean"
     # no dangling guest_1 anywhere in edges
     dangling = [e for e in s._edges.values()
                 if "guest_1" in (e.source_id, e.target_id)]
     assert not dangling, dangling
     # node/edge counts unchanged (pure re-key, nothing added/lost)
     assert (len(s._nodes), len(s._edges)) == (n0, e0), (n0, e0, len(s._nodes), len(s._edges))
-    print("2. graph rename: person/interaction/conversation re-keyed, culture + "
+    print("2. graph rename: person/interaction/conversation re-keyed, "
           "relationship edges followed, no dangling guest id, counts stable ✓")
 
 
@@ -185,26 +179,6 @@ def test_learn_name_flow():
     print("5. _learn_name: re-keys face DB + graph + transcripts + in-memory maps ✓")
 
 
-# ── 6. A guest is a normal person → full culture pipeline + prompt works ──────
-
-def test_guest_gets_culture_pipeline():
-    s = InMemoryGraphStore()
-    s.upsert_node(RobotNode(id=_ROBOT, name=_ROBOT, embodiment=Embodiment.CAT))
-    seed_all_cultures(s, robot_id=_ROBOT)
-    # a freshly auto-enrolled guest, tagged via (mid-session) self-declaration
-    s.upsert_node(PersonNode(id="guest_2", display_name="guest_2"))
-    add_person_topic(s, "guest_2", "jazz", "music", affinity=0.9, confidence=0.9)
-    assign_person_culture(s, "guest_2", "Korean", source="self-declared:s1")
-
-    L = WebcamKGLoop.__new__(WebcamKGLoop)
-    L.store = s; L.robot_id = _ROBOT; L._robot_display = "ChatBox"; L.kg_path = None
-    p = L._build_system_prompt("guest_2")
-    assert "Cultural knowledge lens: Korean" in p or "you're Korean" in p
-    assert "jazz" in p                                    # their interest is in memory
-    print("6. guest pipeline: an auto-enrolled guest gets the full culture/interest "
-          "prompt (and viz highlight) like any person ✓")
-
-
 if __name__ == "__main__":
     test_name_extraction()
     test_graph_rename()
@@ -212,5 +186,4 @@ if __name__ == "__main__":
     test_session_rename()
     test_face_rename()
     test_learn_name_flow()
-    test_guest_gets_culture_pipeline()
     print("\nALL FIRST-IMPRESSION INTEGRATION TESTS PASSED")

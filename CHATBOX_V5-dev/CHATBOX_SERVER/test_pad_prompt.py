@@ -1,5 +1,5 @@
 """
-PAD reaches the system prompt WITHOUT displacing the memory system.
+PAD reaches the system prompt and the servos, without displacing memory.
 
 The regression this exists to prevent used to be live: enabling PAD swapped in a
 prompt built by pad_persona, so the identity block, the KG memory, the RAG hits
@@ -16,6 +16,7 @@ No LLM, no camera. Run directly or under pytest.
 import os
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -154,6 +155,88 @@ def test_grid_runs_headless():
     print(f"6. the grid runs headless ({len(rows)} cells, tiers derived correctly) ✓")
 
 
+# ── the servo STYLE wire ─────────────────────────────────────────────────────
+
+def _style_probe():
+    """A loop pointed at a real local socket, plus the lines it receives."""
+    import socket
+    import threading
+    got = []
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    port = srv.getsockname()[1]
+    srv.listen(8)
+
+    def serve():
+        while True:
+            try:
+                c, _ = srv.accept()
+                with c:
+                    got.append(c.recv(256).decode().strip())
+            except OSError:
+                break
+    threading.Thread(target=serve, daemon=True).start()
+
+    tmp = tempfile.mkdtemp(prefix="style_wire_")
+    loop = WebcamKGLoop(
+        robot_id="chatbox", show_window=False, seed=True, llm_client=None,
+        kg_path=os.path.join(tmp, "kg.json"), faces_path=os.path.join(tmp, "f.npz"),
+        sessions_db=os.path.join(tmp, "s.db"), embed_fn=None,
+        pad_enabled=True, emotion_enabled=True,
+        esp32_host="127.0.0.1", esp32_port=port)
+    return loop, got, srv
+
+
+def test_style_is_sent_only_when_the_mood_moves():
+    """Style is STICKY in the firmware, so it only needs resending on change —
+    and resending every tick would flood a link with a 0.5 s timeout."""
+    loop, got, srv = _style_probe()
+    try:
+        ad = loop._adapter()
+        style = lambda t: ad.process_turn(0.0, 0.0, t)["style"]
+
+        assert loop._maybe_send_style(style("known")) is True
+        loop._last_style_t = 0.0                       # bypass the rate limit
+        assert loop._maybe_send_style(style("known")) is False, "deadband failed"
+        loop._last_style_t = 0.0
+        assert loop._maybe_send_style(style("close")) is True, "tier jump not sent"
+        assert loop._maybe_send_style(style("unknown")) is False, "rate limit failed"
+        assert loop._maybe_send_style(force=True) is True, "force must always send"
+
+        time.sleep(0.2)
+        assert all(l.startswith("STYLE ") for l in got), got
+        assert len(got) == 3, got
+    finally:
+        srv.close()
+    print("7. STYLE is sent on change, suppressed by deadband + rate limit, "
+          "always sent when forced ✓")
+
+
+def test_style_precedes_the_gesture_tag():
+    """Ordering is load-bearing: the firmware styles a gesture with whatever it
+    holds AT THE MOMENT THE TAG ARRIVES, so the STYLE line must land first."""
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "modules", "face_webcam", "webcam_loop.py")).read()
+    i = src.index("self._maybe_send_style(force=True)")
+    j = src.index("_send_esp32(expr,", i)
+    assert i < j, "style must be forced before the tag is sent"
+    print("8. the forced STYLE precedes the gesture tag in _apply_chat_result ✓")
+
+
+def test_style_wire_off_without_pad():
+    """Styling needs PAD; without it the robot must behave exactly as before."""
+    tmp = tempfile.mkdtemp(prefix="style_off_")
+    loop = WebcamKGLoop(
+        robot_id="chatbox", show_window=False, seed=True, llm_client=None,
+        kg_path=os.path.join(tmp, "kg.json"), faces_path=os.path.join(tmp, "f.npz"),
+        sessions_db=os.path.join(tmp, "s.db"), embed_fn=None,
+        pad_enabled=False, style_wire=True, esp32_host="127.0.0.1")
+    assert loop._style_wire is False
+    assert loop._maybe_send_style({"amplitude": 1.0}) is False
+    print("9. no STYLE line is emitted when PAD is disabled ✓")
+
+
 if __name__ == "__main__":
     test_pad_does_not_displace_the_memory_system()
     test_manner_line_present_once_and_last()
@@ -162,4 +245,7 @@ if __name__ == "__main__":
     test_tier_changes_the_prompt()
     test_descriptor_compression_is_as_pinned()
     test_grid_runs_headless()
-    print("\nPAD reaches the prompt; the memory system is intact.")
+    test_style_is_sent_only_when_the_mood_moves()
+    test_style_precedes_the_gesture_tag()
+    test_style_wire_off_without_pad()
+    print("\nPAD reaches the prompt and the servos; memory is intact.")

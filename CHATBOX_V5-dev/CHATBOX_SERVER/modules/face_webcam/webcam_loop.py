@@ -1076,6 +1076,7 @@ class WebcamKGLoop:
         adapt_interval:    float = 20.0,
         adapt_max:         int   = 20,
         adapt_min_px:      int   = 90,
+        style_wire:        bool  = True,
     ):
         self.robot_id      = robot_id
         self.faces_path    = faces_path
@@ -1142,6 +1143,11 @@ class WebcamKGLoop:
         self._adapt_interval = adapt_interval
         self._adapt_max      = adapt_max
         self._adapt_min_px   = adapt_min_px
+        # Servo styling over the wire: only meaningful with PAD on and a
+        # robot attached, so it silently no-ops otherwise.
+        self._style_wire      = style_wire and pad_enabled
+        self._last_style_sent: Optional[dict] = None
+        self._last_style_t    = 0.0
         self._matcher          = matcher
         self._embed_fn         = embed_fn   # for on-demand topic consolidation (Feature 2)
         # Conversation transcripts live in SQLite (not the graph). The graph keeps
@@ -1322,6 +1328,9 @@ class WebcamKGLoop:
         if tag:
             print(f"  [tag]   [{tag}]")
             if self._esp32_host:
+                # Style first: the firmware applies whatever it is holding WHEN
+                # the tag arrives, so a stale style would restyle this gesture.
+                self._maybe_send_style(force=True)
                 expr = _TAG_TO_ESP32.get(tag)
                 if expr:
                     _send_esp32(expr, self._esp32_host, self._esp32_port)
@@ -1355,6 +1364,54 @@ class WebcamKGLoop:
             self._spawn_topic_detect(msg, verbal, pid, self.robot_id, row_id)
 
         return verbal
+
+    # ── Servo style wire ──────────────────────────────────────────────────────
+
+    # Send when any parameter has moved more than this FRACTION of its own range.
+    # Normalising by range is what lets one number work for `amplitude` (0.70
+    # wide) and `posture` (2.00 wide) at once.
+    _STYLE_DEADBAND = 0.02
+    _STYLE_MIN_INTERVAL = 1.0     # seconds — a jittery V/A stream must not flood
+
+    def _maybe_send_style(self, style: Optional[dict] = None, *,
+                          force: bool = False) -> bool:
+        """Push the five style values to the robot, but only when the mood has
+        actually moved.
+
+        Style is STICKY in the firmware: it holds the last STYLE line and applies
+        it to every subsequent gesture. So a resend is only needed on change —
+        and resending every tick would flood a link with a 0.5 s timeout.
+
+        `force` is used before a gesture tag, because the firmware styles the
+        gesture with whatever it holds AT THE MOMENT THE TAG ARRIVES. If the
+        deadband suppressed the periodic send, the tag would play with a stale
+        mood, so the ordering here is load-bearing.
+        """
+        if not (self._style_wire and self._esp32_host):
+            return False
+        if style is None:
+            style = self._last_style_sent if force else None
+            if style is None:
+                return False
+
+        now = time.time()
+        if not force:
+            if now - self._last_style_t < self._STYLE_MIN_INTERVAL:
+                return False
+            prev = self._last_style_sent
+            if prev is not None:
+                from modules.affect_bridge import servo_style as _ss
+                moved = max(
+                    abs(style[k] - prev.get(k, 0.0)) / (hi - lo)
+                    for k, (lo, hi) in _ss.STYLE_LIMITS.items() if k in style)
+                if moved < self._STYLE_DEADBAND:
+                    return False
+
+        from modules.affect_bridge import servo_style as _ss
+        _send_esp32(_ss.wire_message(style), self._esp32_host, self._esp32_port)
+        self._last_style_sent = dict(style)
+        self._last_style_t = now
+        return True
 
     def _adapter(self) -> PADPipelineAdapter:
         if self.robot_id not in self._adapters:
@@ -2107,6 +2164,7 @@ class WebcamKGLoop:
                                 continue
                             if self._pad_enabled:
                                 bi, pad = self._pipeline_tick(pid, d["emotion"], va=d.get("va"))
+                                self._maybe_send_style(pad.get("style"))
                                 r, t    = _read_rapport_trust(self.store, pid, self.robot_id)
                                 _kg_state[pid] = {
                                     "tier":        bi.tier,
@@ -2590,6 +2648,11 @@ def main() -> None:
                    help="Max views learned per session (default 20).")
     p.add_argument("--adapt-min-px", type=int, default=90,
                    help="Minimum face box side (px) to learn from (default 90).")
+    p.add_argument("--no-style-wire", dest="style_wire", action="store_false",
+                   help="Do not send PAD servo-style (STYLE) lines to the ESP32. "
+                        "Styling needs --enable-pad and --esp32-host; without a "
+                        "STYLE line the robot behaves exactly as it did before.")
+    p.set_defaults(style_wire=True)
     p.add_argument("--reset-adaptive", nargs="?", const="__ALL__", default=None,
                    metavar="NAME",
                    help="Delete self-learned views (all people, or just NAME) from the "
@@ -2716,6 +2779,7 @@ def main() -> None:
         adapt_interval       = args.adapt_interval,
         adapt_max            = args.adapt_max,
         adapt_min_px         = args.adapt_min_px,
+        style_wire           = args.style_wire,
     )
     loop.run(camera_index=args.camera)
 

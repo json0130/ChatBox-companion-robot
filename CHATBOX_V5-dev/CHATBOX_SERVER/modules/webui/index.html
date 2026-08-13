@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PAD affect — live</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --line:#242c38; --ink:#e6edf3; --dim:#8b949e;
+    --acc:#58a6ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --pad:#bc8cff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+  header{display:flex;align-items:center;gap:16px;padding:10px 16px;
+         background:var(--panel);border-bottom:1px solid var(--line)}
+  h1{font-size:14px;margin:0;letter-spacing:.5px;font-weight:600}
+  .grow{flex:1}
+  .robots{display:flex;gap:6px}
+  .robots button{background:#0d1117;color:var(--dim);border:1px solid var(--line);
+    padding:6px 14px;border-radius:6px;cursor:pointer;font:inherit;font-weight:600}
+  .robots button.on{background:var(--acc);color:#04121f;border-color:var(--acc)}
+  .pill{padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--dim)}
+  main{display:grid;grid-template-columns:minmax(420px,1.1fr) minmax(340px,1fr);
+       grid-template-rows:auto 1fr;gap:12px;padding:12px;height:calc(100vh - 49px)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+        display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .card h2{margin:0;padding:8px 12px;font-size:11px;letter-spacing:1px;
+           color:var(--dim);text-transform:uppercase;border-bottom:1px solid var(--line)}
+  .card .body{padding:10px 12px;overflow:auto;min-height:0}
+  #cam{width:100%;display:block;background:#000}
+  table{width:100%;border-collapse:collapse}
+  td{padding:2px 0;vertical-align:top}
+  td.k{color:var(--dim);width:96px;white-space:nowrap}
+  .words{font-size:19px;color:var(--pad);font-weight:600;letter-spacing:.3px}
+  .wire{font-size:11px;color:var(--ok);word-break:break-all}
+  .bar{height:6px;background:#0d1117;border-radius:3px;overflow:hidden;margin-top:3px}
+  .bar i{display:block;height:100%;background:var(--acc)}
+  .axis{display:flex;align-items:center;gap:6px;margin:3px 0}
+  .axis .n{width:74px;color:var(--dim)}
+  .axis .t{width:52px;text-align:right}
+  .track{flex:1;height:8px;background:#0d1117;border-radius:4px;position:relative}
+  .track .z{position:absolute;left:50%;top:0;bottom:0;width:1px;background:#30363d}
+  .track i{position:absolute;top:0;bottom:0;background:var(--pad);border-radius:4px}
+  #chat{display:flex;flex-direction:column;gap:8px}
+  .msg{padding:7px 10px;border-radius:8px;max-width:92%;white-space:pre-wrap;
+       word-break:break-word}
+  .you{align-self:flex-end;background:#1f6feb33;border:1px solid #1f6feb66}
+  .robot{align-self:flex-start;background:#0d1117;border:1px solid var(--line)}
+  .system{align-self:center;color:var(--dim);font-size:11px;border:none}
+  .meta{font-size:10px;color:var(--dim);margin-top:4px}
+  form{display:flex;gap:8px;padding:10px 12px;border-top:1px solid var(--line)}
+  input[type=text]{flex:1;background:#0d1117;border:1px solid var(--line);
+    color:var(--ink);padding:8px 10px;border-radius:6px;font:inherit}
+  button.send{background:var(--acc);border:0;color:#04121f;padding:8px 16px;
+    border-radius:6px;font:inherit;font-weight:600;cursor:pointer}
+  #graph{flex:1;min-height:0}
+  .tier{font-weight:700}
+  .t-unknown{color:var(--bad)} .t-visitor{color:var(--warn)}
+  .t-known{color:var(--acc)}   .t-family,.t-close{color:var(--ok)}
+  .legend{display:flex;gap:10px;flex-wrap:wrap;font-size:10px;color:var(--dim);
+          padding:6px 12px;border-top:1px solid var(--line)}
+  .legend b{display:inline-block;width:8px;height:8px;border-radius:99px;margin-right:3px}
+</style>
+</head>
+<body>
+<header>
+  <h1>PAD AFFECT — LIVE</h1>
+  <div class="robots">
+    <button id="b-chatbox" onclick="setRobot('chatbox')">CHATBOX</button>
+    <button id="b-ellebot" onclick="setRobot('ellebot')">ELLEBOT</button>
+  </div>
+  <span class="pill" id="ocean">—</span>
+  <div class="grow"></div>
+  <span class="pill" id="fps">0 fps</span>
+  <span class="pill" id="faces">0 faces</span>
+</header>
+
+<main>
+  <!-- camera -->
+  <section class="card" style="grid-row:1/3">
+    <h2>Camera — face recognition &amp; emotion</h2>
+    <img id="cam" src="/stream.mjpg" alt="camera">
+    <div class="body">
+      <table>
+        <tr><td class="k">person</td><td id="person">—</td></tr>
+        <tr><td class="k">emotion</td><td id="emotion">—</td></tr>
+        <tr><td class="k">valence</td><td><div class="axis"><span class="t" id="v-t">0.00</span>
+          <span class="track"><span class="z"></span><i id="v-b"></i></span></div></td></tr>
+        <tr><td class="k">arousal</td><td><div class="axis"><span class="t" id="a-t">0.00</span>
+          <span class="track"><span class="z"></span><i id="a-b"></i></span></div></td></tr>
+      </table>
+    </div>
+    <h2>Relationship → Dominance</h2>
+    <div class="body">
+      <table>
+        <tr><td class="k">tier</td><td><span id="tier" class="tier">—</span>
+            <span id="tier-note" style="color:var(--dim)"></span></td></tr>
+        <tr><td class="k">rapport</td><td><span id="rap">0.00</span>
+            <div class="bar"><i id="rap-b"></i></div></td></tr>
+        <tr><td class="k">trust</td><td><span id="tru">0.00</span>
+            <div class="bar"><i id="tru-b"></i></div></td></tr>
+        <tr><td class="k">turns</td><td id="turns">0</td></tr>
+      </table>
+    </div>
+    <h2>PAD → words &amp; servos</h2>
+    <div class="body">
+      <div class="words" id="words">—</div>
+      <div id="axes" style="margin:8px 0"></div>
+      <div class="wire" id="wire">—</div>
+      <div class="meta" id="style">—</div>
+    </div>
+  </section>
+
+  <!-- chat -->
+  <section class="card">
+    <h2>Conversation</h2>
+    <div class="body" id="chat"></div>
+    <form onsubmit="send(event)">
+      <input type="text" id="msg" placeholder="say something…" autocomplete="off">
+      <button class="send">send</button>
+    </form>
+  </section>
+
+  <!-- knowledge graph -->
+  <section class="card">
+    <h2>Knowledge graph</h2>
+    <svg id="graph"></svg>
+    <div class="legend" id="legend"></div>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<script>
+const COL = {person:'#58a6ff', robot:'#bc8cff', topic:'#3fb950', interest:'#d29922',
+             interaction:'#f778ba', conversation:'#79c0ff', persona:'#a5d6ff',
+             role:'#ffa657', capability:'#7ee787', session:'#8b949e'};
+
+/* ── live state ─────────────────────────────────────────────────────────── */
+let lastChat = 0;
+async function poll(){
+  try{
+    const s = await (await fetch('/state.json')).json();
+    document.getElementById('fps').textContent   = (s.fps||0)+' fps';
+    document.getElementById('faces').textContent = (s.faces||0)+' faces';
+    document.getElementById('person').textContent =
+      (s.person||'—') + (s.sim>0 ? '  ('+s.sim.toFixed(2)+')' : s.sim<0 ? '  (held)' : '');
+    document.getElementById('emotion').textContent = s.emotion||'—';
+    bar('v', s.valence); bar('a', s.arousal);
+
+    const t = s.tier||'unknown';
+    const te = document.getElementById('tier');
+    te.textContent = t.toUpperCase(); te.className = 'tier t-'+t;
+    document.getElementById('tier-note').textContent =
+      '  D offset ' + ({close:'+0.40',family:'+0.20',known:'0.00',
+                        visitor:'−0.20',unknown:'−0.40'}[t]||'');
+    num('rap', s.rapport); num('tru', s.trust);
+    document.getElementById('rap-b').style.width = (100*(s.rapport||0))+'%';
+    document.getElementById('tru-b').style.width = (100*(s.trust||0))+'%';
+    document.getElementById('turns').textContent = s.interactions||0;
+
+    document.getElementById('words').textContent =
+      s.words ? s.words.join(' · ') : '—';
+    document.getElementById('wire').textContent = s.wire||'—';
+    if(s.pad) axes(s.pad, s.shown);
+    if(s.style){
+      const st=s.style;
+      document.getElementById('style').textContent =
+        `amplitude ${st.amplitude.toFixed(3)} · tempo ${st.tempo.toFixed(3)} · `+
+        `posture ${st.posture.toFixed(2)} · droop ${st.droop.toFixed(2)}` +
+        (s.affect_name? '   ('+s.affect_name+')':'');
+    }
+    for(const r of ['chatbox','ellebot'])
+      document.getElementById('b-'+r).className = (s.robot===r?'on':'');
+    document.getElementById('ocean').textContent =
+      'OCEAN ' + Object.entries(s.ocean||{}).map(([k,v])=>k+(v>=0?'+':'')+v).join(' ');
+
+    if(s.chat.length !== lastChat){ lastChat = s.chat.length; renderChat(s.chat, s.thinking); }
+    else if(s.thinking) renderChat(s.chat, true);
+  }catch(e){}
+  setTimeout(poll, 500);
+}
+function num(id,v){ document.getElementById(id).textContent=(v||0).toFixed(3); }
+function bar(p,v){
+  v = v||0;
+  document.getElementById(p+'-t').textContent = (v>=0?'+':'')+v.toFixed(2);
+  const el = document.getElementById(p+'-b');
+  const w = Math.abs(v)*50;
+  el.style.width = w+'%';
+  el.style.left  = (v>=0 ? 50 : 50-w)+'%';
+  el.style.background = v>=0 ? 'var(--ok)' : 'var(--bad)';
+}
+function axes(felt, shown){
+  const names=['Pleasure','Arousal','Dominance'];
+  document.getElementById('axes').innerHTML = names.map((n,i)=>{
+    const f=felt[i], s=shown?shown[i]:f, w=Math.abs(f)*50, l=f>=0?50:50-w;
+    return `<div class="axis"><span class="n">${n}</span>
+      <span class="track"><span class="z"></span>
+      <i style="left:${l}%;width:${w}%"></i></span>
+      <span class="t">${f>=0?'+':''}${f.toFixed(2)}</span></div>`;
+  }).join('');
+}
+function renderChat(msgs, thinking){
+  const box=document.getElementById('chat');
+  box.innerHTML = msgs.map(m=>{
+    if(m.who==='system') return `<div class="msg system">${esc(m.text)}</div>`;
+    const meta = m.who==='robot' && m.words
+      ? `<div class="meta">${m.tag?'['+m.tag+'] ':''}${m.robot||''} · ${m.tier||''} · ${m.words.join('/')}</div>` : '';
+    return `<div class="msg ${m.who}">${esc(m.text)}${meta}</div>`;
+  }).join('') + (thinking?'<div class="msg robot">…</div>':'');
+  box.scrollTop = box.scrollHeight;
+}
+const esc = s => String(s).replace(/[<>&]/g, c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+
+async function send(e){
+  e.preventDefault();
+  const i=document.getElementById('msg'), m=i.value.trim();
+  if(!m) return; i.value='';
+  await fetch('/chat',{method:'POST',body:JSON.stringify({message:m})});
+}
+async function setRobot(r){
+  await fetch('/robot',{method:'POST',body:JSON.stringify({robot:r})});
+  drawGraph();
+}
+
+/* ── knowledge graph ────────────────────────────────────────────────────── */
+let sim=null;
+async function drawGraph(){
+  const g = await (await fetch('/graph.json')).json();
+  const svg=d3.select('#graph'), el=document.getElementById('graph');
+  const W=el.clientWidth||520, H=el.clientHeight||300;
+  svg.selectAll('*').remove();
+  svg.attr('viewBox',`0 0 ${W} ${H}`);
+  const link=svg.append('g').attr('stroke','#30363d').attr('stroke-width',1)
+    .selectAll('line').data(g.links).join('line');
+  const node=svg.append('g').selectAll('g').data(g.nodes).join('g')
+    .call(d3.drag()
+      .on('start',(e,d)=>{if(!e.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y;})
+      .on('drag',(e,d)=>{d.fx=e.x;d.fy=e.y;})
+      .on('end',(e,d)=>{if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null;}));
+  node.append('circle')
+    .attr('r',d=>d.type==='person'||d.type==='robot'?9:5)
+    .attr('fill',d=>COL[d.type]||'#8b949e')
+    .attr('stroke','#0e1116').attr('stroke-width',1.5);
+  node.append('text').text(d=>d.label).attr('x',11).attr('y',4)
+    .attr('fill','#8b949e').attr('font-size',9);
+  node.append('title').text(d=>d.id+'  ('+d.type+')');
+  sim=d3.forceSimulation(g.nodes)
+    .force('link',d3.forceLink(g.links).id(d=>d.id).distance(52).strength(.35))
+    .force('charge',d3.forceManyBody().strength(-160))
+    .force('center',d3.forceCenter(W/2,H/2))
+    .force('collide',d3.forceCollide(16))
+    .on('tick',()=>{
+      link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y)
+          .attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
+      node.attr('transform',d=>`translate(${d.x},${d.y})`);
+    });
+  document.getElementById('legend').innerHTML =
+    [...new Set(g.nodes.map(n=>n.type))].map(t=>
+      `<span><b style="background:${COL[t]||'#8b949e'}"></b>${t}</span>`).join('');
+}
+
+poll(); drawGraph(); setInterval(drawGraph, 15000);
+</script>
+</body>
+</html>

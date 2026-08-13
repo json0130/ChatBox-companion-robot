@@ -90,25 +90,59 @@ class LiveState:
 
 
 def graph_json(store, robot_id: str) -> dict:
-    """The graph as nodes+links, with just enough typing for the layout."""
-    nodes, links = [], []
-    for n in store._nodes.values():                       # noqa: SLF001
-        nodes.append({
-            "id": n.id,
-            "type": n.node_type,
-            "label": getattr(n, "display_name", None) or getattr(n, "label", None)
-                     or getattr(n, "name", None) or n.id.split(":")[-1],
-        })
-    for e in store._edges.values():                       # noqa: SLF001
-        links.append({"source": e.source_id, "target": e.target_id,
-                      "type": e.edge_type,
-                      "value": round(float(getattr(e, "weight", 0.0) or 0.0), 3)})
-    return {"nodes": nodes, "links": links, "robot": robot_id}
+    """The graph as nodes+links, showing only the ACTIVE robot's relationship.
+
+    Both robots keep their own InteractionNode with its own rapport, trust and
+    turn count, so both sets of history survive a persona switch. But drawing
+    both at once implies the person is simultaneously in two relationships, so
+    the inactive robot's interaction/conversation subtree is left out and its
+    node is returned unconnected. Nothing is deleted — this is a view.
+    """
+    others = {r for r in ROBOTS if r != robot_id}
+
+    def owned_by_other(node_id: str) -> bool:
+        return any(node_id.endswith(f":{o}") and node_id.startswith(
+            ("interaction:", "conversation:")) for o in others)
+
+    hidden = {n.id for n in store._nodes.values()          # noqa: SLF001
+              if owned_by_other(n.id)}
+
+    nodes = [{
+        "id": n.id,
+        "type": n.node_type,
+        "label": getattr(n, "display_name", None) or getattr(n, "label", None)
+                 or getattr(n, "name", None) or n.id.split(":")[-1],
+        "active": n.id == robot_id,
+        "idle_robot": n.node_type == "robot" and n.id != robot_id,
+    } for n in store._nodes.values() if n.id not in hidden]   # noqa: SLF001
+
+    links = [{
+        "source": e.source_id, "target": e.target_id, "type": e.edge_type,
+        "value": round(float(getattr(e, "weight", 0.0) or 0.0), 3),
+    } for e in store._edges.values()                        # noqa: SLF001
+        if e.source_id not in hidden and e.target_id not in hidden]
+
+    return {"nodes": nodes, "links": links, "robot": robot_id,
+            "sig": f"{robot_id}|{len(nodes)}|{len(links)}|"
+                   f"{hash(frozenset(n['id'] for n in nodes)) & 0xffffff}"}
+
+
+_TIER_COL = {                       # BGR
+    "close":   (120, 220, 120), "family":  (140, 210, 130),
+    "known":   (255, 170,  90), "visitor": (60, 190, 235),
+    "unknown": (90,  90, 245),
+}
 
 
 def draw(frame, dets, state: dict):
-    """Boxes + labels. Deliberately light — the page renders the detail."""
+    """Boxes plus the identity/relationship panel.
+
+    Drawn here rather than in the page so the overlay travels WITH the frame —
+    what you see is what the pipeline actually decided for that image.
+    """
     out = frame.copy()
+    h, w = out.shape[:2]
+
     for d in dets:
         box = d.get("box")
         if not box:
@@ -119,16 +153,50 @@ def draw(frame, dets, state: dict):
         cv2.rectangle(out, (x1, y1), (x2, y2), col, 2)
         sim = d.get("sim", 0.0)
         tag = f"{d.get('person_id') or '?'}"
-        if sim >= 0:
-            tag += f" {sim:.2f}"
-        else:
-            tag += " held"
+        tag += " held" if sim < 0 else f" {sim:.2f}"
         cv2.putText(out, tag, (x1 + 3, max(y1 - 8, 14)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, col, 2)
         emo = d.get("emotion")
         if emo:
             cv2.putText(out, f"{emo} {d.get('e_conf', 0):.0f}%",
                         (x1 + 3, y2 + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 1)
+
+    # ── identity + relationship panel, bottom-left ────────────────────────────
+    tier = state.get("tier") or "unknown"
+    person = state.get("person") or "—"
+    words = state.get("words")
+    ph, pw = 96, 330
+    y0 = h - ph - 6
+    panel = out[y0:y0 + ph, 6:6 + pw].copy()
+    out[y0:y0 + ph, 6:6 + pw] = cv2.addWeighted(
+        panel, 0.25, np.zeros_like(panel), 0.75, 0)
+    cv2.rectangle(out, (6, y0), (6 + pw, y0 + ph), (60, 70, 85), 1)
+
+    tc = _TIER_COL.get(tier, (150, 150, 150))
+    cv2.putText(out, f"{state.get('robot','').upper()}  <->  {person}",
+                (14, y0 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (235, 235, 235), 1)
+    cv2.putText(out, tier.upper(), (14, y0 + 44),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.62, tc, 2)
+    off = affect.tier_offset(tier)[2]
+    cv2.putText(out, f"D {off:+.2f}", (110, y0 + 44),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.46, tc, 1)
+
+    # rapport / trust bars
+    for i, (lbl, val) in enumerate((("R", state.get("rapport") or 0.0),
+                                    ("T", state.get("trust") or 0.0))):
+        bx, by = 14 + i * 160, y0 + 60
+        cv2.putText(out, f"{lbl} {val:.2f}", (bx, by + 9),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (170, 175, 185), 1)
+        cv2.rectangle(out, (bx + 52, by), (bx + 132, by + 9), (55, 60, 70), -1)
+        cv2.rectangle(out, (bx + 52, by), (bx + 52 + int(80 * max(0.0, min(1.0, val))),
+                                           by + 9), tc, -1)
+
+    if words:
+        cv2.putText(out, " / ".join(words), (14, y0 + 86),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 150, 255), 1)
+    turns = state.get("interactions") or 0
+    cv2.putText(out, f"{turns} turns", (pw - 66, y0 + 20),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.42, (150, 155, 165), 1)
     return out
 
 
@@ -283,6 +351,7 @@ def main(argv=None) -> int:
         return 1
 
     last_tick, fps_t, frames = 0.0, time.time(), 0
+    overlay = state.snapshot()   # refreshed on the 1 Hz tick, not per frame
     try:
         while True:
             ok, frame = cap.read()
@@ -293,7 +362,7 @@ def main(argv=None) -> int:
             worker.submit(frame)
             dets = worker.get_results()
 
-            annotated = draw(frame, dets, state.data)
+            annotated = draw(frame, dets, overlay)
             ok2, buf = cv2.imencode(".jpg", annotated,
                                     [int(cv2.IMWRITE_JPEG_QUALITY), 80])
             if ok2:
@@ -333,6 +402,7 @@ def main(argv=None) -> int:
                         "interactions": it.interaction_count if it else 0,
                     })
                 state.update(**upd)
+                overlay = state.snapshot()
                 loop._drain_adapt_events(worker)     # noqa: SLF001
                 loop._flush_kg()                     # noqa: SLF001
 

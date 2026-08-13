@@ -1,262 +1,171 @@
 """
-PAD pipeline adapter — wire-ready, no existing files modified.
+PAD pipeline adapter — one conversation turn in, one affect state out.
 
-Provides two interchangeable classes:
-  PADPipelineAdapter  — live PAD-driven affect state
-  NullPADAdapter      — neutral-fallback, identical interface
+Thin wrapper over `AFFECT_LAB/affect.py`, which is the single source of truth for
+the affect maths (OCEAN -> PAD, the face's pull on P/Ar, the relationship tier's
+pull on D, the body's `show` fraction, the descriptor bands, and the five style
+values). This module owns no equations of its own; it only threads the graph's
+view of a turn into that pipeline and shapes the result for the host loop.
 
-The host pipeline can swap between them in one line.
+Two interchangeable classes, same interface:
+    PADPipelineAdapter  — live PAD-driven affect state
+    NullPADAdapter      — neutral fallback
+
+`system_prompt` is deliberately always None. An earlier version built a whole
+system prompt here, and the host loop used it INSTEAD of its own — which silently
+dropped the identity block, the KG memory, the RAG hits and the anti-hallucination
+rules whenever PAD was enabled. Prompt assembly belongs to the loop, which is the
+only place that has all of those; this adapter supplies the three descriptor
+words and the loop decides where they go.
 """
 
-from .config import PADWeights, CHATBOX_PERSONA, ELLEBOT_PERSONA
+from modules.affect_bridge import affect, servo_style
+
 from .affect_stream import AffectStream
-from .pad_engine import PADEngine
-from .prompt_builder import build_system_prompt
 
 # ---------------------------------------------------------------------------
-# Emotion-label → (valence, arousal) mapping
-# Based on Russell (1980) circumplex model of affect.
-# Used until a dedicated V-A regression head is trained on the camera stream.
+# Emotion label -> (valence, arousal)
 # ---------------------------------------------------------------------------
-EMOTION_VA: dict[str, tuple[float, float]] = {
-    "happy":    ( 0.8,  0.6),
-    "neutral":  ( 0.0,  0.0),
-    "sad":      (-0.7, -0.4),
-    "angry":    (-0.6,  0.7),
-    "fear":     (-0.5,  0.8),
-    "disgust":  (-0.6,  0.3),
-    "surprise": ( 0.1,  0.8),
-}
+# Delegates to affect.CATEGORY_VA so the server and the bench cannot disagree
+# about what "sad" means. Kept as a module attribute because callers import it.
+EMOTION_VA: dict[str, tuple[float, float]] = dict(affect.CATEGORY_VA)
 
+# robot_id -> (key into affect.ROBOTS, display name)
 _PERSONA_REGISTRY = {
-    "chatbox": (CHATBOX_PERSONA, "ChatBox"),
-    "ellebot": (ELLEBOT_PERSONA, "ElleBot"),
-}
-
-_NEUTRAL_GESTURE_PARAMS: dict[str, float] = {
-    "amplitude":  0.5,
-    "tempo":      0.5,
-    "posture":    0.5,
-    "idle_freq":  0.5,
-    "expression": 0.5,
+    "chatbox": ("CHATBOX", "ChatBox"),
+    "ellebot": ("ELLEBOT", "ElleBot"),
 }
 
 _NEUTRAL_DESCRIPTORS: dict[str, str] = {
-    "pleasure":  "neutral",
-    "arousal":   "moderate",
-    "dominance": "neutral",
+    "pleasure": "even", "arousal": "calm", "dominance": "even-handed",
 }
 
 
-# ---------------------------------------------------------------------------
-# Live adapter
-# ---------------------------------------------------------------------------
-
 class PADPipelineAdapter:
-    """
-    Thin stateful adapter between the PAD persona engine and the pipeline.
+    """One instance per connected robot. Call process_turn() once per turn."""
 
-    One instance per connected robot client.  Holds one PADEngine and one
-    AffectStream; call process_turn() once per conversation turn.
-    """
-
-    def __init__(
-        self,
-        robot_id: str,
-        affect_stream: AffectStream | None = None,
-        weights: PADWeights | None = None,
-    ):
+    def __init__(self, robot_id: str, affect_stream: AffectStream | None = None,
+                 show: float | None = None):
         entry = _PERSONA_REGISTRY.get(robot_id.lower())
         if entry is None:
-            raise ValueError(
-                f"Unknown robot_id '{robot_id}'. "
-                f"Available: {list(_PERSONA_REGISTRY)}"
-            )
-        persona, self._display_name = entry
-        self._engine = PADEngine(persona, weights or PADWeights())
+            raise ValueError(f"Unknown robot_id {robot_id!r}. "
+                             f"Available: {list(_PERSONA_REGISTRY)}")
+        self._key, self._display_name = entry
+        self._traits = affect.ROBOTS[self._key]["ocean"]
+        # `show` is overridable purely as a diagnostic: CHATBOX's 0.30 compresses
+        # Dominance so hard that the descriptor words barely move with tier, and
+        # being able to raise it separates "PAD isn't reaching the words" from
+        # "the body is muting it". Not a runtime feature.
+        self._show = affect.ROBOTS[self._key]["show"] if show is None else show
         self._stream = affect_stream or AffectStream()
-
-    # ------------------------------------------------------------------
-    # Primary turn method
-    # ------------------------------------------------------------------
 
     def process_turn(
         self,
         valence: float,
         arousal: float,
         relationship_tier: str,
-        memory_context: str = "",
+        memory_context: str = "",      # accepted for interface stability; unused
         rapport: float = 0.0,
         trust: float = 0.0,
         interaction_count: int = 0,
     ) -> dict:
-        """Run the full PAD update for one conversation turn.
+        """Run the affect pipeline for one turn.
 
         Args:
-            valence:           Current user affect, [-1, 1].
-                               Obtain via emotion_label_to_va() or a V-A model.
-            arousal:           Current user arousal, [-1, 1].
-            relationship_tier: "close" | "family" | "known" | "visitor" | "unknown"
-            memory_context:    RAG-retrieved snippets; empty string if none.
-            rapport:           KG rapport score [0, 1] for prompt injection.
-            trust:             KG trust score [0, 1] for prompt injection.
-            interaction_count: Number of prior KG interactions for prompt injection.
-
-        Returns a dict with keys:
-            system_prompt  (str | None) — pass to LLM; None → use existing default
-            gesture_params (dict)       — merge into hardware command
-            pad_state      (tuple)      — (P, A, D) floats for logging
-            descriptors    (dict)       — {"pleasure", "arousal", "dominance"} strings
-        """
-        dP, dA = self._stream.update(valence, arousal)
-        pad    = self._engine.update((dP, dA), relationship_tier)
-
-        descriptors    = self._engine.to_language_descriptors()
-        gesture_params = self._engine.to_gesture_params()
-
-        system_prompt = build_system_prompt(
-            persona_name=self._display_name,
-            descriptors=descriptors,
-            relationship_tier=relationship_tier,
-            memory_context=memory_context,
-            rapport=rapport,
-            trust=trust,
-            interaction_count=interaction_count,
-        )
-
-        return {
-            "system_prompt":  system_prompt,
-            "gesture_params": gesture_params,
-            "pad_state":      pad,
-            "descriptors":    descriptors,
-        }
-
-    # ------------------------------------------------------------------
-    # Hardware command enrichment
-    # ------------------------------------------------------------------
-
-    def enrich_hardware_command(self, tag: str, gesture_params: dict) -> dict:
-        """Merge PAD gesture parameters into a hardware command dict.
-
-        The "command" key is the plain ASCII string already accepted by the
-        current ESP32 firmware (matching validExpressions[]).
-        "gesture_params" carries PAD-derived modifiers; current firmware ignores
-        them — they become actionable when the firmware is extended to accept JSON.
-
-        Args:
-            tag:           Action tag string, e.g. "GREETING" or "SAD".
-            gesture_params: Output of PADEngine.to_gesture_params().
+            valence/arousal:   the person's face, [-1, 1]. The ONLY inputs the
+                               face is allowed to influence (P and Ar).
+            relationship_tier: from kg_bridge.derive_tier — moves Dominance.
+            memory_context/rapport/trust/interaction_count: carried for the
+                               caller's convenience; prompt assembly is the
+                               loop's job, so nothing here consumes them.
 
         Returns:
-            {
-              "command":       str,   # lowercase, ready for arduino_output.send_command()
-              "gesture_params": dict, # PAD modifiers for future firmware use
-              "raw_tag":       str,   # uppercase original tag, for logging
-            }
+            pad_state    (P, Ar, D) FELT — the internal state, not display-scaled.
+                         kg_bridge.post_turn persists P/Ar from this.
+            shown        (P, Ar, D) after the body's `show` fraction.
+            words        ordered (pleasure, arousal, dominance) descriptors.
+            descriptors  the same three, keyed — what the prompt consumes.
+            name         nearest named circumplex region, e.g. "mildly dejected".
+            style        the five servo parameters, derived from FELT.
+            wire         the STYLE line for the ESP32.
+            tier         echoed back for logging.
+            system_prompt  always None — see the module docstring.
         """
+        v, a = self._stream.update(valence, arousal)
+        baseline = affect.to_pad(self._traits)
+        felt = affect.feel_with_relationship(baseline, v, a, relationship_tier)
+        shown = affect.show(felt, self._show)
+
+        words = affect.descriptors(shown)
+        # Derived from FELT, not shown: the body's display fraction and amplitude
+        # are two descriptions of the same restraint, so applying both would
+        # double-count it and flatten the contrast between the two robots.
+        style = affect.gesture_style(felt)
+
         return {
-            "command":        tag.lower(),
-            "gesture_params": gesture_params,
-            "raw_tag":        tag.upper(),
+            "pad_state":   (felt["P"], felt["Ar"], felt["D"]),
+            "shown":       (shown["P"], shown["Ar"], shown["D"]),
+            "words":       words,
+            "descriptors": {"pleasure": words[0], "arousal": words[1],
+                            "dominance": words[2]},
+            "name":        affect.affect_name(shown["P"], shown["Ar"]),
+            "style":       style,
+            "wire":        servo_style.wire_message(style),
+            "tier":        relationship_tier,
+            "system_prompt": None,
         }
 
-    # ------------------------------------------------------------------
-    # Utility
-    # ------------------------------------------------------------------
+    def enrich_hardware_command(self, tag: str, style: dict) -> dict:
+        """Bundle a gesture tag with the style values that should precede it."""
+        return {
+            "command":  tag.lower(),
+            "style":    style,
+            "wire":     servo_style.wire_message(style),
+            "raw_tag":  tag.upper(),
+        }
 
     @staticmethod
     def emotion_label_to_va(emotion_label: str) -> tuple[float, float]:
-        """Convert an EmotionProcessor label to (valence, arousal).
+        """Emotion label -> (valence, arousal). Unknown -> neutral."""
+        return affect.category_to_va(emotion_label)
 
-        Falls back to (0.0, 0.0) for unknown labels.
-        """
-        return EMOTION_VA.get(emotion_label.lower(), (0.0, 0.0))
-
-
-# ---------------------------------------------------------------------------
-# Null fallback
-# ---------------------------------------------------------------------------
 
 class NullPADAdapter:
-    """Drop-in replacement for PADPipelineAdapter that returns neutral defaults.
+    """Neutral drop-in: same keys, no affect. Disables PAD without other edits."""
 
-    Swap in one line to disable the PAD module without touching any other code:
-        pad_adapter = NullPADAdapter()
-    """
-
-    def process_turn(
-        self,
-        valence: float = 0.0,
-        arousal: float = 0.0,
-        relationship_tier: str = "unknown",
-        memory_context: str = "",
-    ) -> dict:
+    def process_turn(self, valence: float = 0.0, arousal: float = 0.0,
+                     relationship_tier: str = "unknown", memory_context: str = "",
+                     rapport: float = 0.0, trust: float = 0.0,
+                     interaction_count: int = 0) -> dict:
+        neutral = {"amplitude": 1.0, "tempo": 1.0, "posture": 0.0,
+                   "droop": 0.0, "idle": 0.45}
         return {
-            "system_prompt":  None,  # signals host to use its own hardcoded prompt
-            "gesture_params": dict(_NEUTRAL_GESTURE_PARAMS),
-            "pad_state":      (0.0, 0.0, 0.0),
-            "descriptors":    dict(_NEUTRAL_DESCRIPTORS),
+            "pad_state": (0.0, 0.0, 0.0), "shown": (0.0, 0.0, 0.0),
+            "words": ("even", "calm", "even-handed"),
+            "descriptors": dict(_NEUTRAL_DESCRIPTORS),
+            "name": "neutral", "style": neutral,
+            "wire": servo_style.wire_message(neutral),
+            "tier": relationship_tier, "system_prompt": None,
         }
 
-    def enrich_hardware_command(self, tag: str, gesture_params: dict) -> dict:
-        return {
-            "command":        tag.lower(),
-            "gesture_params": gesture_params,
-            "raw_tag":        tag.upper(),
-        }
+    def enrich_hardware_command(self, tag: str, style: dict) -> dict:
+        return {"command": tag.lower(), "style": style,
+                "wire": servo_style.wire_message(style), "raw_tag": tag.upper()}
 
     @staticmethod
     def emotion_label_to_va(emotion_label: str) -> tuple[float, float]:
-        return EMOTION_VA.get(emotion_label.lower(), (0.0, 0.0))
+        return affect.category_to_va(emotion_label)
 
-
-# ---------------------------------------------------------------------------
-# Standalone demo
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    adapter = PADPipelineAdapter("chatbox")
-
-    turns = [
-        # (emotion_label, relationship_tier, memory_context)
-        ("happy",    "close",   "Child mentioned they love trains and dinosaurs."),
-        ("happy",    "close",   ""),
-        ("neutral",  "known",   ""),
-        ("sad",      "unknown", ""),
-        ("surprise", "known",   "They just told me about their new dog."),
-    ]
-
-    print("=" * 70)
-    print("PAD Pipeline Adapter — 5-turn CHATBOX demo")
-    print("=" * 70)
-
-    for i, (emotion_label, tier, memory) in enumerate(turns, 1):
-        v, a = PADPipelineAdapter.emotion_label_to_va(emotion_label)
-        result = adapter.process_turn(v, a, tier, memory)
-
-        p, ar, d = result["pad_state"]
-        desc = result["descriptors"]
-        gp   = result["gesture_params"]
-
-        print(f"\n--- Turn {i} | emotion={emotion_label!r:10s} tier={tier!r} ---")
-        print(f"  VA input      valence={v:+.1f}  arousal={a:+.1f}")
-        print(f"  PAD state     P={p:+.3f}  A={ar:+.3f}  D={d:+.3f}")
-        print(f"  Descriptors   {desc['pleasure']} / {desc['arousal']} / {desc['dominance']}")
-        print(f"  Gesture       amplitude={gp['amplitude']:.3f}  tempo={gp['tempo']:.3f}"
-              f"  posture={gp['posture']:.3f}  expression={gp['expression']:.3f}")
-        print(f"  Hw command    {adapter.enrich_hardware_command('GREETING', gp)}")
-
-        # Show first 2 lines of system prompt only
-        prompt_lines = result["system_prompt"].splitlines()
-        print(f"  Prompt[0:2]   {prompt_lines[0][:80]}")
-        if len(prompt_lines) > 2:
-            print(f"               {prompt_lines[2][:80]}")
-
-    print("\n" + "=" * 70)
-    print("NullPADAdapter demo (one turn)")
-    print("=" * 70)
-    null = NullPADAdapter()
-    nr = null.process_turn(0.5, 0.3, "known", "")
-    print(f"  system_prompt  → {nr['system_prompt']!r}  (None = use existing default)")
-    print(f"  pad_state      → {nr['pad_state']}")
-    print(f"  gesture_params → {nr['gesture_params']}")
+    print("=" * 74)
+    print("PAD pipeline adapter — the relationship ladder at a neutral face")
+    print("=" * 74)
+    for robot in ("chatbox", "ellebot"):
+        ad = PADPipelineAdapter(robot)
+        print(f"\n{robot.upper()}  (show={ad._show})")
+        for tier in affect.TIERS:
+            r = ad.process_turn(0.0, 0.0, tier)
+            p, a, d = r["pad_state"]
+            print(f"  {tier:8s} PAD=({p:+.3f},{a:+.3f},{d:+.3f})  "
+                  f"{'/'.join(r['words']):32s}  {r['wire']}")

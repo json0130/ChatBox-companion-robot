@@ -4,20 +4,20 @@ from collections import deque
 class AffectStream:
     """Converts raw valence/arousal signals into smoothed PAD offsets.
 
-    Designed to sit between a V-A emotion model and the PADEngine.
-    The gain parameters scale raw model output (assumed [-1, 1]) into
-    PAD-space offsets before temporal smoothing is applied.
+    Sits between a V/A emotion model and the affect pipeline, and does ONE job:
+    average out frame-to-frame jitter over a short window. It deliberately does
+    NOT attenuate the signal — `affect.feel` owns that, via the empathy fraction
+    (0.60) that decides how far a face pulls the robot off its temperament.
 
-    # TODO: plug in pretrained V-A model checkpoint here — replace
-    #       mock_update() calls with real inference output from the
-    #       checkpoint at Modules/models/efficientnet_HQRAF_improved_withCon.pth
-    #       or a dedicated VA regression head trained on AffectNet/RAF-DB.
+    The gains therefore default to 1.0. They were 0.3, which multiplied with
+    empathy to an effective 0.18 and made PAD look like it barely responded to
+    anything; attenuating in two places is a bug, not a tuning choice.
     """
 
     def __init__(
         self,
-        gain_valence: float = 0.3,
-        gain_arousal: float = 0.3,
+        gain_valence: float = 1.0,
+        gain_arousal: float = 1.0,
         smoothing_window: int = 5,
     ):
         self.gain_valence = gain_valence
@@ -26,7 +26,7 @@ class AffectStream:
         self._a_buf: deque[float] = deque(maxlen=smoothing_window)
 
     def update(self, valence: float, arousal: float) -> tuple[float, float]:
-        """Apply temporal smoothing and return (dP, dA) offsets."""
+        """Smooth over the window and return (valence, arousal)."""
         self._p_buf.append(valence * self.gain_valence)
         self._a_buf.append(arousal * self.gain_arousal)
         dP = sum(self._p_buf) / len(self._p_buf)

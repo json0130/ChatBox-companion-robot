@@ -47,17 +47,18 @@ from .interactions import (
 
 # ---------------------------------------------------------------------------
 # Emotion → (valence, arousal) — Russell (1980) circumplex model
-# Mirrors pad_persona.pipeline_adapter.EMOTION_VA; kept separate so this
-# module has no runtime dependency on pad_persona.
+# A deliberate COPY of affect.CATEGORY_VA. Kept separate so graph_relationship
+# imports nothing outside itself (the purity contract) — test_pad_affect asserts
+# the two agree on every shared label, so they cannot drift apart unnoticed.
 # ---------------------------------------------------------------------------
 _EMOTION_VA: dict[str, tuple[float, float]] = {
-    "happy":    ( 0.8,  0.6),
-    "neutral":  ( 0.0,  0.0),
-    "sad":      (-0.7, -0.4),
-    "angry":    (-0.6,  0.7),
-    "fear":     (-0.5,  0.8),
-    "disgust":  (-0.6,  0.3),
-    "surprise": ( 0.1,  0.8),
+    "happy":    ( 0.8,  0.50),
+    "neutral":  ( 0.0,  0.00),
+    "sad":      (-0.7, -0.38),
+    "angry":    (-0.7,  0.65),
+    "fear":     (-0.65, 0.72),
+    "disgust":  (-0.7,  0.30),
+    "surprise": ( 0.2,  0.80),
 }
 
 # Used when auto-creating a robot node on first post_turn.

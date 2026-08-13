@@ -1,59 +1,37 @@
-def build_system_prompt(
-    persona_name: str,
-    descriptors: dict[str, str],
-    relationship_tier: str,
-    memory_context: str = "",
-    rapport: float = 0.0,
-    trust: float = 0.0,
-    interaction_count: int = 0,
-) -> str:
-    """Assemble the LLM system prompt from PAD descriptors and relationship context.
+"""
+The one sentence the relationship tier contributes to the system prompt.
 
-    Args:
-        persona_name:       Display name of the robot (e.g. "ChatBox", "ElleBot").
-        descriptors:        Output of PADEngine.to_language_descriptors():
-                            {"pleasure": str, "arousal": str, "dominance": str}
-        relationship_tier:  One of "close", "family", "known", "visitor", "unknown".
-        memory_context:     Retrieved RAG snippets about this user; empty string if none.
-        rapport:            Current rapport score [0, 1] from KG relationship edges.
-        trust:              Current trust score [0, 1] from KG relationship edges.
-        interaction_count:  Number of previous interactions recorded in the KG.
+This module used to assemble a WHOLE system prompt, and the webcam loop used it
+INSTEAD of its own — which meant enabling PAD silently dropped the identity
+block, the KG memory, the RAG hits and the anti-hallucination rules. Prompt
+assembly now lives in the loop (`_build_system_prompt`), which is the only place
+that has all of those; this file keeps just the tier wording, which was good.
 
-    Returns:
-        Formatted system prompt string ready to pass to the LLM.
+Deliberately no numbers. An earlier version injected
+`rapport=0.62 trust=0.55 interactions=14`, which invites the model to narrate its
+own metrics back at the child.
+"""
+
+_TIER_NOTES = {
+    "close":   "You know this person well and feel very comfortable with them.",
+    "family":  "This person is like family to you; speak with warmth and ease.",
+    "known":   "You recognise this person from previous interactions.",
+    "visitor": "You have met this person only briefly before.",
+    "unknown": "You do not recognise this person yet.",
+}
+
+_FIRST_TIME = "You are meeting this person for the first time; be friendly and open."
+
+
+def tier_note(tier: str, interaction_count: int = 0) -> str:
+    """One sentence describing the relationship, for the prompt.
+
+    `interaction_count` gates the first-time wording rather than the tier doing
+    it: tier is derived from (rapport + trust) / 2 and a turn count, so a person
+    with a full page of remembered conversations can still derive as 'visitor' or
+    'unknown'. Keying "first time" off the tier would put that claim directly
+    above five things the robot remembers about them.
     """
-    p_word = descriptors.get("pleasure",  "neutral")
-    a_word = descriptors.get("arousal",   "moderate")
-    d_word = descriptors.get("dominance", "neutral")
-
-    tier_notes = {
-        "close":   "You know this person well and feel very comfortable with them.",
-        "family":  "This person is like family to you; speak with warmth and ease.",
-        "known":   "You recognise this person from previous interactions.",
-        "visitor": "This person is a new face; be welcoming but a little more formal.",
-        "unknown": "You are meeting this person for the first time; be friendly and open.",
-    }
-    relationship_note = tier_notes.get(relationship_tier, tier_notes["unknown"])
-
-    kg_section = ""
-    if interaction_count > 0:
-        kg_section = (
-            f"\n\nRelationship metrics: rapport={rapport:.2f}  "
-            f"trust={trust:.2f}  interactions={interaction_count}."
-        )
-
-    memory_section = ""
-    if memory_context.strip():
-        memory_section = f"\n\nRelevant things you remember about this person:\n{memory_context.strip()}"
-
-    prompt = (
-        f"You are {persona_name}, a gentle, playful, and caring emotional support robot "
-        f"for children. You always respond concisely (1-2 sentences), in plain casual language, "
-        f"and you MUST begin every reply with an action tag in square brackets, e.g. [GREETING].\n\n"
-        f"Right now respond in a {p_word}, {a_word}, {d_word} manner.\n\n"
-        f"{relationship_note}"
-        f"{kg_section}"
-        f"{memory_section}"
-    )
-
-    return prompt
+    if interaction_count <= 0:
+        return _FIRST_TIME
+    return _TIER_NOTES.get(tier, _TIER_NOTES["unknown"])

@@ -13,3 +13,15 @@ rag_indexes/
 sessions.db
 kg_state.json
 kg_state*.bak
+kg_culture*.json
+kg_culture*.bak
+# Enrolled face gallery — rebuilt by enrolment, never source. Tracking it bakes
+# live enrollments into commits and blocks branch switches.
+faces.npz
+*.npz
+# Sidecar written by the running loop
+active_state.json
+# Local backups / snapshots
+*.bak
+# Experiment output from tools/pad_prompt_grid.py
+runs/

@@ -91,7 +91,8 @@ def test_no_metrics_leak_into_the_prompt():
 def test_first_time_wording_follows_the_count_not_the_tier():
     """A remembered person can still derive as visitor/unknown, so 'first time'
     has to key off interaction_count or it contradicts the memory below it."""
-    from modules.pad_persona.prompt_builder import tier_note
+    from modules.affect_bridge import prompt as pad_prompt
+    tier_note = pad_prompt.tier_note
     assert "first time" in tier_note("unknown", 0)
     assert "first time" not in tier_note("unknown", 7)
     assert "first time" not in tier_note("visitor", 3)

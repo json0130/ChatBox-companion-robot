@@ -4,7 +4,13 @@ test_affect.py — checks the affect maths without needing a camera or a model.
 Run:  python test_affect.py
 """
 
-import affect as A
+import os
+import sys
+
+# tests/ -> PAD_CORE/ on the path, so the suite runs from anywhere.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from pad_core import affect as A
 
 PASS, FAIL = "PASS", "FAIL"
 failures = 0

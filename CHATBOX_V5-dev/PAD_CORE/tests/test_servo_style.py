@@ -4,7 +4,13 @@ test_servo_style.py â€” checks the angle maths before anything gets flashed
 Run:  python test_servo_style.py
 """
 
-import servo_style as S
+import os
+import sys
+
+# tests/ -> PAD_CORE/ on the path, so the suite runs from anywhere.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from pad_core import servo_style as S
 
 failures = 0
 

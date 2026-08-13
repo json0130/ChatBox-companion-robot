@@ -28,7 +28,9 @@ import time
 import cv2
 import numpy as np
 
-import affect as A
+# Run from anywhere: put PAD_CORE/ on the path so `pad_core` imports.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from pad_core import affect as A
 
 # ── Model loading ───────────────────────────────────────────────────────────
 

@@ -19,12 +19,12 @@ import argparse
 import os
 import sys
 
-import servo_style as S
+# Run from anywhere: put PAD_CORE/ on the path so `pad_core` imports.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from pad_core import servo_style as S
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                "..", "AFFECT_LAB"))
 try:
-    import affect as A
+    from pad_core import affect as A
 except ImportError:
     A = None
 

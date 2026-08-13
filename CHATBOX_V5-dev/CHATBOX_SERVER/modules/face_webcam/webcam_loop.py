@@ -75,7 +75,7 @@ _SERVER_ROOT = _add_server_root()
 
 from modules.graph_relationship.kg_bridge import KGBridge
 from modules.graph_relationship.store import InMemoryGraphStore
-from modules.pad_persona.pipeline_adapter import PADPipelineAdapter
+from modules.affect_bridge import PADPipelineAdapter
 from modules.face_webcam.face_id import FaceIdentifier
 from modules.face_webcam.emotion_detector import EmotionDetector
 from modules.session_store import SessionStore, DEFAULT_DB as _DEFAULT_SESSIONS_DB
@@ -1717,9 +1717,9 @@ class WebcamKGLoop:
             # model to narrate its own metrics back at the child.
             if pad and pad.get("tier"):
                 from modules.graph_relationship.interactions import get_interaction
-                from modules.pad_persona.prompt_builder import tier_note
+                from modules.affect_bridge import prompt as _pad_prompt
                 interaction = get_interaction(self.store, pid, self.robot_id)
-                who.append(tier_note(
+                who.append(_pad_prompt.tier_note(
                     pad["tier"],
                     interaction.interaction_count if interaction else 0))
             mem = self._person_memory(pid)

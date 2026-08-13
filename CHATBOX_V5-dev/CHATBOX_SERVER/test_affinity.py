@@ -162,7 +162,7 @@ def test_purity():
     import pathlib
     root = pathlib.Path(__file__).parent / "modules" / "graph_relationship"
     banned = ("openai", "ollama", "requests", "torch", "transformers",
-              "sentence_transformers", "cv2", "modules.pad_persona",
+              "sentence_transformers", "cv2", "modules.affect_bridge",
               "modules.llm_processor", "modules.kg_extraction",
               "modules.face_webcam", "modules.emotion_processor")
     # The pure library surface only. `demo_harness.py` is a dev/demo runner that

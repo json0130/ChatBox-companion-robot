@@ -19,9 +19,8 @@ only place that has all of those; this adapter supplies the three descriptor
 words and the loop decides where they go.
 """
 
-from modules.affect_bridge import affect, servo_style
-
-from .affect_stream import AffectStream
+from . import affect, servo_style
+from .stream import AffectStream
 
 # ---------------------------------------------------------------------------
 # Emotion label -> (valence, arousal)

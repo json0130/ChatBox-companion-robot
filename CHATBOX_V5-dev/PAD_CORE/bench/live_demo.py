@@ -29,12 +29,13 @@ import time
 import cv2
 import numpy as np
 
-import servo_style as S
+# Run from anywhere: put PAD_CORE/ on the path so `pad_core` imports.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # sibling bench modules
+from pad_core import servo_style as S
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                "..", "AFFECT_LAB"))
-import affect as A          # noqa: E402
-import webcam_demo as W     # noqa: E402
+from pad_core import affect as A          # noqa: E402
+import webcam_demo as W     # noqa: E402  (sibling in bench/)
 
 GESTURES = ["greeting", "wave", "shrug", "confused", "angry", "sad", "default"]
 

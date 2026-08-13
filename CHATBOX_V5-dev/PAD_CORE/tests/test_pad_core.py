@@ -1,11 +1,9 @@
 """
-The server's PAD path is exactly AFFECT_LAB's, with nothing added in between.
+pad_core is internally consistent: the adapter adds no maths of its own.
 
-`AFFECT_LAB/affect.py` is the single source of truth for the affect maths, and
-the server reaches it through `modules.affect_bridge`. These tests pin that:
-the adapter must reproduce `affect.pipeline()` term for term, the bench module
-must be the one actually imported, and the V/A tables scattered across the
-codebase must agree with each other.
+`pad_core.affect` is the single source of truth. These tests pin that the
+adapter reproduces `affect.pipeline()` term for term, that the package is
+self-contained, and that the V/A tables in the tree agree with each other.
 
 The failure this guards against is silent. An earlier `AffectStream` scaled
 valence by 0.3 before it reached the engine, which multiplied with the empathy
@@ -18,10 +16,11 @@ No camera, no LLM, no hardware. Run directly or under pytest.
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# tests/ -> PAD_CORE/ on the path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from modules.affect_bridge import REPO_ROOT, affect, servo_style   # noqa: E402
-from modules.pad_persona.pipeline_adapter import (                 # noqa: E402
+from pad_core import affect, servo_style                           # noqa: E402
+from pad_core.adapter import (                                     # noqa: E402
     EMOTION_VA, NullPADAdapter, PADPipelineAdapter,
 )
 
@@ -29,12 +28,27 @@ _TIERS = ("unknown", "visitor", "known", "family", "close")
 _EMOTIONS = ("happy", "sad", "angry", "neutral", "surprise")
 
 
-def test_affect_resolves_to_the_bench():
-    """The server must import AFFECT_LAB's module, not a stray copy — `affect`
-    and `servo_style` are bare top-level names and could collide on sys.path."""
-    assert affect.__file__.startswith(os.path.join(REPO_ROOT, "AFFECT_LAB"))
-    assert servo_style.__file__.startswith(os.path.join(REPO_ROOT, "SERVO_STYLE"))
-    print("1. affect/servo_style resolve to the bench directories ✓")
+def test_package_is_self_contained():
+    """pad_core must import with nothing but the standard library on the path —
+    that is what lets it be dropped into another project, and what lets the test
+    suite verify the published equations with no camera, torch or server."""
+    import ast
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    allowed = {"math", "typing", "collections", "os", "sys", "pad_core"}
+    for mod in ("affect", "servo_style", "prompt", "stream", "adapter"):
+        tree = ast.parse(open(os.path.join(here, "pad_core", f"{mod}.py")).read())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [a.name.split(".")[0] for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                if node.level:            # `from . import x` — inside the package
+                    continue
+                names = [(node.module or "").split(".")[0]]
+            else:
+                continue
+            for n in names:
+                assert n in allowed, f"pad_core.{mod} imports {n!r} — not stdlib"
+    print("1. pad_core imports nothing outside the standard library ✓")
 
 
 def test_adapter_equals_affect_pipeline():
@@ -94,18 +108,12 @@ def test_tier_moves_dominance_only():
 
 
 def test_va_tables_agree():
-    """Three V/A tables exist — affect.CATEGORY_VA, the adapter's EMOTION_VA and
-    kg_bridge's deliberate private copy (kept so graph_relationship imports
-    nothing). They must not drift apart on the labels they share."""
-    from modules.graph_relationship.kg_bridge import _EMOTION_VA
-    for label, (v, a) in _EMOTION_VA.items():
-        if label in affect.CATEGORY_VA:
-            cv, ca = affect.CATEGORY_VA[label]
-            assert abs(cv - v) < 1e-9 and abs(ca - a) < 1e-9, \
-                f"kg_bridge and affect disagree on {label!r}: {(v,a)} vs {(cv,ca)}"
+    """The adapter re-exports affect.CATEGORY_VA; they must not drift apart.
+    (The consuming server keeps a third, deliberate copy in kg_bridge so its
+    graph package imports nothing — test_pad_integration checks that one.)"""
     for label in EMOTION_VA:
         assert EMOTION_VA[label] == affect.CATEGORY_VA[label], f"adapter drift: {label}"
-    print(f"5. the V/A tables agree across {len(_EMOTION_VA)} shared labels ✓")
+    print(f"5. adapter and affect agree on all {len(EMOTION_VA)} V/A labels ✓")
 
 
 def test_null_adapter_same_shape():
@@ -129,11 +137,11 @@ def test_wire_roundtrips():
 
 
 if __name__ == "__main__":
-    test_affect_resolves_to_the_bench()
+    test_package_is_self_contained()
     test_adapter_equals_affect_pipeline()
     test_no_hidden_attenuation()
     test_tier_moves_dominance_only()
     test_va_tables_agree()
     test_null_adapter_same_shape()
     test_wire_roundtrips()
-    print("\nThe server's PAD path is AFFECT_LAB's, unmodified.")
+    print("\npad_core is self-contained and internally consistent.")

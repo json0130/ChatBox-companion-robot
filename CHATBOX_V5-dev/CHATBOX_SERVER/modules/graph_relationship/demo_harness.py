@@ -40,12 +40,12 @@ from .kg_bridge import KGBridge, derive_tier, _tier_from_edges
 from .interactions import count_person_turns, get_interaction, set_closeness
 
 try:
-    from ..pad_persona.pipeline_adapter import PADPipelineAdapter
+    from pad_core import PADPipelineAdapter
 except ImportError:
     _here = os.path.dirname(os.path.dirname(__file__))
     if _here not in sys.path:
         sys.path.insert(0, _here)
-    from pad_persona.pipeline_adapter import PADPipelineAdapter  # type: ignore
+    from pad_core.adapter import PADPipelineAdapter  # type: ignore
 
 try:
     from openai import OpenAI as _OpenAI

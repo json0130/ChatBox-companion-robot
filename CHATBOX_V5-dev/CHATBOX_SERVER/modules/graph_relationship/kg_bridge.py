@@ -4,8 +4,8 @@ PAD ↔ KG bridge — reads graph state before each turn, writes PAD output afte
 Dependency direction
 --------------------
   kg_bridge → graph_relationship (store + schema)
-  kg_bridge reads from pad_result dict (string contract only; no import of pad_persona)
-  pad_persona     does NOT import kg_bridge
+  kg_bridge reads from pad_result dict (string contract only; no import of pad_core)
+  pad_core        does NOT import kg_bridge
   graph_relationship  does NOT import kg_bridge
 
 This is the ONLY module that couples the two subsystems.

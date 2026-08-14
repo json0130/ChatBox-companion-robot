@@ -66,7 +66,13 @@
   button.mini{background:#0d1117;border:1px solid var(--line);color:var(--dim);
     border-radius:5px;font:inherit;font-size:10px;padding:1px 8px;cursor:pointer}
   /* ── results ── */
-  #results{flex:1;overflow:auto;padding:10px 12px}
+  #results-split{flex:1;display:grid;grid-template-columns:1fr 1fr;min-height:0}
+  .rpane{display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .rpane + .rpane{border-left:1px solid var(--line)}
+  .rhead{padding:5px 10px;font-size:10px;letter-spacing:1px;color:var(--dim);
+         border-bottom:1px solid var(--line);flex:none}
+  .rpane.on .rhead{color:var(--pad);background:#bc8cff14}
+  .rbody{flex:1;overflow:auto;padding:9px 10px}
   .rrow{display:flex;gap:8px;margin-bottom:4px}
   .rk{color:var(--dim);width:88px;flex:none}
   .verbal{color:var(--ink);background:#0d1117;border:1px solid var(--line);
@@ -122,16 +128,27 @@
   <div class="col" id="right">
     <section class="card" id="c-kg" style="flex:1">
       <h2>Knowledge graph<span class="grow"></span>
+        <span style="color:var(--dim);font-size:10px">scroll = zoom · drag = pan</span>
+        <button class="mini" onclick="resetView()">reset</button>
         <button class="mini" onclick="drawGraph(true)">redraw</button></h2>
       <svg id="graph"></svg>
       <div class="legend" id="legend"></div>
     </section>
     <div class="hsplit" data-a="c-kg" data-b="c-res"></div>
 
-    <section class="card" id="c-res" style="height:300px">
-      <h2>Results — what the robot did<span class="grow"></span>
-        <span id="res-robot" style="color:var(--pad)">—</span></h2>
-      <div id="results"><span style="color:var(--dim)">no turn yet</span></div>
+    <section class="card" id="c-res" style="height:320px">
+      <h2>Results — last turn per robot<span class="grow"></span>
+        <span style="color:var(--dim)">same input, two temperaments</span></h2>
+      <div id="results-split">
+        <div class="rpane" id="rp-chatbox">
+          <div class="rhead">CHATBOX</div>
+          <div class="rbody"><span style="color:var(--dim)">no turn yet</span></div>
+        </div>
+        <div class="rpane" id="rp-ellebot">
+          <div class="rhead">ELLEBOT</div>
+          <div class="rbody"><span style="color:var(--dim)">no turn yet</span></div>
+        </div>
+      </div>
     </section>
   </div>
 </main>
@@ -261,9 +278,8 @@ async function poll(){
 
     if(s.chat.length!==lastChatLen||s.thinking){
       lastChatLen=s.chat.length; renderChat(s.chat,s.thinking);
-      const last=[...s.chat].reverse().find(m=>m.who==='robot');
-      if(last && last.t!==lastTurn){ lastTurn=last.t; renderResults(last,s); }
     }
+    renderAll(s);
     if(s.robot!==lastRobot){ lastRobot=s.robot; drawGraph(true); }
   }catch(e){}
   setTimeout(poll,300);
@@ -286,9 +302,18 @@ const esc=s=>String(s).replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[
 /* ══ results — verbal + action + servo parameters ══════════════════════════ */
 const LIM={amplitude:[0.30,1.00],tempo:[0.50,1.60],posture:[-1,1],
            droop:[-1,1],idle:[0.05,1.00]};
-function renderResults(msg,s){
-  document.getElementById('res-robot').textContent=(msg.robot||s.robot||'').toUpperCase();
-  const st=s.style||{};
+function renderAll(s){
+  for(const r of ['chatbox','ellebot']){
+    const pane=document.getElementById('rp-'+r);
+    pane.className='rpane'+(s.robot===r?' on':'');
+    const turn=(s.results||{})[r];
+    pane.querySelector('.rbody').innerHTML = turn
+      ? paneHTML(turn)
+      : '<span style="color:var(--dim)">no turn yet</span>';
+  }
+}
+function paneHTML(msg){
+  const st=msg.style||{};
   const rows=Object.keys(LIM).filter(k=>k in st).map(k=>{
     const [lo,hi]=LIM[k], v=st[k], f=Math.max(0,Math.min(1,(v-lo)/(hi-lo)));
     const signed=lo<0;
@@ -298,17 +323,20 @@ function renderResults(msg,s){
       <i style="left:${l}%;width:${w}%"></i></span>
       <span class="t">${v>=0&&signed?'+':''}${v.toFixed(2)}</span></div>`;
   }).join('');
-  document.getElementById('results').innerHTML=`
-    <div class="rrow"><span class="rk">verbal</span></div>
+  return `
     <div class="verbal">${esc(msg.text||'')}</div>
     <div class="rrow"><span class="rk">action</span>
-      <span>${msg.tag?`<span class="tag">${esc(msg.tag)}</span>`:'<span style="color:var(--dim)">— no tag parsed —</span>'}</span></div>
+      <span>${msg.tag?`<span class="tag">${esc(msg.tag)}</span>`
+             :'<span style="color:var(--dim)">— no tag parsed —</span>'}</span></div>
     <div class="rrow"><span class="rk">manner</span>
       <span style="color:var(--pad)">${(msg.words||[]).join(' · ')||'—'}</span></div>
     <div class="rrow"><span class="rk">tier</span><span>${msg.tier||'—'}</span></div>
-    <div class="rrow" style="margin-top:10px"><span class="rk">servo</span></div>
+    ${msg.pad?`<div class="rrow"><span class="rk">PAD</span><span>`+
+       msg.pad.map(v=>(v>=0?'+':'')+v.toFixed(2)).join('  ')+`</span></div>`:''}
+    <div class="rrow" style="margin-top:8px"><span class="rk">servo</span>
+      <span style="color:var(--dim);font-size:10px">${msg.t||''}</span></div>
     ${rows}
-    <div class="wire">${esc(s.wire||'')}</div>`;
+    <div class="wire">${esc(msg.wire||'')}</div>`;
 }
 
 async function send(e){
@@ -323,7 +351,7 @@ async function setRobot(r){
 }
 
 /* ══ knowledge graph — rebuilt only when its shape changes ═════════════════ */
-let sim=null,lastSig=null,pos={};
+let sim=null,lastSig=null,pos={},zoomer=null,view=null;
 async function drawGraph(force){
   const g=await(await fetch('/graph.json')).json();
   if(!force&&g.sig===lastSig)return;
@@ -333,10 +361,12 @@ async function drawGraph(force){
 
   const svg=d3.select('#graph'),el=document.getElementById('graph');
   const W=el.clientWidth||520,H=el.clientHeight||300;
-  svg.selectAll('*').remove(); svg.attr('viewBox',`0 0 ${W} ${H}`);
-  const link=svg.append('g').selectAll('line').data(g.links).join('line')
+  svg.selectAll('*').remove(); svg.attr('viewBox',`0 0 ${W} ${H}`)
+     .style('cursor','grab');
+  const root=svg.append('g');                      // everything zoom moves
+  const link=root.append('g').selectAll('line').data(g.links).join('line')
     .attr('stroke','#30363d').attr('stroke-width',1);
-  const node=svg.append('g').selectAll('g').data(g.nodes).join('g')
+  const node=root.append('g').selectAll('g').data(g.nodes).join('g')
     .attr('class',d=>d.idle_robot?'ghost':null)
     .call(d3.drag()
       .on('start',(e,d)=>{if(!e.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y;})
@@ -363,10 +393,24 @@ async function drawGraph(force){
           .attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
       node.attr('transform',d=>`translate(${d.x},${d.y})`);
     });
+  // wheel to zoom, drag the background to pan. Node drags stop propagation
+  // themselves, so dragging a node still moves the node, not the canvas.
+  zoomer=d3.zoom().scaleExtent([0.25,6])
+    .filter(e => !e.target.closest('g[transform]') || e.type==='wheel')
+    .on('zoom', e => { view=e.transform; root.attr('transform',view); });
+  svg.call(zoomer);
+  if(view) svg.call(zoomer.transform, view);       // keep the view across rebuilds
+
   document.getElementById('legend').innerHTML=
     [...new Set(g.nodes.map(n=>n.type))].map(t=>
       `<span><b style="background:${COL[t]||'#8b949e'}"></b>${t}</span>`).join('')
     +`<span style="margin-left:auto">talking to <b style="background:#bc8cff"></b>${g.robot}</span>`;
+}
+
+function resetView(){
+  view=d3.zoomIdentity;
+  if(zoomer) d3.select('#graph').transition().duration(250)
+    .call(zoomer.transform, d3.zoomIdentity);
 }
 
 initCirc(); animate(); poll(); drawGraph(true);

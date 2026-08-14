@@ -64,6 +64,8 @@ class LiveState:
             "words": None, "affect_name": None,
             "style": None, "wire": None,
             "chat": [], "thinking": False, "fps": 0.0,
+            "results": {},        # robot -> that robot's most recent turn
+            
             "known_people": [], "ocean": {},
         }
 
@@ -201,6 +203,63 @@ def draw(frame, dets, state: dict):
     return out
 
 
+def trace_prompt(prompt: str, pad: dict | None, pid, msg: str, robot: str) -> None:
+    """Print how this turn's system prompt was assembled, and which parts of it
+    PAD is responsible for. The whole point of the branch is that affect and
+    memory share one prompt, so being able to watch them share it matters.
+
+    Flushed line by line: piped to a file or a pager a buffered trace arrives
+    minutes late, which defeats the purpose of watching it live.
+    """
+    W = 78
+
+    def _p(*a):
+        print(*a, flush=True)
+
+    _p("\n" + "=" * W)
+    _p(f" PROMPT BUILD   robot={robot}   person={pid}   msg={msg!r}")
+    _p("=" * W)
+
+    if pad:
+        p, a, d = pad["pad_state"]
+        sp, sa, sd = pad["shown"]
+        _p(f" PAD    felt  P={p:+.3f} Ar={a:+.3f} D={d:+.3f}"
+              f"   ({pad.get('name','')})")
+        _p(f"        shown P={sp:+.3f} Ar={sa:+.3f} D={sd:+.3f}"
+              f"   <- descriptor bands read THIS")
+        _p(f"        tier  {pad.get('tier')!r}"
+              f"   -> Dominance {affect.tier_offset(pad.get('tier','unknown'))[2]:+.2f}")
+        _p(f"        words {' / '.join(pad['words'])}")
+        st = pad.get("style") or {}
+        if st:
+            _p("        style " + "  ".join(f"{k}={v:.2f}" for k, v in st.items()))
+    else:
+        _p(" PAD    (disabled — prompt carries no manner line or tier note)")
+
+    _p("-" * W)
+    block, injected = None, {"manner": False, "tier": False}
+    for line in prompt.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("━━━"):
+            block = stripped.strip("━ ").split(":")[0].strip()
+            _p(f"\n [{block}]")
+            continue
+        mark = "   "
+        if "Your manner right now is" in line:
+            mark, injected["manner"] = "PAD", True
+        elif stripped.startswith(("You know this person", "You recognise",
+                                  "You have met", "You do not recognise",
+                                  "You are meeting")):
+            mark, injected["tier"] = "PAD", True
+        if stripped:
+            _p(f" {mark} | {stripped[:70]}")
+
+    _p("-" * W)
+    _p(f" PAD injected: manner-line={injected['manner']}  "
+          f"tier-note={injected['tier']}   prompt={len(prompt)} chars")
+    _p("=" * W + "\n")
+
+
 def make_handler(state: LiveState, loop, chat_q, switch_robot):
     class H(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -278,6 +337,9 @@ def main(argv=None) -> int:
     p.add_argument("--llm", action="store_true", help="connect Ollama")
     p.add_argument("--model", default="qwen2.5:7b")
     p.add_argument("--enable-emotion", action="store_true")
+    p.add_argument("--trace-prompt", action="store_true",
+                   help="print how each system prompt is assembled and "
+                        "which lines PAD contributed")
     p.add_argument("--esp32-host", default="")
     p.add_argument("--esp32-port", type=int, default=8888)
     args = p.parse_args(argv)
@@ -448,14 +510,24 @@ def main(argv=None) -> int:
                     with loop._store_lock:           # noqa: SLF001
                         prompt = loop._build_system_prompt(   # noqa: SLF001
                             pid, rag_hits=[], pad=loop._last_pad_result)
+                    if args.trace_prompt:
+                        trace_prompt(prompt, loop._last_pad_result,  # noqa: SLF001
+                                     pid, msg, loop.robot_id)
                     hist = list(loop._chat_history.get(pid or "", []))  # noqa: SLF001
                     raw = loop.llm.respond(prompt, msg, history=hist)
                     tag, verbal = _parse_llm_response(raw)
                     st = state.snapshot()
-                    state.push_chat("robot", verbal or raw, {
-                        "tag": tag, "tier": st["tier"], "words": st["words"],
-                        "wire": st["wire"], "robot": loop.robot_id})
-                    state.update(thinking=False)
+                    turn = {"tag": tag, "tier": st["tier"], "words": st["words"],
+                            "wire": st["wire"], "robot": loop.robot_id,
+                            "text": verbal or raw, "style": st["style"],
+                            "pad": st["pad"], "t": time.strftime("%H:%M:%S"),
+                            "msg": msg}
+                    state.push_chat("robot", verbal or raw, turn)
+                    res = dict(st.get("results") or {})
+                    res[loop.robot_id] = turn
+                    state.update(thinking=False, results=res)
+                    print(f"  [{loop.robot_id}] [{tag or '—'}] {verbal!r}", flush=True)
+                    print(f"  [servo] {st['wire']}", flush=True)
                     with loop._store_lock:           # noqa: SLF001
                         loop._apply_chat_result({    # noqa: SLF001
                             "pid": pid, "msg": msg, "verbal": verbal,

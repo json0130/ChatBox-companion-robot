@@ -60,7 +60,8 @@ class LiveState:
             "robot": robot, "person": None, "sim": 0.0, "faces": 0,
             "emotion": "neutral", "valence": 0.0, "arousal": 0.0,
             "tier": "unknown", "rapport": 0.0, "trust": 0.0, "interactions": 0,
-            "pad": None, "shown": None, "words": None, "affect_name": None,
+            "pad": None, "shown": None, "baseline": None,
+            "words": None, "affect_name": None,
             "style": None, "wire": None,
             "chat": [], "thinking": False, "fps": 0.0,
             "known_people": [], "ocean": {},
@@ -297,8 +298,13 @@ def main(argv=None) -> int:
         esp32_host=args.esp32_host, esp32_port=args.esp32_port,
     )
     state = LiveState(args.robot)
+    def _baseline(rid: str):
+        b = affect.to_pad(affect.ROBOTS[rid.upper()]["ocean"])
+        return [b["P"], b["Ar"], b["D"]]
+
     state.update(known_people=loop.face_id.known_people(),
-                 ocean=affect.ROBOTS[args.robot.upper()]["ocean"])
+                 ocean=affect.ROBOTS[args.robot.upper()]["ocean"],
+                 baseline=_baseline(args.robot))
 
     def ensure_robot_node(rid: str):
         with loop._store_lock:                       # noqa: SLF001
@@ -317,7 +323,8 @@ def main(argv=None) -> int:
         loop.robot_id = rid
         loop._robot_display = rid.capitalize()       # noqa: SLF001
         loop._last_pad_result = None                 # noqa: SLF001
-        state.update(robot=rid, ocean=affect.ROBOTS[rid.upper()]["ocean"])
+        state.update(robot=rid, ocean=affect.ROBOTS[rid.upper()]["ocean"],
+                     baseline=_baseline(rid))
         state.push_chat("system", f"— now talking to {rid.upper()} —")
         print(f"[webui] persona -> {rid}")
         return True
@@ -347,26 +354,39 @@ def main(argv=None) -> int:
 
     cap = cv2.VideoCapture(args.camera)
     if not cap.isOpened():
-        print(f"[webui] cannot open camera {args.camera}")
-        return 1
+        # Keep serving: the graph, the chat and the persona switch are all still
+        # useful without a camera, and a busy device is usually another instance
+        # that is about to exit.
+        print(f"[webui] camera {args.camera} unavailable — serving without video")
+        cap = None
+        blank = np.zeros((360, 640, 3), np.uint8)
+        cv2.putText(blank, f"no camera (index {args.camera})", (150, 185),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (90, 95, 110), 2)
+        ok, buf = cv2.imencode(".jpg", blank)
+        if ok:
+            state.set_frame(buf.tobytes())
 
     last_tick, fps_t, frames = 0.0, time.time(), 0
     overlay = state.snapshot()   # refreshed on the 1 Hz tick, not per frame
     try:
         while True:
-            ok, frame = cap.read()
-            if not ok:
-                time.sleep(0.05)
-                continue
-            frames += 1
-            worker.submit(frame)
-            dets = worker.get_results()
-
-            annotated = draw(frame, dets, overlay)
-            ok2, buf = cv2.imencode(".jpg", annotated,
-                                    [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-            if ok2:
-                state.set_frame(buf.tobytes())
+            if cap is None:
+                time.sleep(0.2)
+                frame, dets = None, []
+            else:
+                ok, frame = cap.read()
+                if not ok:
+                    time.sleep(0.05)
+                    continue
+                frames += 1
+            if frame is not None:
+                worker.submit(frame)
+                dets = worker.get_results()
+                annotated = draw(frame, dets, overlay)
+                ok2, buf = cv2.imencode(".jpg", annotated,
+                                        [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+                if ok2:
+                    state.set_frame(buf.tobytes())
 
             if time.time() - fps_t >= 1.0:
                 state.update(fps=round(frames / (time.time() - fps_t), 1))
@@ -374,6 +394,17 @@ def main(argv=None) -> int:
 
             primary = dets[0] if dets else None
             pid = primary["person_id"] if primary else None
+
+            # V/A is per-frame: publish it as fast as it arrives so the
+            # circumplex moves continuously rather than stepping once a second.
+            if primary is not None:
+                _va = primary.get("va") or (0.0, 0.0)
+                state.update(valence=_va[0], arousal=_va[1],
+                             emotion=primary.get("emotion", "neutral"),
+                             faces=len(dets), person=pid,
+                             sim=primary.get("sim", 0.0))
+            elif dets == []:
+                state.update(faces=0)
 
             # ── the affect tick, once a second ────────────────────────────────
             now = time.time()
@@ -434,7 +465,8 @@ def main(argv=None) -> int:
         print("\n[webui] stopping")
     finally:
         worker.stop()
-        cap.release()
+        if cap is not None:
+            cap.release()
         loop._flush_kg(force=True)                   # noqa: SLF001
         loop._session_store.close()                  # noqa: SLF001
         httpd.shutdown()

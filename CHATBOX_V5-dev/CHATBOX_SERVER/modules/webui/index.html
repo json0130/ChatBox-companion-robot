@@ -7,10 +7,11 @@
   :root{
     --bg:#0e1116; --panel:#161b22; --line:#242c38; --ink:#e6edf3; --dim:#8b949e;
     --acc:#58a6ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --pad:#bc8cff;
+    --face:#58a6ff; --base:#ffa657;
   }
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--ink);
-       font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden}
+  body{margin:0;background:var(--bg);color:var(--ink);overflow:hidden;
+       font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
   header{display:flex;align-items:center;gap:14px;padding:9px 16px;
          background:var(--panel);border-bottom:1px solid var(--line)}
   h1{font-size:13px;margin:0;letter-spacing:.5px;font-weight:600}
@@ -21,18 +22,28 @@
   .robots button.on{background:var(--acc);color:#04121f;border-color:var(--acc)}
   .pill{padding:2px 8px;border-radius:99px;border:1px solid var(--line);
         color:var(--dim);font-size:11px}
-  main{display:grid;grid-template-columns:400px 1fr;gap:10px;padding:10px;
-       height:calc(100vh - 47px)}
-  .col{display:flex;flex-direction:column;gap:10px;min-height:0}
+
+  /* ── resizable layout ─────────────────────────────────────────────────── */
+  main{display:flex;height:calc(100vh - 47px);padding:10px;gap:0}
+  .col{display:flex;flex-direction:column;gap:8px;min-width:260px;min-height:0}
+  #left{width:420px;flex:none}
+  #right{flex:1;min-width:300px}
+  .vsplit{flex:none;width:8px;cursor:col-resize;position:relative}
+  .vsplit::after{content:'';position:absolute;left:3px;top:0;bottom:0;width:2px;
+    background:var(--line);border-radius:2px}
+  .vsplit:hover::after{background:var(--acc)}
+  .hsplit{flex:none;height:8px;cursor:row-resize;position:relative}
+  .hsplit::after{content:'';position:absolute;top:3px;left:0;right:0;height:2px;
+    background:var(--line);border-radius:2px}
+  .hsplit:hover::after{background:var(--acc)}
+
   .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;
-        display:flex;flex-direction:column;min-height:0;overflow:hidden}
+        display:flex;flex-direction:column;min-height:60px;overflow:hidden}
   .card h2{margin:0;padding:7px 12px;font-size:10px;letter-spacing:1px;
-           color:var(--dim);text-transform:uppercase;
-           border-bottom:1px solid var(--line);display:flex;gap:8px}
-  #cam{width:100%;display:block;background:#000}
-  /* ── circumplex ── */
-  #circ{width:100%;height:300px;display:block}
-  /* ── chat ── */
+           color:var(--dim);text-transform:uppercase;flex:none;
+           border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center}
+  #cam{width:100%;display:block;background:#000;object-fit:contain;min-height:0;flex:1}
+  #circ{flex:1;min-height:0;width:100%}
   #chat{flex:1;overflow:auto;padding:10px 12px;display:flex;
         flex-direction:column;gap:8px}
   .msg{padding:7px 10px;border-radius:8px;max-width:88%;white-space:pre-wrap;
@@ -42,19 +53,34 @@
   .system{align-self:center;color:var(--dim);font-size:11px;border:none;
           background:none;padding:2px}
   .meta{font-size:10px;color:var(--dim);margin-top:4px}
-  form{display:flex;gap:8px;padding:9px 12px;border-top:1px solid var(--line)}
+  form{display:flex;gap:8px;padding:9px 12px;border-top:1px solid var(--line);flex:none}
   input[type=text]{flex:1;background:#0d1117;border:1px solid var(--line);
     color:var(--ink);padding:8px 10px;border-radius:6px;font:inherit}
   button.send{background:var(--acc);border:0;color:#04121f;padding:8px 16px;
     border-radius:6px;font:inherit;font-weight:600;cursor:pointer}
-  /* ── graph ── */
   #graph{flex:1;min-height:0}
   .legend{display:flex;gap:9px;flex-wrap:wrap;font-size:10px;color:var(--dim);
-          padding:5px 12px;border-top:1px solid var(--line)}
+          padding:5px 12px;border-top:1px solid var(--line);flex:none}
   .legend b{display:inline-block;width:8px;height:8px;border-radius:99px;margin-right:3px}
   .ghost{opacity:.28}
   button.mini{background:#0d1117;border:1px solid var(--line);color:var(--dim);
     border-radius:5px;font:inherit;font-size:10px;padding:1px 8px;cursor:pointer}
+  /* ── results ── */
+  #results{flex:1;overflow:auto;padding:10px 12px}
+  .rrow{display:flex;gap:8px;margin-bottom:4px}
+  .rk{color:var(--dim);width:88px;flex:none}
+  .verbal{color:var(--ink);background:#0d1117;border:1px solid var(--line);
+          border-radius:6px;padding:8px 10px;margin-bottom:8px}
+  .tag{display:inline-block;background:#bc8cff22;border:1px solid #bc8cff66;
+       color:var(--pad);border-radius:5px;padding:1px 8px;font-weight:600}
+  .servo{display:grid;grid-template-columns:76px 1fr 52px;gap:6px;align-items:center;
+         margin:3px 0}
+  .servo .n{color:var(--dim)}
+  .servo .t{text-align:right}
+  .track{height:8px;background:#0d1117;border-radius:4px;position:relative}
+  .track .z{position:absolute;left:50%;top:0;bottom:0;width:1px;background:#30363d}
+  .track i{position:absolute;top:0;bottom:0;background:var(--ok);border-radius:4px}
+  .wire{font-size:11px;color:var(--ok);word-break:break-all;margin-top:8px}
 </style>
 </head>
 <body>
@@ -70,204 +96,280 @@
 </header>
 
 <main>
-  <!-- left: camera + circumplex -->
-  <div class="col">
-    <section class="card">
-      <h2>Camera</h2>
-      <img id="cam" src="/stream.mjpg" alt="camera">
-    </section>
+  <div class="col" id="left">
+    <section class="card" id="c-cam" style="height:300px"><h2>Camera</h2>
+      <img id="cam" src="/stream.mjpg" alt="camera"></section>
+    <div class="hsplit" data-a="c-cam" data-b="c-emo"></div>
 
-    <section class="card" style="flex:1">
-      <h2>Emotion space — Russell's circumplex
-        <span class="grow"></span>
-        <span id="emo-now" style="color:var(--pad)">—</span></h2>
-      <svg id="circ" viewBox="0 0 300 300"></svg>
+    <section class="card" id="c-emo" style="height:290px">
+      <h2>Emotion space — Russell's circumplex<span class="grow"></span>
+        <span id="emo-now" style="color:var(--face)">—</span></h2>
+      <svg id="circ" viewBox="0 0 300 300" preserveAspectRatio="xMidYMid meet"></svg>
     </section>
-  </div>
+    <div class="hsplit" data-a="c-emo" data-b="c-chat"></div>
 
-  <!-- right: chat + graph -->
-  <div class="col">
-    <section class="card" style="flex:1.05">
-      <h2>Conversation</h2>
+    <section class="card" id="c-chat" style="flex:1"><h2>Conversation</h2>
       <div id="chat"></div>
       <form onsubmit="send(event)">
         <input type="text" id="msg" placeholder="say something…" autocomplete="off">
         <button class="send">send</button>
       </form>
     </section>
+  </div>
 
-    <section class="card" style="flex:1">
-      <h2>Knowledge graph
-        <span class="grow"></span>
+  <div class="vsplit" id="vs"></div>
+
+  <div class="col" id="right">
+    <section class="card" id="c-kg" style="flex:1">
+      <h2>Knowledge graph<span class="grow"></span>
         <button class="mini" onclick="drawGraph(true)">redraw</button></h2>
       <svg id="graph"></svg>
       <div class="legend" id="legend"></div>
+    </section>
+    <div class="hsplit" data-a="c-kg" data-b="c-res"></div>
+
+    <section class="card" id="c-res" style="height:300px">
+      <h2>Results — what the robot did<span class="grow"></span>
+        <span id="res-robot" style="color:var(--pad)">—</span></h2>
+      <div id="results"><span style="color:var(--dim)">no turn yet</span></div>
     </section>
   </div>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
 <script>
-const COL = {person:'#58a6ff', robot:'#bc8cff', topic:'#3fb950', interest:'#d29922',
-             interaction:'#f778ba', conversation:'#79c0ff', persona:'#a5d6ff',
-             role:'#ffa657', capability:'#7ee787', session:'#8b949e'};
+const COL={person:'#58a6ff',robot:'#bc8cff',topic:'#3fb950',interest:'#d29922',
+           interaction:'#f778ba',conversation:'#79c0ff',persona:'#a5d6ff',
+           role:'#ffa657',capability:'#7ee787',session:'#8b949e'};
 
-/* ══ 1. the circumplex ═════════════════════════════════════════════════════
-   Valence horizontal, arousal vertical — the two axes a face reliably carries.
-   Dominance is deliberately absent: it comes from the relationship, not the
-   expression, and is shown on the camera overlay instead.                    */
-const OCTANTS = [
-  ['elated',   0.62, 0.62], ['alert',    0.00, 0.86], ['tense',  -0.62, 0.62],
-  ['unhappy', -0.86, 0.00], ['dejected',-0.62,-0.62], ['drowsy',  0.00,-0.86],
-  ['serene',   0.62,-0.62], ['pleased',  0.86, 0.00],
-];
-const trail = [];
+/* ══ resizing ══════════════════════════════════════════════════════════════ */
+function dragH(sp){
+  sp.addEventListener('mousedown', e=>{
+    e.preventDefault();
+    const A=document.getElementById(sp.dataset.a), B=document.getElementById(sp.dataset.b);
+    const y0=e.clientY, hA=A.getBoundingClientRect().height,
+          hB=B.getBoundingClientRect().height;
+    const move=ev=>{
+      const d=ev.clientY-y0;
+      const na=Math.max(60,hA+d), nb=Math.max(60,hB-d);
+      if(na<=60||nb<=60) return;
+      A.style.flex='none'; A.style.height=na+'px';
+      B.style.flex='none'; B.style.height=nb+'px';
+      onResize();
+    };
+    const up=()=>{document.removeEventListener('mousemove',move);
+                  document.removeEventListener('mouseup',up);};
+    document.addEventListener('mousemove',move); document.addEventListener('mouseup',up);
+  });
+}
+document.querySelectorAll('.hsplit').forEach(dragH);
+document.getElementById('vs').addEventListener('mousedown', e=>{
+  e.preventDefault();
+  const L=document.getElementById('left'), x0=e.clientX,
+        w0=L.getBoundingClientRect().width;
+  const move=ev=>{ L.style.width=Math.max(260,w0+ev.clientX-x0)+'px'; onResize(); };
+  const up=()=>{document.removeEventListener('mousemove',move);
+                document.removeEventListener('mouseup',up);};
+  document.addEventListener('mousemove',move); document.addEventListener('mouseup',up);
+});
+let rzT=null;
+function onResize(){ clearTimeout(rzT); rzT=setTimeout(()=>drawGraph(true),150); }
+window.addEventListener('resize', onResize);
+
+/* ══ circumplex ════════════════════════════════════════════════════════════
+   Two markers, and the gap between them is the whole point:
+     • FACE     what the camera sees — the person's valence/arousal
+     • ROBOT    where that lands the robot after its OCEAN baseline and empathy
+   Swap persona and the robot marker jumps, because the same expression pulls a
+   different temperament to a different place. Dominance is not plotted: it
+   comes from the relationship, not the face.                                  */
+const OCT=[['elated',.62,.62],['alert',0,.86],['tense',-.62,.62],['unhappy',-.86,0],
+           ['dejected',-.62,-.62],['drowsy',0,-.86],['serene',.62,-.62],['pleased',.86,0]];
+const C=150,R=118;
+const trail=[];
+let cur={fv:0,fa:0,rv:0,ra:0}, tgt={fv:0,fa:0,rv:0,ra:0};
+
 function initCirc(){
-  const s = d3.select('#circ'), C = 150, R = 118;
-  s.selectAll('*').remove();
-  const g = s.append('g');
-  // rings
-  [1, .66, .33].forEach(k => g.append('circle').attr('cx',C).attr('cy',C)
-    .attr('r',R*k).attr('fill','none').attr('stroke','#242c38'));
-  // axes
-  g.append('line').attr('x1',C-R).attr('y1',C).attr('x2',C+R).attr('y2',C)
-    .attr('stroke','#30363d');
-  g.append('line').attr('x1',C).attr('y1',C-R).attr('x2',C).attr('y2',C+R)
-    .attr('stroke','#30363d');
-  const lab=(x,y,t,anc)=>g.append('text').attr('x',x).attr('y',y).text(t)
-    .attr('fill','#6e7681').attr('font-size',9).attr('text-anchor',anc||'middle');
+  const g=d3.select('#circ'); g.selectAll('*').remove();
+  [1,.66,.33].forEach(k=>g.append('circle').attr('cx',C).attr('cy',C).attr('r',R*k)
+    .attr('fill','none').attr('stroke','#242c38'));
+  g.append('line').attr('x1',C-R).attr('y1',C).attr('x2',C+R).attr('y2',C).attr('stroke','#30363d');
+  g.append('line').attr('x1',C).attr('y1',C-R).attr('x2',C).attr('y2',C+R).attr('stroke','#30363d');
+  const lab=(x,y,t,a)=>g.append('text').attr('x',x).attr('y',y).text(t)
+    .attr('fill','#6e7681').attr('font-size',9).attr('text-anchor',a||'middle');
   lab(C+R+2,C+3,'+V','start'); lab(C-R-2,C+3,'−V','end');
   lab(C,C-R-5,'+A'); lab(C,C+R+11,'−A');
-  OCTANTS.forEach(([n,x,y]) => g.append('text')
-    .attr('x',C+x*R*0.74).attr('y',C-y*R*0.74).text(n)
-    .attr('fill','#4d5560').attr('font-size',8).attr('text-anchor','middle'));
+  OCT.forEach(([n,x,y])=>g.append('text').attr('x',C+x*R*.74).attr('y',C-y*R*.74)
+    .text(n).attr('fill','#4d5560').attr('font-size',8).attr('text-anchor','middle'));
   g.append('g').attr('id','trail');
-  g.append('circle').attr('id','dot').attr('r',7).attr('cx',C).attr('cy',C)
-    .attr('fill','#bc8cff').attr('stroke','#0e1116').attr('stroke-width',2);
-  g.append('text').attr('id','dot-l').attr('fill','#e6edf3').attr('font-size',10)
+  g.append('line').attr('id','tie').attr('stroke','#bc8cff').attr('stroke-width',1)
+    .attr('stroke-dasharray','3,3').attr('opacity',.5);
+  // the robot's resting temperament, from OCEAN alone
+  g.append('circle').attr('id','base').attr('r',4).attr('fill','none')
+    .attr('stroke','var(--base)').attr('stroke-width',1.5).attr('opacity',.9);
+  g.append('circle').attr('id','face').attr('r',6).attr('fill','var(--face)')
+    .attr('stroke','#0e1116').attr('stroke-width',2);
+  g.append('circle').attr('id','robo').attr('r',7).attr('fill','var(--pad)')
+    .attr('stroke','#0e1116').attr('stroke-width',2);
+  g.append('text').attr('id','face-l').attr('fill','var(--face)').attr('font-size',9)
+    .attr('text-anchor','middle');
+  g.append('text').attr('id','robo-l').attr('fill','var(--pad)').attr('font-size',9)
     .attr('text-anchor','middle');
 }
-function plot(v,a,label){
-  const C=150,R=118, x=C+v*R, y=C-a*R;
-  trail.push([x,y]); if(trail.length>26) trail.shift();
-  const t=d3.select('#trail').selectAll('circle').data(trail);
-  t.join('circle').attr('cx',d=>d[0]).attr('cy',d=>d[1])
-    .attr('r',(d,i)=>1.6).attr('fill','#bc8cff')
-    .attr('opacity',(d,i)=>0.05+0.5*i/trail.length);
-  d3.select('#dot').attr('cx',x).attr('cy',y);
-  d3.select('#dot-l').attr('x',x).attr('y',y-12).text(label||'');
+/* eased every animation frame, so a 1 Hz sample reads as motion not a jump */
+function animate(){
+  const k=0.16;
+  for(const p of ['fv','fa','rv','ra']) cur[p]+=(tgt[p]-cur[p])*k;
+  const fx=C+cur.fv*R, fy=C-cur.fa*R, rx=C+cur.rv*R, ry=C-cur.ra*R;
+  d3.select('#face').attr('cx',fx).attr('cy',fy);
+  d3.select('#robo').attr('cx',rx).attr('cy',ry);
+  d3.select('#face-l').attr('x',fx).attr('y',fy-11);
+  d3.select('#robo-l').attr('x',rx).attr('y',ry+18);
+  d3.select('#tie').attr('x1',fx).attr('y1',fy).attr('x2',rx).attr('y2',ry);
+  requestAnimationFrame(animate);
+}
+function pushTrail(x,y){
+  trail.push([x,y]); if(trail.length>34) trail.shift();
+  d3.select('#trail').selectAll('circle').data(trail).join('circle')
+    .attr('cx',d=>d[0]).attr('cy',d=>d[1]).attr('r',1.6).attr('fill','var(--face)')
+    .attr('opacity',(d,i)=>0.04+0.45*i/trail.length);
 }
 
-/* ══ 2. live state ════════════════════════════════════════════════════════ */
-let lastChatLen=-1, lastRobot=null;
+/* ══ live state ════════════════════════════════════════════════════════════ */
+let lastChatLen=-1,lastRobot=null,lastTurn=null;
 async function poll(){
   try{
-    const s = await (await fetch('/state.json')).json();
-    document.getElementById('fps').textContent = (s.fps||0)+' fps · '+(s.faces||0)+' face(s)';
-    plot(s.valence||0, s.arousal||0, s.emotion||'');
-    document.getElementById('emo-now').textContent =
-      `${s.emotion||'—'}   V ${fmt(s.valence)}  A ${fmt(s.arousal)}` +
-      (s.affect_name? '   ('+s.affect_name+')' : '');
-    for(const r of ['chatbox','ellebot'])
-      document.getElementById('b-'+r).className = (s.robot===r?'on':'');
-    document.getElementById('ocean').textContent =
-      'OCEAN ' + Object.entries(s.ocean||{}).map(([k,v])=>k+(v>=0?'+':'')+v).join(' ');
-    if(s.chat.length!==lastChatLen || s.thinking){
-      lastChatLen=s.chat.length; renderChat(s.chat, s.thinking);
+    const s=await(await fetch('/state.json')).json();
+    document.getElementById('fps').textContent=(s.fps||0)+' fps · '+(s.faces||0)+' face(s)';
+
+    tgt.fv=s.valence||0; tgt.fa=s.arousal||0;
+    if(s.pad){ tgt.rv=s.pad[0]; tgt.ra=s.pad[1]; }
+    if(s.baseline){
+      d3.select('#base').attr('cx',C+s.baseline[0]*R).attr('cy',C-s.baseline[1]*R);
     }
-    // the graph only changes shape on a persona switch or a new node — poll the
-    // signature, never the layout, so the force sim is not restarted every tick
+    pushTrail(C+tgt.fv*R, C-tgt.fa*R);
+    d3.select('#face-l').text(s.emotion||'');
+    d3.select('#robo-l').text((s.robot||'').toUpperCase());
+    document.getElementById('emo-now').textContent =
+      `face V ${fmt(s.valence)} A ${fmt(s.arousal)}` +
+      (s.pad?`   →   ${(s.robot||'').toUpperCase()} P ${fmt(s.pad[0])} A ${fmt(s.pad[1])}`:'');
+
+    for(const r of ['chatbox','ellebot'])
+      document.getElementById('b-'+r).className=(s.robot===r?'on':'');
+    document.getElementById('ocean').textContent='OCEAN '+
+      Object.entries(s.ocean||{}).map(([k,v])=>k+(v>=0?'+':'')+v).join(' ');
+
+    if(s.chat.length!==lastChatLen||s.thinking){
+      lastChatLen=s.chat.length; renderChat(s.chat,s.thinking);
+      const last=[...s.chat].reverse().find(m=>m.who==='robot');
+      if(last && last.t!==lastTurn){ lastTurn=last.t; renderResults(last,s); }
+    }
     if(s.robot!==lastRobot){ lastRobot=s.robot; drawGraph(true); }
   }catch(e){}
-  setTimeout(poll, 500);
+  setTimeout(poll,300);
 }
-const fmt = v => ((v||0)>=0?'+':'')+(v||0).toFixed(2);
-function renderChat(msgs, thinking){
+const fmt=v=>((v||0)>=0?'+':'')+(v||0).toFixed(2);
+
+function renderChat(msgs,thinking){
   const box=document.getElementById('chat');
-  const atBottom = box.scrollHeight-box.scrollTop-box.clientHeight < 40;
-  box.innerHTML = msgs.map(m=>{
-    if(m.who==='system') return `<div class="msg system">${esc(m.text)}</div>`;
-    const meta = (m.who==='robot' && m.words)
-      ? `<div class="meta">${m.tag?'['+m.tag+'] ':''}${m.robot||''} · ${m.tier||''} · ${m.words.join('/')}</div>`
-      : '';
+  const bottom=box.scrollHeight-box.scrollTop-box.clientHeight<40;
+  box.innerHTML=msgs.map(m=>{
+    if(m.who==='system')return `<div class="msg system">${esc(m.text)}</div>`;
+    const meta=(m.who==='robot'&&m.words)
+      ?`<div class="meta">${m.tag?'['+m.tag+'] ':''}${m.robot||''} · ${m.tier||''} · ${m.words.join('/')}</div>`:'';
     return `<div class="msg ${m.who}">${esc(m.text)}${meta}</div>`;
-  }).join('') + (thinking?'<div class="msg robot">…</div>':'');
-  if(atBottom) box.scrollTop = box.scrollHeight;
+  }).join('')+(thinking?'<div class="msg robot">…</div>':'');
+  if(bottom)box.scrollTop=box.scrollHeight;
 }
-const esc = s => String(s).replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+const esc=s=>String(s).replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+
+/* ══ results — verbal + action + servo parameters ══════════════════════════ */
+const LIM={amplitude:[0.30,1.00],tempo:[0.50,1.60],posture:[-1,1],
+           droop:[-1,1],idle:[0.05,1.00]};
+function renderResults(msg,s){
+  document.getElementById('res-robot').textContent=(msg.robot||s.robot||'').toUpperCase();
+  const st=s.style||{};
+  const rows=Object.keys(LIM).filter(k=>k in st).map(k=>{
+    const [lo,hi]=LIM[k], v=st[k], f=Math.max(0,Math.min(1,(v-lo)/(hi-lo)));
+    const signed=lo<0;
+    const w=signed?Math.abs(v)/hi*50:f*100, l=signed?(v>=0?50:50-w):0;
+    return `<div class="servo"><span class="n">${k}</span>
+      <span class="track">${signed?'<span class="z"></span>':''}
+      <i style="left:${l}%;width:${w}%"></i></span>
+      <span class="t">${v>=0&&signed?'+':''}${v.toFixed(2)}</span></div>`;
+  }).join('');
+  document.getElementById('results').innerHTML=`
+    <div class="rrow"><span class="rk">verbal</span></div>
+    <div class="verbal">${esc(msg.text||'')}</div>
+    <div class="rrow"><span class="rk">action</span>
+      <span>${msg.tag?`<span class="tag">${esc(msg.tag)}</span>`:'<span style="color:var(--dim)">— no tag parsed —</span>'}</span></div>
+    <div class="rrow"><span class="rk">manner</span>
+      <span style="color:var(--pad)">${(msg.words||[]).join(' · ')||'—'}</span></div>
+    <div class="rrow"><span class="rk">tier</span><span>${msg.tier||'—'}</span></div>
+    <div class="rrow" style="margin-top:10px"><span class="rk">servo</span></div>
+    ${rows}
+    <div class="wire">${esc(s.wire||'')}</div>`;
+}
 
 async function send(e){
   e.preventDefault();
-  const i=document.getElementById('msg'), m=i.value.trim();
-  if(!m) return; i.value='';
+  const i=document.getElementById('msg'),m=i.value.trim();
+  if(!m)return; i.value='';
   await fetch('/chat',{method:'POST',body:JSON.stringify({message:m})});
-  setTimeout(()=>drawGraph(false), 2500);   // a turn can add topics
+  setTimeout(()=>drawGraph(false),2500);
 }
 async function setRobot(r){
   await fetch('/robot',{method:'POST',body:JSON.stringify({robot:r})});
 }
 
-/* ══ 3. knowledge graph ═══════════════════════════════════════════════════
-   Rebuilt ONLY when its shape actually changes. Re-running the force layout
-   on a timer made nodes drift continuously and threw away any arrangement
-   you had dragged into place.                                               */
-let sim=null, lastSig=null, pos={};
+/* ══ knowledge graph — rebuilt only when its shape changes ═════════════════ */
+let sim=null,lastSig=null,pos={};
 async function drawGraph(force){
-  const g = await (await fetch('/graph.json')).json();
-  if(!force && g.sig===lastSig) return;      // nothing changed — leave it alone
-  lastSig = g.sig;
+  const g=await(await fetch('/graph.json')).json();
+  if(!force&&g.sig===lastSig)return;
+  lastSig=g.sig;
+  if(sim)sim.nodes().forEach(n=>pos[n.id]={x:n.x,y:n.y});
+  g.nodes.forEach(n=>{if(pos[n.id]){n.x=pos[n.id].x;n.y=pos[n.id].y;}});
 
-  // keep whatever the previous layout settled on, so a rebuild is not a reshuffle
-  if(sim) sim.nodes().forEach(n => pos[n.id]={x:n.x,y:n.y});
-  g.nodes.forEach(n => { if(pos[n.id]){ n.x=pos[n.id].x; n.y=pos[n.id].y; } });
-
-  const svg=d3.select('#graph'), el=document.getElementById('graph');
-  const W=el.clientWidth||520, H=el.clientHeight||300;
+  const svg=d3.select('#graph'),el=document.getElementById('graph');
+  const W=el.clientWidth||520,H=el.clientHeight||300;
   svg.selectAll('*').remove(); svg.attr('viewBox',`0 0 ${W} ${H}`);
-
   const link=svg.append('g').selectAll('line').data(g.links).join('line')
     .attr('stroke','#30363d').attr('stroke-width',1);
   const node=svg.append('g').selectAll('g').data(g.nodes).join('g')
-    .attr('class', d => d.idle_robot ? 'ghost' : null)
+    .attr('class',d=>d.idle_robot?'ghost':null)
     .call(d3.drag()
       .on('start',(e,d)=>{if(!e.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y;})
       .on('drag',(e,d)=>{d.fx=e.x;d.fy=e.y;})
-      .on('end',(e,d)=>{if(!e.active)sim.alphaTarget(0);}));   // pin where dropped
-
-  // the robot you are talking to: bigger, ringed, brighter
-  node.filter(d=>d.active).append('circle').attr('r',17)
-    .attr('fill','none').attr('stroke','#bc8cff').attr('stroke-width',1.5)
-    .attr('opacity',.55);
-  node.append('circle')
-    .attr('r',d=> d.active?11 : (d.type==='person'?9:5))
+      .on('end',(e,d)=>{if(!e.active)sim.alphaTarget(0);}));
+  node.filter(d=>d.active).append('circle').attr('r',17).attr('fill','none')
+    .attr('stroke','#bc8cff').attr('stroke-width',1.5).attr('opacity',.55);
+  node.append('circle').attr('r',d=>d.active?11:(d.type==='person'?9:5))
     .attr('fill',d=>COL[d.type]||'#8b949e')
     .attr('stroke',d=>d.active?'#bc8cff':'#0e1116')
     .attr('stroke-width',d=>d.active?2.5:1.5);
   node.append('text').text(d=>d.label).attr('x',13).attr('y',4)
     .attr('fill',d=>d.active?'#e6edf3':'#8b949e')
-    .attr('font-size',d=>d.active?11:9)
-    .attr('font-weight',d=>d.active?'600':'400');
+    .attr('font-size',d=>d.active?11:9).attr('font-weight',d=>d.active?'600':'400');
   node.append('title').text(d=>d.id+'  ('+d.type+')');
-
   sim=d3.forceSimulation(g.nodes)
     .force('link',d3.forceLink(g.links).id(d=>d.id).distance(54).strength(.35))
     .force('charge',d3.forceManyBody().strength(-170))
     .force('center',d3.forceCenter(W/2,H/2))
     .force('collide',d3.forceCollide(18))
-    .alpha(0.6).alphaDecay(0.05)              // settles, then STOPS
+    .alpha(.6).alphaDecay(.05)
     .on('tick',()=>{
       link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y)
           .attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
       node.attr('transform',d=>`translate(${d.x},${d.y})`);
     });
-
-  document.getElementById('legend').innerHTML =
+  document.getElementById('legend').innerHTML=
     [...new Set(g.nodes.map(n=>n.type))].map(t=>
       `<span><b style="background:${COL[t]||'#8b949e'}"></b>${t}</span>`).join('')
-    + `<span style="margin-left:auto">talking to <b style="background:#bc8cff"></b>${g.robot}</span>`;
+    +`<span style="margin-left:auto">talking to <b style="background:#bc8cff"></b>${g.robot}</span>`;
 }
 
-initCirc(); poll(); drawGraph(true);
+initCirc(); animate(); poll(); drawGraph(true);
 </script>
 </body>
 </html>

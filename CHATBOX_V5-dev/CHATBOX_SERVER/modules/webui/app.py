@@ -131,7 +131,7 @@ def graph_json(store, robot_id: str) -> dict:
 
 
 _TIER_COL = {                       # BGR
-    "close":   (120, 220, 120), "family":  (140, 210, 130),
+    "close":   (120, 220, 120),
     "known":   (255, 170,  90), "visitor": (60, 190, 235),
     "unknown": (90,  90, 245),
 }

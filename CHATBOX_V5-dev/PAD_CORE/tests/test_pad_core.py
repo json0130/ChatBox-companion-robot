@@ -24,7 +24,7 @@ from pad_core.adapter import (                                     # noqa: E402
     EMOTION_VA, NullPADAdapter, PADPipelineAdapter,
 )
 
-_TIERS = ("unknown", "visitor", "known", "family", "close")
+_TIERS = ("unknown", "visitor", "known", "close")
 _EMOTIONS = ("happy", "sad", "angry", "neutral", "surprise")
 
 
@@ -100,11 +100,11 @@ def test_tier_moves_dominance_only():
         assert round(alt["felt"]["P"], 12) == round(base["felt"]["P"], 12)
         assert round(alt["felt"]["Ar"], 12) == round(base["felt"]["Ar"], 12)
         assert alt["felt"]["D"] < base["felt"]["D"]
-    for tier in ("family", "close"):
+    for tier in ("close",):
         alt = affect.pipeline(traits, 0.0, 0.0, ad_key, tier=tier)
         assert round(alt["felt"]["P"], 12) == round(base["felt"]["P"], 12)
         assert alt["felt"]["D"] > base["felt"]["D"]
-    print("4. tier moves Dominance (and only arousal at family/close) ✓")
+    print("4. tier moves Dominance (and only arousal at close) ✓")
 
 
 def test_va_tables_agree():

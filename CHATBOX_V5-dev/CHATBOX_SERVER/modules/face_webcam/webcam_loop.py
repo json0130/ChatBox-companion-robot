@@ -1764,6 +1764,14 @@ class WebcamKGLoop:
                 f"\n• Your manner right now is {p_word}, {a_word}, {d_word}. That "
                 "colours your WORDING only — it never changes what you know, what "
                 "you answer, or whether you bring up how they feel.")
+            # The adjective says what to BE; this says what to DO. A trait label
+            # has to be interpreted before it changes anything, and models
+            # interpret them loosely — the directive is the half that actually
+            # moves the output, and it is observable enough to measure.
+            if pad.get("pad_state") and pad.get("directive", True):
+                from modules.affect_bridge import prompt as _pp
+                how_to_reply += (
+                    f"\n• With this person, {_pp.manner_directive(pad['pad_state'][2])}.")
         blocks.append(how_to_reply)
 
         # ── WHO YOU'RE TALKING TO ──

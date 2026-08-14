@@ -64,11 +64,8 @@ _TIER_RECIPE = {
     "unknown": (0.00, 0.00, 0),
     "visitor": (0.10, 0.05, 1),
     "known":   (0.55, 0.50, 3),
-    "family":  (0.62, 0.58, 4),
     "close":   (0.80, 0.75, 9),
 }
-# `family` is not reachable from the score thresholds (it sits inside `known`'s
-# band), so it is exercised at the affect layer only — recorded, not asserted.
 _DERIVABLE = {"unknown", "visitor", "known", "close"}
 
 _HEDGES = re.compile(r"\b(maybe|perhaps|might|i think|i guess|sort of|kind of|sorry)\b", re.I)
@@ -115,6 +112,7 @@ def run_grid(args) -> list:
     llm = None
     if not args.no_llm:
         llm = LLMClient(model=args.model)
+        llm.connect()          # LLMClient is lazy — nothing works until this runs
         if not llm.available:
             print("[grid] Ollama unavailable — falling back to --no-llm")
             llm = None
@@ -142,13 +140,18 @@ def run_grid(args) -> list:
                 v, a = affect.category_to_va(emo)
                 for pad_on in ((True, False) if args.control else (True,)):
                     pad = adapter.process_turn(v, a, derived) if pad_on else None
+                    if pad and args.no_directive:
+                        pad = {**pad, "directive": False}   # words stay, directive off
                     prompt = loop._build_system_prompt(pid, rag_hits=[], pad=pad)
                     for rep in range(args.repeats if pad_on else 1):
                         reply = tag = ""
                         t0 = time.time()
                         if llm is not None:
-                            raw = llm.respond(prompt, args.message,
-                                              temperature=args.temperature)
+                            # LLMClient fixes temperature internally (0.7 for
+                            # spoken replies), so it cannot be set per call —
+                            # --repeats and the variance column carry the noise
+                            # instead of pretending it is pinned at 0.
+                            raw = llm.respond(prompt, args.message)
                             tag, reply = _parse_llm_response(raw)
                         rows.append({
                             "robot": robot, "tier": tier, "derived_tier": derived,
@@ -272,12 +275,15 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--robot", default="chatbox,ellebot")
-    p.add_argument("--tiers", default="unknown,visitor,known,family,close")
+    p.add_argument("--tiers", default="unknown,visitor,known,close")
     p.add_argument("--emotions", default="happy,sad,angry,neutral")
     p.add_argument("--message", default="hey, what have you been up to?")
     p.add_argument("--model", default="qwen2.5:7b")
-    p.add_argument("--temperature", type=float, default=0.0)
+    p.add_argument("--temperature", type=float, default=0.7,
+                   help="recorded only — LLMClient fixes it internally")
     p.add_argument("--repeats", type=int, default=1)
+    p.add_argument("--no-directive", action="store_true",
+                   help="A/B: adjective only, no behavioural directive")
     p.add_argument("--control", action="store_true",
                    help="also run every cell with PAD OFF (the baseline)")
     p.add_argument("--no-llm", action="store_true",

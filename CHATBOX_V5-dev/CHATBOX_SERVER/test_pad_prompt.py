@@ -143,7 +143,7 @@ def test_grid_runs_headless():
     args = argparse.Namespace(
         robot="chatbox", tiers="unknown,close", emotions="happy,sad",
         message="hi", model="none", temperature=0.0, repeats=1,
-        control=True, no_llm=True)
+        control=True, no_llm=True, no_directive=False)
     rows = run_grid(args)
     assert len(rows) == 2 * 2 * 2, len(rows)          # tiers x emotions x pad on/off
     assert all(r["prompt"] for r in rows)

@@ -108,7 +108,6 @@ def feel(baseline: Dict[str, float], valence: float, arousal: float,
 # behaviour and a stranger less -- but the magnitudes are tuned by eye.
 TIER_OFFSETS: Dict[str, Tuple[float, float, float]] = {
     "close":   (0.00, +0.10, +0.40),
-    "family":  (0.00, +0.05, +0.20),
     "known":   (0.00,  0.00,  0.00),   # reference tier: no displacement at all
     "visitor": (0.00,  0.00, -0.20),
     "unknown": (0.00,  0.00, -0.40),

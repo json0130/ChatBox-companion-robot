@@ -238,7 +238,7 @@ print("\n=== 19. The tier ladder is monotone in amplitude ===")
 # This is the payoff: Eq. 9 reads Dominance alone, so before the relationship
 # existed amplitude was fixed per persona and no detected emotion could resize a
 # gesture. Feeding D a social signal makes amplitude respond to WHO is present.
-ladder = ("unknown", "visitor", "known", "family", "close")
+ladder = ("unknown", "visitor", "known", "close")
 for robot in ("CHATBOX", "ELLEBOT"):
     b = A.to_pad(A.ROBOTS[robot]["ocean"])
     amps = [A.gesture_style(A.feel_with_relationship(b, 0.0, 0.0, t))["amplitude"]

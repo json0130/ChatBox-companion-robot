@@ -532,6 +532,11 @@ def main(argv=None) -> int:
                         loop._apply_chat_result({    # noqa: SLF001
                             "pid": pid, "msg": msg, "verbal": verbal,
                             "tag": tag, "emotion": state.snapshot()["emotion"]})
+                        # interaction_count is written HERE and only reaches disk
+                        # on a flush; the debounced one can be missed if the
+                        # process is killed, which silently loses the turn count
+                        # and with it the tier. A turn is worth a forced write.
+                        loop._flush_kg(force=True)   # noqa: SLF001
             time.sleep(0.01)
     except KeyboardInterrupt:
         print("\n[webui] stopping")

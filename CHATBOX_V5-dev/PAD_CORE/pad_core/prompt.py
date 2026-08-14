@@ -20,19 +20,27 @@ _TIER_NOTES = {
 }
 
 _FIRST_TIME = "You are meeting this person for the first time; be friendly and open."
+# Known ABOUT but barely talked TO. This is the normal state for a second robot:
+# memory hangs off the PERSON and is shared, while rapport/trust/turn count hang
+# off the (person, robot) pair — so a robot can hold a page of memories about
+# someone it has personally exchanged three sentences with.
+_KNOWN_OF = ("You know a lot about this person already, though the two of you "
+             "have not talked much yet.")
 
 
-def tier_note(tier: str, interaction_count: int = 0) -> str:
+def tier_note(tier: str, interaction_count: int = 0,
+              has_memory: bool = False) -> str:
     """One sentence describing the relationship, for the prompt.
 
-    `interaction_count` gates the first-time wording rather than the tier doing
-    it: tier is derived from (rapport + trust) / 2 and a turn count, so a person
-    with a full page of remembered conversations can still derive as 'visitor' or
-    'unknown'. Keying "first time" off the tier would put that claim directly
-    above five things the robot remembers about them.
+    The first-time claim is gated on BOTH the pair's turn count and whether the
+    robot actually remembers anything. Gating on the tier alone printed "you are
+    meeting this person for the first time" directly above eight remembered facts
+    and five turns of prior conversation — the tier is per (person, robot) while
+    memory is per person, so the two legitimately disagree and the wording has to
+    say so rather than contradict the block underneath it.
     """
     if interaction_count <= 0:
-        return _FIRST_TIME
+        return _KNOWN_OF if has_memory else _FIRST_TIME
     return _TIER_NOTES.get(tier, _TIER_NOTES["unknown"])
 
 

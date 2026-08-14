@@ -1784,9 +1784,11 @@ class WebcamKGLoop:
                 from modules.graph_relationship.interactions import get_interaction
                 from modules.affect_bridge import prompt as _pad_prompt
                 interaction = get_interaction(self.store, pid, self.robot_id)
+                mem_probe = self._person_memory(pid)
                 who.append(_pad_prompt.tier_note(
                     pad["tier"],
-                    interaction.interaction_count if interaction else 0))
+                    interaction.interaction_count if interaction else 0,
+                    has_memory=bool(mem_probe)))
             mem = self._person_memory(pid)
             who.append(mem if mem else "You don't remember much about them yet.")
             # NOTE: the detected mood/emotion is intentionally NOT injected into the

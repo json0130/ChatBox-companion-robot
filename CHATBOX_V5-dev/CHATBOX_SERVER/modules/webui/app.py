@@ -376,7 +376,7 @@ def main(argv=None) -> int:
     args = p.parse_args(argv)
 
     from modules.face_webcam.webcam_loop import (
-        LLMClient, WebcamKGLoop, _DetectionWorker, _parse_llm_response,
+        LLMClient, WebcamKGLoop, _DetectionWorker, _parse_llm_response, score_tag,
     )
 
     llm = None
@@ -476,6 +476,12 @@ def main(argv=None) -> int:
             state.set_frame(buf.tobytes())
 
     last_tick, fps_t, frames = 0.0, time.time(), 0
+    # Who we last actually recognised, and when. A chat turn must NOT use
+    # the instantaneous detection: looking away while typing dropped the
+    # person to None, which silently emptied the prompt of all memory and
+    # made every tier read like a stranger.
+    last_pid, last_pid_t = None, 0.0
+    PID_GRACE = 60.0
     overlay = state.snapshot()   # refreshed on the 1 Hz tick, not per frame
     try:
         while True:
@@ -503,6 +509,10 @@ def main(argv=None) -> int:
 
             primary = dets[0] if dets else None
             pid = primary["person_id"] if primary else None
+            if pid is not None:
+                last_pid, last_pid_t = pid, time.time()
+            elif last_pid and time.time() - last_pid_t < PID_GRACE:
+                pid = last_pid          # hold identity through a brief dropout
 
             # V/A is per-frame: publish it as fast as it arrives so the
             # circumplex moves continuously rather than stepping once a second.
@@ -567,6 +577,13 @@ def main(argv=None) -> int:
                     hist = list(loop._chat_history.get(pid or "", []))  # noqa: SLF001
                     raw = loop.llm.respond(prompt, msg, history=hist)
                     tag, verbal = _parse_llm_response(raw)
+                    if not tag:
+                        # No usable tag in the reply — have the model score the
+                        # real expression list and take the best, so the robot
+                        # always has something to perform.
+                        tag = score_tag(loop.llm, verbal, msg)
+                        if tag:
+                            print(f"  [tag] scored -> {tag}", flush=True)
                     st = state.snapshot()
                     turn = {"tag": tag, "tier": st["tier"], "words": st["words"],
                             "wire": st["wire"], "robot": loop.robot_id,

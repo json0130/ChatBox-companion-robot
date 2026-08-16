@@ -132,7 +132,11 @@ _TIER_COL = {
 # LLM action-tag parsing + ESP32 dispatch
 # ─────────────────────────────────────────────────────────────────────────────
 
-_TAG_RE = re.compile(r'^\[([A-Z_]+)\]', re.ASCII)
+# A tag ANYWHERE in the reply, not just at the start. Models put it at the end
+# or mid-sentence often enough that anchoring to ^ both lost the tag and left the
+# brackets in the spoken text.
+_TAG_RE  = re.compile(r'\[([A-Za-z_]+)\]', re.ASCII)
+_TAG_ANY = re.compile(r'\[[^\]]{0,24}\]')      # for stripping, incl. invalid ones
 
 # Map LLM action tags → ESP32 validExpressions[]
 _TAG_TO_ESP32: dict[str, str] = {
@@ -169,12 +173,70 @@ def _clean_reply(text: Optional[str]) -> str:
     return s[:cut].strip()
 
 
+# Tags the model reaches for that are not in the ESP32 map. Mapping them beats
+# dropping them: the robot performs something sensible instead of nothing, and
+# it saves a second LLM call in the common case.
+_TAG_SYNONYMS: dict[str, str] = {
+    "SMILING": "HAPPY", "SMILE": "HAPPY", "CHEERFUL": "HAPPY", "EXCITED": "HAPPY",
+    "LAUGH": "HAPPY", "PLAYFUL": "HAPPY", "JOY": "HAPPY",
+    "HI": "GREETING", "HELLO": "GREETING", "WELCOME": "GREETING", "HEY": "GREETING",
+    "CURIOUS": "NOD", "INTERESTED": "NOD", "THINKING": "NOD", "LISTENING": "NOD",
+    "AGREE": "NOD", "YES": "NOD",
+    "CONCERNED": "SAD", "SORRY": "SAD", "SYMPATHY": "SAD", "EMPATHY": "SAD",
+    "UNSURE": "CONFUSED", "PUZZLED": "CONFUSED", "QUESTION": "CONFUSED",
+    "WOW": "SURPRISE", "SURPRISED": "SURPRISE", "AMAZED": "SURPRISE",
+    "CALM": "IDLE", "NEUTRAL": "IDLE", "DEFAULT": "IDLE",
+}
+
+
 def _parse_llm_response(text: str) -> tuple[str, str]:
-    """Split '[TAG] body text' into ('TAG', 'body text'). Returns ('', text) if no tag."""
-    m = _TAG_RE.match(text.strip())
-    if m:
-        return m.group(1), text[m.end():].strip()
-    return "", text.strip()
+    """Split a reply into (TAG, spoken text).
+
+    The tag may appear anywhere — leading, trailing or mid-sentence — and every
+    bracketed span is stripped from the spoken text either way, so a stray or
+    invalid tag is never read aloud. Returns the FIRST tag that resolves to a
+    real robot expression, so '[SMILING] ... [CURIOUS]' still yields one action.
+    """
+    text = (text or "").strip()
+    tag = ""
+    for m in _TAG_RE.finditer(text):
+        cand = m.group(1).upper()
+        cand = cand if cand in _TAG_TO_ESP32 else _TAG_SYNONYMS.get(cand, "")
+        if cand:
+            tag = cand
+            break
+    spoken = _TAG_ANY.sub("", text)
+    spoken = re.sub(r"\s{2,}", " ", spoken).strip(" .,-").strip()
+    return tag, spoken
+
+
+def score_tag(llm, reply: str, user_msg: str = "") -> str:
+    """Ask the model to pick the best action tag FROM THE LIST for a reply.
+
+    Used only when the reply carried no usable tag — the inline tag plus the
+    synonym map handles the common case, so this costs a second call rarely
+    rather than on every turn. Constrained to the real expression list, so
+    unlike a free-form tag the answer always drives a servo.
+    """
+    if llm is None or not getattr(llm, "available", False):
+        return ""
+    tags = list(_TAG_TO_ESP32)
+    sysp = (
+        "You choose ONE physical action for a companion robot to perform while "
+        "it says a line. Score each candidate 0-10 for how well it fits, then "
+        "return the highest.\n"
+        f"Valid actions: {', '.join(tags)}.\n"
+        'Reply with ONLY a JSON object: {"scores": {"TAG": 0-10, ...}, '
+        '"best": "TAG"}. "best" MUST be one of the valid actions.'
+    )
+    try:
+        raw = llm.respond(sysp, f"They said: {user_msg!r}\nThe robot replies: {reply!r}",
+                          max_tokens=220, json_mode=True)
+        i, j = raw.find("{"), raw.rfind("}")
+        best = str(json.loads(raw[i:j + 1]).get("best", "")).upper()
+    except Exception:  # noqa: BLE001 — a tag is never worth crashing a turn over
+        return ""
+    return best if best in _TAG_TO_ESP32 else _TAG_SYNONYMS.get(best, "")
 
 
 def _send_esp32(expression: str, host: str, port: int = 8888,
@@ -1742,8 +1804,11 @@ class WebcamKGLoop:
             "━━━ HOW TO REPLY ━━━\n"
             "• Reply in ENGLISH, in one or two short, warm, spoken sentences. Output "
             "ONLY your single reply — never write the user's next turn.\n"
-            "• Begin every reply with an emotion tag in square brackets, e.g. "
-            "[HAPPY], [CURIOUS].\n"
+            "• Begin your reply with ONE action tag in square brackets, chosen "
+            "from exactly this list — no other word is a valid tag:\n"
+            f"  {', '.join('[' + t + ']' for t in _TAG_TO_ESP32)}\n"
+            "  Use one only, at the very start, and never anywhere else in the "
+            "reply.\n"
             "• ANSWER what they actually ask. Anything in the memory below — a "
             "favourite player/song, or a fact they told you about themselves (where "
             "they're from / their background) — is something you KNOW: answer "

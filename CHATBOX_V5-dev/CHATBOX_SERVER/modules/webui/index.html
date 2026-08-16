@@ -107,19 +107,10 @@
       <img id="cam" src="/stream.mjpg" alt="camera"></section>
     <div class="hsplit" data-a="c-cam" data-b="c-emo"></div>
 
-    <section class="card" id="c-emo" style="height:290px">
+    <section class="card" id="c-emo" style="flex:1">
       <h2>Emotion space — Russell's circumplex<span class="grow"></span>
         <span id="emo-now" style="color:var(--face)">—</span></h2>
       <svg id="circ" viewBox="0 0 300 300" preserveAspectRatio="xMidYMid meet"></svg>
-    </section>
-    <div class="hsplit" data-a="c-emo" data-b="c-chat"></div>
-
-    <section class="card" id="c-chat" style="flex:1"><h2>Conversation</h2>
-      <div id="chat"></div>
-      <form onsubmit="send(event)">
-        <input type="text" id="msg" placeholder="say something…" autocomplete="off">
-        <button class="send">send</button>
-      </form>
     </section>
   </div>
 
@@ -134,7 +125,16 @@
       <svg id="graph"></svg>
       <div class="legend" id="legend"></div>
     </section>
-    <div class="hsplit" data-a="c-kg" data-b="c-res"></div>
+    <div class="hsplit" data-a="c-kg" data-b="c-chat"></div>
+
+    <section class="card" id="c-chat" style="height:260px"><h2>Conversation</h2>
+      <div id="chat"></div>
+      <form onsubmit="send(event)">
+        <input type="text" id="msg" placeholder="say something…" autocomplete="off">
+        <button class="send">send</button>
+      </form>
+    </section>
+    <div class="hsplit" data-a="c-chat" data-b="c-res"></div>
 
     <section class="card" id="c-res" style="height:320px">
       <h2>Results — last turn per robot<span class="grow"></span>

@@ -110,13 +110,34 @@ def graph_json(store, robot_id: str) -> dict:
     hidden = {n.id for n in store._nodes.values()          # noqa: SLF001
               if owned_by_other(n.id)}
 
+    def label_of(n) -> str:
+        """Readable label. Authored attributes (persona/role/capability) carry
+        their text in `descriptor` or `items`, not in a name field, so without
+        this a capability node renders as the bare word 'capability'."""
+        for attr in ("display_name", "label", "name", "descriptor"):
+            v = getattr(n, attr, None)
+            if v:
+                return str(v)
+        items = getattr(n, "items", None)
+        if items:
+            text = ", ".join(str(i) for i in items[:3])
+            return text + ("…" if len(items) > 3 else "")
+        return n.id.split(":")[-1]
+
+    def owner_of(n) -> str:
+        """Which anchor an authored attribute belongs to — both robots have a
+        persona and a role, so the labels have to say whose they are."""
+        return n.id.split(":")[0] if ":" in n.id else ""
+
     nodes = [{
         "id": n.id,
         "type": n.node_type,
-        "label": getattr(n, "display_name", None) or getattr(n, "label", None)
-                 or getattr(n, "name", None) or n.id.split(":")[-1],
+        "label": label_of(n),
+        "owner": owner_of(n),
         "active": n.id == robot_id,
-        "idle_robot": n.node_type == "robot" and n.id != robot_id,
+        # dim everything belonging to the robot you are NOT talking to
+        "idle_robot": (n.node_type == "robot" and n.id != robot_id)
+                      or (owner_of(n) in others),
     } for n in store._nodes.values() if n.id not in hidden]   # noqa: SLF001
 
     links = [{

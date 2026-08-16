@@ -59,7 +59,8 @@ class LiveState:
         self.data: dict = {
             "robot": robot, "person": None, "sim": 0.0, "faces": 0,
             "emotion": "neutral", "valence": 0.0, "arousal": 0.0,
-            "tier": "unknown", "rapport": 0.0, "trust": 0.0, "interactions": 0,
+            "tier": "unknown", "derived_tier": None, "tier_override": None,
+            "rapport": 0.0, "trust": 0.0, "interactions": 0,
             "pad": None, "shown": None, "baseline": None,
             "words": None, "affect_name": None,
             "style": None, "wire": None,
@@ -281,7 +282,7 @@ def trace_prompt(prompt: str, pad: dict | None, pid, msg: str, robot: str) -> No
     _p("=" * W + "\n")
 
 
-def make_handler(state: LiveState, loop, chat_q, switch_robot):
+def make_handler(state: LiveState, loop, chat_q, switch_robot, set_tier):
     class H(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
@@ -336,6 +337,15 @@ def make_handler(state: LiveState, loop, chat_q, switch_robot):
                 if msg:
                     chat_q(msg)
                 self._send(200, b'{"ok":true}', "application/json")
+            elif path == "/tier":
+                t = body.get("tier")
+                t = None if t in (None, "", "auto") else str(t).lower()
+                if t is not None and t not in affect.TIERS:
+                    self._send(400, b'{"ok":false}', "application/json")
+                    return
+                set_tier(t)
+                self._send(200, json.dumps({"ok": True, "tier_override": t}).encode(),
+                           "application/json")
             elif path == "/robot":
                 r = str(body.get("robot", "")).lower()
                 ok = r in ROBOTS and switch_robot(r)
@@ -412,6 +422,22 @@ def main(argv=None) -> int:
         print(f"[webui] persona -> {rid}")
         return True
 
+    tier_lock = threading.Lock()
+    tier_override: list = [None]      # boxed so the closure can rebind it
+
+    def set_tier(t):
+        """Force the relationship tier, or None to go back to deriving it.
+        Demo control only — the graph keeps accruing underneath, so this never
+        falsifies the stored relationship."""
+        with tier_lock:
+            tier_override[0] = t
+        state.update(tier_override=t)
+        state.push_chat("system",
+                        f"— tier forced to {t.upper()} —" if t
+                        else "— tier back to auto (derived from the graph) —")
+        print(f"[webui] tier override -> {t or 'auto'}", flush=True)
+        return True
+
     pending: list[str] = []
     plock = threading.Lock()
 
@@ -430,7 +456,7 @@ def main(argv=None) -> int:
     )
     worker.start()
 
-    handler = make_handler(state, loop, enqueue, switch_robot)
+    handler = make_handler(state, loop, enqueue, switch_robot, set_tier)
     httpd = ThreadingHTTPServer(("0.0.0.0", args.port), handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     print(f"\n  webui → http://localhost:{args.port}\n")
@@ -500,14 +526,18 @@ def main(argv=None) -> int:
                        "emotion": emo, "valence": va[0], "arousal": va[1],
                        "known_people": loop.face_id.known_people()}
                 if pid:
+                    with tier_lock:
+                        forced = tier_override[0]
                     with loop._store_lock:           # noqa: SLF001
-                        bi, pad = loop._pipeline_tick(pid, emo, va=va)  # noqa: SLF001
+                        bi, pad = loop._pipeline_tick(  # noqa: SLF001
+                            pid, emo, va=va, tier_override=forced)
                     loop._maybe_send_style(pad.get("style"))            # noqa: SLF001
                     loop._last_pad_result = pad                         # noqa: SLF001
                     from modules.graph_relationship.interactions import get_interaction
                     it = get_interaction(loop.store, pid, loop.robot_id)
                     upd.update({
-                        "tier": bi.tier, "pad": pad["pad_state"],
+                        "tier": pad["tier"], "derived_tier": bi.tier,
+                        "pad": pad["pad_state"],
                         "shown": pad["shown"], "words": pad["words"],
                         "affect_name": pad["name"], "style": pad["style"],
                         "wire": pad["wire"],

@@ -22,6 +22,14 @@
   .robots button.on{background:var(--acc);color:#04121f;border-color:var(--acc)}
   .pill{padding:2px 8px;border-radius:99px;border:1px solid var(--line);
         color:var(--dim);font-size:11px}
+  .tierctl{display:flex;align-items:center;gap:3px}
+  .tierctl .lbl{color:var(--dim);font-size:10px;letter-spacing:1px;margin-right:4px}
+  .tierctl button{background:#0d1117;color:var(--dim);border:1px solid var(--line);
+    padding:4px 9px;border-radius:5px;cursor:pointer;font:inherit;font-size:10px}
+  .tierctl button.on{background:var(--pad);color:#0e1116;border-color:var(--pad);
+    font-weight:700}
+  .tierctl button.auto-on{background:#0d1117;color:var(--ok);border-color:var(--ok)}
+  .forced{color:var(--warn);font-weight:700}
 
   /* ── resizable layout ─────────────────────────────────────────────────── */
   main{display:flex;height:calc(100vh - 47px);padding:10px;gap:0}
@@ -98,12 +106,22 @@
   </div>
   <span class="pill" id="ocean">—</span>
   <div class="grow"></div>
+  <span class="tierctl" title="Force the relationship tier to compare responses.
+Demo only — the graph keeps accruing underneath.">
+    <span class="lbl">tier</span>
+    <button id="t-auto"    onclick="setTier('auto')">auto</button>
+    <button id="t-unknown" onclick="setTier('unknown')">unknown</button>
+    <button id="t-visitor" onclick="setTier('visitor')">visitor</button>
+    <button id="t-known"   onclick="setTier('known')">known</button>
+    <button id="t-close"   onclick="setTier('close')">close</button>
+  </span>
   <span class="pill" id="fps">0 fps</span>
 </header>
 
 <main>
   <div class="col" id="left">
-    <section class="card" id="c-cam" style="height:300px"><h2>Camera</h2>
+    <section class="card" id="c-cam" style="height:300px"><h2>Camera
+      <span class="grow"></span><span id="tier-state"></span></h2>
       <img id="cam" src="/stream.mjpg" alt="camera"></section>
     <div class="hsplit" data-a="c-cam" data-b="c-emo"></div>
 
@@ -273,6 +291,15 @@ async function poll(){
 
     for(const r of ['chatbox','ellebot'])
       document.getElementById('b-'+r).className=(s.robot===r?'on':'');
+    const ov=s.tier_override;
+    for(const t of ['unknown','visitor','known','close'])
+      document.getElementById('t-'+t).className=(ov===t?'on':'');
+    document.getElementById('t-auto').className=(ov?'':'auto-on');
+    // never let a demo override be mistaken for real accumulated closeness
+    document.getElementById('tier-state').innerHTML = ov
+      ? `<span class="forced">FORCED ${ov}</span>` +
+        `<span style="color:var(--dim)"> · graph says ${s.derived_tier||'—'}</span>`
+      : `<span style="color:var(--dim)">tier ${s.tier||'—'} (derived)</span>`;
     document.getElementById('ocean').textContent='OCEAN '+
       Object.entries(s.ocean||{}).map(([k,v])=>k+(v>=0?'+':'')+v).join(' ');
 
@@ -345,6 +372,9 @@ async function send(e){
   if(!m)return; i.value='';
   await fetch('/chat',{method:'POST',body:JSON.stringify({message:m})});
   setTimeout(()=>drawGraph(false),2500);
+}
+async function setTier(t){
+  await fetch('/tier',{method:'POST',body:JSON.stringify({tier:t})});
 }
 async function setRobot(r){
   await fetch('/robot',{method:'POST',body:JSON.stringify({robot:r})});

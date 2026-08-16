@@ -1419,11 +1419,22 @@ class WebcamKGLoop:
         return self._adapters[self.robot_id]
 
     def _pipeline_tick(self, person_id: str, emotion: str,
-                       va: Optional[tuple] = None):
+                       va: Optional[tuple] = None,
+                       tier_override: Optional[str] = None):
+        """One affect turn: read the graph, run PAD, write the graph back.
+
+        `tier_override` forces the relationship tier instead of deriving it from
+        rapport/trust/turn count. For testing and demonstration only — it lets
+        you see the response at each rung without spending minutes building the
+        closeness up. The graph is NOT changed by it: rapport, trust and the
+        count keep accruing normally underneath, so the real relationship is
+        never falsified by a demo setting.
+        """
         bi = self.bridge.pre_turn(person_id, self.robot_id, emotion, camera_va=va)
+        tier = tier_override or bi.tier
         pad = self._adapter().process_turn(
             valence=bi.valence, arousal=bi.arousal,
-            relationship_tier=bi.tier, memory_context=bi.structured_memory,
+            relationship_tier=tier, memory_context=bi.structured_memory,
             rapport=bi.rapport, trust=bi.trust,
             interaction_count=bi.interaction_count,
         )

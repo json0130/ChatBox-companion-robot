@@ -64,26 +64,33 @@ def tier_note(tier: str, interaction_count: int = 0,
 # PROPOSAL. The bands and the wording are ours. Reads the FELT coordinate, not
 # the shown one — `show` is expressive bandwidth for the BODY, and a robot with
 # fewer servos is not thereby less articulate.
-# Edge placement is not arbitrary: the two robots occupy DIFFERENT parts of the
-# D axis (CHATBOX -1.00..-0.24, ELLEBOT +0.02..+0.82, because Extraversion swings
-# the baseline by more than a unit), so a ladder that resolves only one of them
-# leaves the other flat. These seven edges give each robot four distinct rungs
-# across its own tier range, while staying ABSOLUTE — the same D always yields the
-# same instruction, so "share the lead" means one thing on both bodies.
+# Edge placement is not arbitrary: the two robots occupy DISJOINT parts of the D
+# axis (CHATBOX -1.00..-0.24, ELLEBOT +0.02..+0.82 — a 0.26 gap, wider than the
+# 0.20 a single tier step moves), because Extraversion swings the baseline by
+# more than a unit. A ladder tuned to one leaves the other flat, so these seven
+# edges give each robot four distinct rungs across its own range while staying
+# ABSOLUTE: the same D always yields the same instruction. Exactly one band is
+# shared — CHATBOX at 'close' (-0.243) and ELLEBOT at 'unknown' (+0.021) — which
+# is the only pair where D is nearly matched and only the persona differs.
+#
+# Each rung is phrased as WHO INTRODUCES A TOPIC, and that is deliberate. An
+# earlier version graded the wording instead ("let them lead" / "follow their
+# lead" / "mostly follow their lead") and three consecutive rungs were the same
+# instruction in different words — 0.60 of CHATBOX's 0.757 range, 79% of it,
+# producing nothing anyone could observe. If a rater watching two clips cannot
+# say which directive was in force, the claim that this is the measurable half
+# of the model does not hold. "Did the robot introduce a topic the person had
+# not mentioned?" is a binary that can be coded straight off a transcript.
 _DIRECTIVES = (
-    (+0.62, "lead the exchange — say what you think plainly and suggest what to "
-            "do next"),
-    (+0.32, "take the initiative — make a concrete suggestion and give your own "
-            "view"),
-    (+0.12, "share the lead — answer plainly, and offer an idea when it helps"),
-    (-0.44, "mostly follow their lead — answer directly, and suggest something "
-            "only now and then"),
-    (-0.74, "follow their lead, though you can offer one gentle suggestion if it "
-            "fits"),
-    (-0.92, "let them lead — ask about what they bring up rather than proposing "
-            "topics, and keep any suggestion tentative"),
-    (-9.00, "stay quiet and responsive — answer what they ask, ask a little back, "
-            "and do not propose topics of your own"),
+    (+0.62, "open with something you already know about them"),
+    (+0.32, "propose the next topic yourself"),
+    (+0.12, "offer a topic if they do not bring one"),
+    (-0.44, "either of you may open a topic — introduce one only if things go "
+            "quiet"),
+    (-0.74, "follow their topic, and you may add one follow-up question about it"),
+    (-0.92, "ask about what they bring up, and do not introduce a topic of your "
+            "own"),
+    (-9.00, "answer only what they ask, and do not introduce a topic of your own"),
 )
 
 

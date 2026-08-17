@@ -153,20 +153,52 @@ lifts 13° higher, the head lifts, and each step runs 250 ms faster.
 
 ```
 • Your manner right now is warm, calm, reserved.            ← descriptor words
-• With this person, let them lead — ask about what they      ← behavioural
-  bring up rather than proposing topics.                       directive
+• With this person, follow their topic, and you may add      ← behavioural
+  one follow-up question about it.                              directive
 ```
 
 Plus one sentence opening the WHO block (*"You recognise this person…"*).
 **No numbers ever reach the model** — rapport/trust in a prompt invite it to
 narrate its own metrics.
 
-| tier | CHATBOX directive | ELLEBOT directive |
+| tier | D | CHATBOX directive | D | ELLEBOT directive |
+|---|---|---|---|---|
+| unknown | −1.00 | answer only what they ask | +0.02 | either of you may open a topic |
+| visitor | −0.84 | ask about what they bring up | +0.22 | offer a topic if they do not |
+| known | −0.64 | follow their topic, one follow-up | +0.42 | propose the next topic yourself |
+| close | −0.24 | either of you may open a topic | +0.82 | open with something you know about them |
+
+Each rung is phrased as **who introduces a topic**, on purpose. An earlier
+version graded the *wording* ("let them lead" / "follow their lead" / "mostly
+follow their lead") and three consecutive rungs came out as the same instruction
+in different words — **0.60 of CHATBOX's 0.757 range, 79% of it**, producing
+nothing anyone could observe. If a rater watching two clips cannot say which
+directive was in force, the claim that this is the *measurable* half of the model
+does not hold. *"Did the robot introduce a topic the person had not mentioned?"*
+is a binary that can be coded straight off a transcript.
+
+### The two robots never overlap — and that confounds any cross-robot comparison
+
+`D = baseline + tier offset`, nothing else, so each robot has exactly four
+possible values:
+
+| | range | width |
 |---|---|---|
-| unknown | stay quiet and responsive | mostly follow their lead |
-| visitor | let them lead | share the lead |
-| known | follow their lead | take the initiative |
-| close | mostly follow their lead | lead the exchange |
+| CHATBOX | [−1.000, −0.243] | 0.757 |
+| ELLEBOT | [+0.021, +0.821] | 0.800 |
+
+The gap between them is **0.264 — wider than the 0.200 a single tier step
+moves**, so no amount of relationship history can bring them into contact. *A
+maximally close CHATBOX is still more deferential than ELLEBOT meeting a total
+stranger.* That is a real design result and worth stating.
+
+It carries an evaluation cost, though: **persona and tier are fully confounded.**
+Any cross-robot comparison is also a comparison across D ranges, so a difference
+can never be attributed to one rather than the other. There is exactly one
+exception — **CHATBOX at `close` (−0.243) and ELLEBOT at `unknown` (+0.021)**,
+0.264 apart and sharing a directive rung. That is the only pair where D is nearly
+matched and only the persona differs, which makes it the natural centrepiece of a
+user study.
 
 The **adjective** says what to *be*; the **directive** says what to *do*. Trait
 labels must be interpreted before they change anything, and models interpret them

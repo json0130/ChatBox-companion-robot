@@ -257,21 +257,41 @@ check("CHATBOX @ unknown: D saturates at -1", round(u["D"], 6), -1.0)
 check("CHATBOX @ unknown: amplitude sits on the 0.30 clamp floor",
       round(A.gesture_style(u)["amplitude"], 6), 0.30)
 
-print("\n=== 21. What the tier does to the LLM's descriptor words ===")
-# The experiment in the prompt grid depends on these words differing across
-# tiers. They differ much less on CHATBOX, whose show=0.30 compresses D by 70%
-# before the bands are read -- so expressive bandwidth gates language, not just
-# servo travel. Asserted so the compression is a known fact, not a surprise.
-for robot, want_distinct in (("CHATBOX", 2), ("ELLEBOT", 3)):
+print("\n=== 21. Every tier gets its own descriptor word ===")
+# The third word is the relationship's only mark on the prompt, so a robot whose
+# word never changes says nothing about its relationship. It used to: descriptors
+# were read from the SHOWN coordinate, and CHATBOX's show=0.30 squashed twelve of
+# sixteen emotion x tier cells onto "reserved" and every emotion onto "calm".
+# Words now read FELT -- `show` is bandwidth for the BODY, and fewer servos does
+# not make a robot less articulate -- and the D bands are cut fine enough to
+# resolve both robots' (disjoint) ranges.
+for robot in ("CHATBOX", "ELLEBOT"):
     b = A.to_pad(A.ROBOTS[robot]["ocean"])
-    words = []
-    for t in ladder:
-        shown = A.show(A.feel_with_relationship(b, 0.0, 0.0, t),
-                       A.ROBOTS[robot]["show"])
-        words.append(A.descriptors(shown)[2])
-    print(f"    {robot:8s} " + "  ".join(f"{t}={w}" for t, w in zip(ladder, words)))
-    check(f"{robot}: {want_distinct} distinct dominance words across the ladder",
-          len(set(words)), want_distinct)
+    words = [A.descriptors(A.feel_with_relationship(b, 0.0, 0.0, t))[2]
+             for t in ladder]
+    print(f"    {robot:8} " + "  ".join(f"{t}={w}" for t, w in zip(ladder, words)))
+    check(f"{robot}: all {len(ladder)} tiers give a distinct dominance word",
+          len(set(words)), len(ladder))
+
+print("\n=== 22. The word reads the coordinate, not the tier ===")
+# If each tier simply mapped to a word, the word would be the tier relabelled and
+# would carry no cross-robot meaning. Absolute bands keep it a reading of D: the
+# two robots' ranges are disjoint EXCEPT for one near-matched pair, which must
+# therefore land on the same word despite sitting at opposite ends of their own
+# ladders.
+d_cb = A.feel_with_relationship(A.to_pad(A.ROBOTS["CHATBOX"]["ocean"]), 0, 0, "close")
+d_eb = A.feel_with_relationship(A.to_pad(A.ROBOTS["ELLEBOT"]["ocean"]), 0, 0, "unknown")
+check(f"CHATBOX@close (D={d_cb['D']:+.3f}) and ELLEBOT@unknown (D={d_eb['D']:+.3f}) "
+      "share a word", A.band("D", d_cb["D"]), A.band("D", d_eb["D"]))
+check("the two ranges really are disjoint",
+      d_eb["D"] - d_cb["D"] > 0.20, True)      # wider than one tier step
+
+print("\n=== 23. The paper's worked example still reproduces ===")
+# The one external calibration point. Reading `shown` broke it (it returned
+# "even, calm, reserved"); reading felt restores it.
+base = A.to_pad(A.ROBOTS["CHATBOX"]["ocean"])
+check("CHATBOX at rest is still 'warm, calm, reserved'",
+      ", ".join(A.descriptors(base)), "warm, calm, reserved")
 
 print(f"\n{'All checks passed.' if not failures else f'{failures} FAILED.'}\n")
 raise SystemExit(1 if failures else 0)

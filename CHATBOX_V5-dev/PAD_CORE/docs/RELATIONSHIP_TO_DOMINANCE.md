@@ -151,6 +151,24 @@ lifts 13° higher, the head lifts, and each step runs 250 ms faster.
 
 ### 7.2 Speech — two fragments in the prompt
 
+| tier | CHATBOX words | ELLEBOT words |
+|---|---|---|
+| unknown | even · calm · **withdrawn** | warm · lively · **even-handed** |
+| visitor | even · calm · **retiring** | warm · lively · **forthright** |
+| known | even · calm · **reserved** | warm · lively · **assertive** |
+| close | even · calm · **even-handed** | warm · lively · **commanding** |
+
+Emotion moves the first two words; the tier moves the third — the three-axis
+split showing up directly in the output. Every tier gets its own word on both
+robots. The bands are **absolute**, so CHATBOX@`close` and ELLEBOT@`unknown`
+both say *even-handed*: they genuinely sit at nearly the same Dominance. That is
+what keeps the word a reading of the coordinate rather than the tier relabelled.
+
+Words read the **felt** coordinate, not the shown one. `show` is expressive
+bandwidth for the *body*; scaling the words by it squashed twelve of CHATBOX's
+sixteen emotion × tier cells onto "reserved" and every emotion onto "calm", and
+contradicted the paper's own worked example — which only reproduces from felt.
+
 ```
 • Your manner right now is warm, calm, reserved.            ← descriptor words
 • With this person, follow their topic, and you may add      ← behavioural

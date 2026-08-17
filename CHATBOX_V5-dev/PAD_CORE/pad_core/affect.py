@@ -163,13 +163,34 @@ SECTORS = ("pleased", "elated", "alert", "tense",
 # Per-axis descriptor bands — the words that would go into the LLM system
 # prompt. Checked against the paper's worked example: CHATBOX's published
 # coordinate returns "warm, calm, reserved".
+# Per-axis descriptor bands — the words that go into the LLM system prompt.
+#
+# P and Ar keep the original edges. D is cut finer, and deliberately: the two
+# robots sit in DISJOINT parts of the D axis (CHATBOX -1.00..-0.24, ELLEBOT
+# +0.02..+0.82), so the original five edges resolved only one or two rungs each —
+# CHATBOX said "reserved" for twelve of sixteen emotion x tier cells, which makes
+# the third word useless as a signal of the relationship for that robot. These
+# seven edges give each robot four distinct words across its own range.
+#
+# They stay ABSOLUTE rather than normalised per robot, which is what keeps the
+# word a reading of the coordinate instead of a relabelled tier: CHATBOX at
+# 'close' and ELLEBOT at 'unknown' are 0.26 apart and both say "even-handed",
+# because they genuinely sit at nearly the same Dominance.
+#
+# Checked against the paper's worked example: CHATBOX's published resting
+# coordinate still returns "warm, calm, reserved".
+#
+# CAVEAT: the D edges are placed around these two personas' ranges. A third robot
+# with a very different baseline may need them revisited — the ladder resolves
+# the axis, not any arbitrary sub-interval of it.
 BANDS = {
     "P":  ((0.50, "affectionate"), (0.15, "warm"),      (-0.15, "even"),
            (-0.50, "cool"),        (-9.0, "cold")),
     "Ar": ((0.50, "excitable"),    (0.15, "lively"),     (-0.15, "calm"),
            (-0.50, "placid"),      (-9.0, "languid")),
-    "D":  ((0.50, "commanding"),   (0.15, "assertive"),  (-0.15, "even-handed"),
-           (-0.70, "reserved"),    (-9.0, "retiring")),
+    "D":  ((0.62, "commanding"),   (0.32, "assertive"),  (0.12, "forthright"),
+           (-0.44, "even-handed"), (-0.74, "reserved"),  (-0.92, "retiring"),
+           (-9.0, "withdrawn")),
 }
 
 
@@ -357,7 +378,7 @@ def pipeline(traits: Dict[str, float], valence: float, arousal: float,
         "shown": shown,
         "tier": tier,
         "name": affect_name(shown["P"], shown["Ar"]),
-        "words": descriptors(shown),
+        "words": descriptors(felt),      # see the note in adapter.process_turn
         # Derived from `felt`, not `shown`. The body's display fraction and
         # amplitude are two descriptions of the same restraint, so multiplying
         # them would apply it twice and flatten the contrast between the robots.

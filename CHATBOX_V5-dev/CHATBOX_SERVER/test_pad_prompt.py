@@ -116,24 +116,21 @@ def test_tier_changes_the_prompt():
           "instruction blocks across the ladder) ✓")
 
 
-def test_descriptor_compression_is_as_pinned():
-    """The experiment's power depends on these counts. CHATBOX's show=0.30
-    compresses Dominance to 2 words across the ladder where ELLEBOT gets 3 —
-    so a null result on CHATBOX alone is mechanical, not evidence."""
-    counts = {}
+def test_every_tier_gets_its_own_word():
+    """The third descriptor word is the relationship's only mark on the prompt,
+    so a robot whose word never changes says nothing about its relationship.
+
+    This used to fail badly: descriptors were read from the SHOWN coordinate and
+    CHATBOX's show=0.30 collapsed twelve of sixteen emotion x tier cells onto
+    'reserved'. Words now read FELT and the D bands resolve both robots' ranges.
+    """
     for robot, key in (("chatbox", "CHATBOX"), ("ellebot", "ELLEBOT")):
         base = affect.to_pad(affect.ROBOTS[key]["ocean"])
-        words = {affect.descriptors(
-            affect.show(affect.feel_with_relationship(base, 0.0, 0.0, t),
-                        affect.ROBOTS[key]["show"]))[2]
-            for t in affect.TIERS}
-        counts[robot] = len(words)
-    assert counts["chatbox"] == 2, counts
-    assert counts["ellebot"] == 3, counts
-    assert counts["ellebot"] > counts["chatbox"], \
-        "the embodiment argument depends on ELLEBOT differentiating more"
-    print(f"5. descriptor compression pinned: chatbox {counts['chatbox']} vs "
-          f"ellebot {counts['ellebot']} distinct dominance words ✓")
+        words = [affect.descriptors(
+            affect.feel_with_relationship(base, 0.0, 0.0, t))[2]
+            for t in affect.TIERS]
+        assert len(set(words)) == len(affect.TIERS), f"{robot}: {words}"
+    print("5. every tier yields a distinct dominance word on both robots ✓")
 
 
 def test_grid_runs_headless():
@@ -243,7 +240,7 @@ if __name__ == "__main__":
     test_no_metrics_leak_into_the_prompt()
     test_first_time_wording_follows_the_count_not_the_tier()
     test_tier_changes_the_prompt()
-    test_descriptor_compression_is_as_pinned()
+    test_every_tier_gets_its_own_word()
     test_grid_runs_headless()
     test_style_is_sent_only_when_the_mood_moves()
     test_style_precedes_the_gesture_tag()

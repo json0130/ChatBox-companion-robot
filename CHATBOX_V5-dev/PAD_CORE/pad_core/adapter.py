@@ -95,7 +95,12 @@ class PADPipelineAdapter:
         felt = affect.feel_with_relationship(baseline, v, a, relationship_tier)
         shown = affect.show(felt, self._show)
 
-        words = affect.descriptors(shown)
+        # Descriptors read FELT, not shown. `show` is how much of its temperament
+        # a BODY can display — a tabletop robot with fewer servos is not thereby
+        # less articulate, and scaling the words by it both squashed CHATBOX into
+        # one arousal word for every emotion and contradicted the paper's own
+        # worked example ("warm, calm, reserved" only reproduces from felt).
+        words = affect.descriptors(felt)
         # Derived from FELT, not shown: the body's display fraction and amplitude
         # are two descriptions of the same restraint, so applying both would
         # double-count it and flatten the contrast between the two robots.

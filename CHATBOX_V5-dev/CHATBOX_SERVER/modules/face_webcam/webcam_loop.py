@@ -10,15 +10,28 @@ Run from CHATBOX_SERVER/:
 In-window keyboard controls:
     T       — open chat input box (type message, Enter=send, Esc=cancel)
     E       — open enroll box (type name, Enter=capture 12 frames, Esc=cancel)
-    B       — boost current person's rapport+trust (+0.15 each)
+    B       — operator override: boost current person's rapport+trust (+0.15 each)
     S       — save faces.npz
     Q / Esc — quit and auto-save faces
 
 Tier progression (at 1 tick/sec, happy emotion):
     unknown → visitor : tick 1   (first interaction)
     visitor → known   : tick 6   (count > 5)
-    known   → close   : ~34 s    (rapport+trust average > 0.70 via auto-increment)
-    OR press B 5 ×               (instant +0.15 each press)
+    known   → close   : NOT within one session — see below
+    OR press B 5 ×               (operator override, +0.15 to both per press)
+
+`close` needs (rapport + trust) / 2 > 0.70. The per-tick auto-increment moves
+RAPPORT only, because it is computed from felt Pleasure — the warmth read off a
+face — and that is what rapport is. Trust is about what the child chose to
+disclose, which no single frame can show, so it moves only at end of session,
+where the extractor reads the transcript (+/- 0.2, LLM-judged).
+
+So `close` is a cross-session, disclosure-gated state: roughly 3 sessions even
+with the maximum trust gain each time. That is deliberate. Until it was fixed
+the same delta was written to BOTH axes, which made trust a duplicate of rapport
+and let `close` arrive after ~48 s of smiling — leaving the relationship, which
+the design calls the slow signal, as the fastest-moving quantity in the system.
+Demos that need a specific rung live should use `tier_override`.
 """
 
 from __future__ import annotations
@@ -658,9 +671,24 @@ def _update_rapport_trust(
     store: InMemoryGraphStore,
     person_id: str,
     robot_id:  str,
-    delta: float,
+    d_rapport: float = 0.0,
+    d_trust:   float = 0.0,
     verbose: bool = False,
 ) -> None:
+    """Add independent deltas to the pair's rapport and trust.
+
+    The two axes are separate on purpose, and every caller must say which one it
+    is moving. This used to take a single `delta` applied to BOTH, which made
+    rapport and trust numerically identical in live operation — and since the
+    tier reads `score = (rapport + trust) / 2`, that collapsed to `score =
+    rapport` and made trust a decorative second copy.
+
+    What distinguishes them is already written down, in the end-of-session
+    extractor's own brief (extraction.py): "rapport_delta rises with warmth and
+    positive affect; trust_delta rises with the child sharing personal things."
+    Warmth is readable from a face; disclosure is not. So the per-tick path,
+    which is driven by facial valence, may move rapport only.
+    """
     from modules.graph_relationship.schema import PersonNode, RobotNode, Embodiment
     from modules.graph_relationship.interactions import set_closeness
 
@@ -670,8 +698,8 @@ def _update_rapport_trust(
         store.upsert_node(RobotNode(id=robot_id, name=robot_id,
                                     embodiment=Embodiment.CAT))
     r_cur, t_cur = _read_rapport_trust(store, person_id, robot_id)
-    r_new = min(1.0, r_cur + delta)
-    t_new = min(1.0, t_cur + delta)
+    r_new = min(1.0, r_cur + d_rapport)
+    t_new = min(1.0, t_cur + d_trust)
     # Closeness lives on the pair's InteractionNode.
     set_closeness(store, person_id, robot_id, rapport=r_new, trust=t_new,
                   source="webcam_loop")
@@ -1501,10 +1529,19 @@ class WebcamKGLoop:
             interaction_count=bi.interaction_count,
         )
         self.bridge.post_turn(person_id, self.robot_id, pad, emotion=emotion)
+        # RAPPORT only. This delta is derived from felt Pleasure, i.e. from the
+        # warmth read off a face, and warmth is what rapport is. Trust is about
+        # what the child chose to tell the robot, which no frame can show; it
+        # moves at end of session, where the extractor can read the transcript.
+        # Consequence, and it is intended: `close` needs (rapport+trust)/2 > 0.70,
+        # so it can no longer be reached inside one sitting on a smile alone —
+        # it takes trust accrued across sessions. The tier is meant to be the
+        # slow signal, and until now it was the fastest-moving one in the system,
+        # crossing to `close` in ~48 s of a happy face.
         p = pad["pad_state"][0]
         if p > 0.05:
             _update_rapport_trust(self.store, person_id, self.robot_id,
-                                  delta=0.025 * p)
+                                  d_rapport=0.025 * p)
         self._last_pad_result = pad
         return bi, pad
 
@@ -2450,9 +2487,15 @@ class WebcamKGLoop:
                             self._consolidate_preview()   # dry-run: preview topic merges
                     elif key in (ord("b"), ord("B")) and last_person_id:
                         with self._store_lock:
+                            # Both axes, deliberately: this is an operator
+                            # override for fast-forwarding a relationship during
+                            # testing, not an inference from anything observed.
+                            # Keeping trust on it is what still allows `close` to
+                            # be reached by hand now that the per-tick path
+                            # cannot get there.
                             _update_rapport_trust(
                                 self.store, last_person_id, self.robot_id,
-                                delta=0.15, verbose=True,
+                                d_rapport=0.15, d_trust=0.15, verbose=True,
                             )
                             self._mark_kg_dirty()
                     elif key in (ord("s"), ord("S")):

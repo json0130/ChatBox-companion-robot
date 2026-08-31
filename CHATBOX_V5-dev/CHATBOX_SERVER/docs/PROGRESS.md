@@ -6,6 +6,63 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## fix(closeness): rapport and trust are two axes, not one written twice  *(branch `feature/pad-affect-core`)*
+
+**Goal (user):** the tier reads `score = (rapport + trust) / 2`, but both live write paths called
+`_update_rapport_trust(delta=…)` with a **single** delta applied to both fields. In live operation the two were
+therefore numerically identical, the average collapsed to `score = rapport`, and trust was a decorative second
+copy. Only the once-per-session extractor ever separated them.
+
+**The intended distinction was already written down** — in the extractor's own brief (`extraction.py`):
+*"rapport_delta rises with warmth and positive affect; trust_delta rises with the child sharing personal
+things."* The per-tick path violated it: its delta is `0.025 × felt P`, i.e. warmth read off a face, and it was
+being credited to trust as well. No single frame can show what a child chose to disclose.
+
+**Fix.** `_update_rapport_trust` now takes independent `d_rapport` / `d_trust`, so every call site must state
+which axis it moves:
+
+| path | before | after |
+|---|---|---|
+| live tick (1 Hz, gated on felt P > 0.05) | `+0.025·P` to **both** | `+0.025·P` to **rapport only** |
+| end-of-session extraction | independent ±0.2 | unchanged |
+| operator B key | `+0.15` to both | unchanged — an explicit override, not an inference |
+
+**Consequence, and it is the point.** `close` needs `score > 0.70`. With rapport alone that is unreachable: an
+unbroken hour of smiling saturates rapport at 1.0 and still scores 0.50 → `known`. Trust must come from the
+extractor at ±0.2 per session, so **three sessions is the floor**, and only at maximum judged disclosure each
+time. Measured with the real code:
+
+| | before (Δ→both) | after (Δ→rapport) |
+|---|---|---|
+| happy face → close | **48 s** | not within a session; 3 sessions minimum |
+| neutral face → close | 264 s | not within a session |
+| → visitor / → known | 1 s / 6 s | unchanged (both ride `interaction_count`) |
+
+This is what the design always claimed. `RELATIONSHIP_TO_DOMINANCE.md` §6 carried the caveat that "a
+relationship the design describes as *slow-moving* is in practice the fastest-changing signal in the system";
+it is now the slowest. Demos needing a specific rung on demand already have `tier_override`.
+
+**Considered and rejected:** (a) retuning the `close` threshold so it stays reachable in one sitting — buys a
+demo convenience at the cost of another by-eye constant to defend, and re-breaks the slow-signal claim;
+(b) collapsing the two fields into a single `closeness` scalar — honest, and behaviourally identical today, but
+it discards self-disclosure as a separate dimension, which for a child-companion system is arguably the more
+interesting of the two.
+
+**Verified — `test_closeness.py` 6/6 (new):** this rule previously had **no coverage at all**. Tests pin
+independent movement, the [0,1] clamp, an hour of smiling stopping at `known` with trust still 0.0, `close`
+arriving on the third +0.2 trust increment, five B presses still reaching `close` for testing, and a direct
+regression guard asserting `score` has not collapsed back onto rapport. Full sweep green: graph suite 51,
+`test_pad_prompt` 10, `test_emotion_va` 8, `test_affinity` 5, `test_first_impression` 6, `pad_core` and
+`servo_style` unchanged.
+
+**Docs corrected:** `RELATIONSHIP_TO_DOMINANCE.md` §3 (the "to both" row and the lockstep consequence), §6 (the
+time-to-tier table, whose 48 s / 264 s figures are now wrong), and §8 (findings — two entries move to *fixed*,
+and the `show = 0.30` entry is marked *stale* since `show` no longer feeds the descriptor words). The
+`webcam_loop` header's tier-progression block was also wrong independently of this change: it advertised
+"~34 s" where the code gave 48 s.
+
+---
+
 ## fix(kg): a mood is FAST, so only the session that wrote it may blend it  *(branch `feature/pad-affect-core`)*
 
 **Goal (user):** close the cross-session mood leak found by the audit. `pre_turn` blends the graph's stored

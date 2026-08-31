@@ -47,7 +47,7 @@ They live on **one `InteractionNode` per (person, robot) pair**, alongside
 
 | # | source | when | amount | can decrease? |
 |---|---|---|---|---|
-| 1 | **live tick** | every tick a face is visible **and** felt Pleasure > 0.05 | `+0.025 × P` to **both** | ❌ |
+| 1 | **live tick** | every tick a face is visible **and** felt Pleasure > 0.05 | `+0.025 × P` to **rapport only** | ❌ |
 | 2 | **session extraction** | once, at end of session | LLM proposes `rapport_delta`, `trust_delta`, clamped **±0.2** | ✅ **the only way down** |
 | 3 | **manual (B key)** | operator | `+0.15` to both | ❌ |
 
@@ -57,13 +57,24 @@ All results clamped to `[0, 1]`.
 affect; trust_delta rises with the child sharing personal things."* No rubric —
 the magnitude is the model's free judgment inside ±0.2.
 
+**Why path (1) is rapport-only.** That delta is computed from felt Pleasure — the
+warmth read off a face — and warmth is precisely what rapport is. Trust, by this
+system's own definition above, is about what the child chose to disclose, and no
+single frame carries that. So the only writer that can move trust is the one that
+sees the transcript. Path (3) moves both because it is an operator override for
+testing, not an inference from anything observed.
+
 ### Three consequences worth a slide
 
-1. **rapport and trust are not independent.** Path (1) adds the *same* delta to
-   both, so they move in lockstep. Only the once-per-session extraction separates
-   them.
-2. **Nothing decays.** There is no time-based forgetting anywhere. Closeness is
-   effectively a ratchet.
+1. **The two axes are genuinely independent.** They used to move in lockstep —
+   path (1) wrote the *same* delta to both, so `score = (rapport + trust) / 2`
+   collapsed to `score = rapport` and trust was a decorative second copy. Now
+   rapport tracks affect within a session and trust tracks disclosure across
+   sessions.
+2. **Nothing decays.** There is no time-based forgetting on rapport or trust.
+   Closeness is effectively a ratchet. *(FAST edges — mood, attention — are
+   separately session-scoped on read; that is a different mechanism and does not
+   apply here.)*
 3. **A sad face never advances closeness.** `P` stays ≤ 0.05, so nothing accrues;
    the tier can only climb via `interaction_count`, and can never reach `close`.
 
@@ -116,15 +127,25 @@ Simulated with the real code, one tick per second, face continuously visible:
 
 | | happy face | neutral face | sad face |
 |---|---|---|---|
-| → visitor | 10 s | 10 s | 10 s |
-| → known | 31 s | 60 s | 60 s |
-| → close | **48 s** | 264 s | **never** |
+| → visitor | 1 s | 1 s | 1 s |
+| → known | 6 s | 6 s | 6 s |
+| → close | **not within a session** | not within a session | **never** |
 
-Nobody chose "48 seconds". It falls out of `0.025 × P` at one tick per second —
-a happy face gives felt `P ≈ 0.5`, so ≈ +0.0125/s, crossing 0.70 at ~48 s.
+`visitor` and `known` both arrive on `interaction_count` alone (`> 0` and `> 5`),
+which is why they are the same for every face and why a sad face still reaches
+`known`.
 
-> **Slide-worthy caveat:** a relationship the design describes as *slow-moving* is
-> in practice the fastest-changing signal in the system.
+`close` needs `(rapport + trust) / 2 > 0.70`. The per-tick path moves rapport
+only, so an unbroken hour of smiling saturates rapport at 1.0 and still scores
+0.50 — `known`. Trust has to come from the end-of-session extractor at ±0.2, so
+**three sessions is the floor**, and only if the model judges maximum disclosure
+each time.
+
+> **This is what the earlier version got wrong.** Both axes took the same delta,
+> so `close` arrived after ~48 s of a happy face: the relationship, which the
+> design calls the *slow* signal, was in practice the fastest-changing quantity in
+> the system. It is now the slowest, which is what it was always supposed to be.
+> Demos that need a specific rung on demand should use `tier_override`.
 
 ---
 
@@ -230,10 +251,12 @@ measurable (hedge count, question rate, who proposes the topic).
 | finding | status |
 |---|---|
 | `family` tier unreachable | **fixed** — removed |
-| rapport and trust move identically in live operation | open |
-| no decay: closeness is a ratchet | open |
+| rapport and trust move identically in live operation | **fixed** — the per-tick delta now moves rapport only, so trust reflects disclosure rather than duplicating warmth |
+| `close` reachable in ~48 s, making the "slow" signal the fastest one | **fixed** — it is now cross-session and disclosure-gated, 3 sessions minimum |
+| no decay: closeness is a ratchet | open — rapport and trust still never fall except by a negative extraction delta |
 | a sad face can never reach `close` | open |
-| CHATBOX's `show = 0.30` compresses all three axes, so its *words* barely move (ELLEBOT's vary on every input) | open — the servo ladder is unaffected |
+| a stale FAST mood edge survived a restart and blended into turn 1 | **fixed** — `pre_turn` ignores mood written before the current session |
+| CHATBOX's `show = 0.30` compresses all three axes, so its *words* barely move (ELLEBOT's vary on every input) | **stale** — `show` no longer feeds the descriptor words at all; they read the *felt* coordinate, and all four CHATBOX tiers now yield distinct triplets |
 | A/B of directive vs adjective alone | **no effect detected, and underpowered** — n=3/cell, keyword metrics counting 0–2 occurrences. Not evidence either way |
 | memory is per-**person**, relationship per-**pair** — so a second robot holds full memory at tier `unknown` | **wording fixed**; the split is intentional |
 

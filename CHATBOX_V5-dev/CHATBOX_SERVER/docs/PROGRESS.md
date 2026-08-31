@@ -6,6 +6,80 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## feat(emotion): the camera regresses V/A instead of manufacturing it from a lookup  *(branch `feature/pad-affect-core`)*
+
+**Goal (user):** the emotion axis of the PAD model was supposed to be a dimensional signal. An audit of the
+live path found it was not: the loaded model was `enet_b0_8_best_vgaf`, an 8-class classifier, and valence /
+arousal were reconstructed downstream as a softmax-weighted average over seven hardcoded points in
+`emotion_detector._VA_TABLE`. A categorical model wearing a dimensional coat.
+
+**Why it mattered, not just tidiness.** Every blended output is a convex combination of those seven points, so
+it can only land inside their hull. Consequence, measured: four of the ten P/Ar descriptor band words in
+`affect.BANDS` were **unreachable at any input** — `cold` and `languid` for both robots, `placid` for ELLEBOT.
+`CONCEPT.md` §4 already *claimed* the camera used `enet_b0_8_va_mtl` and that "no lookup table is needed"; that
+was false when written. The code has now caught up to the documentation rather than the reverse.
+
+**The blocker, and how it was resolved without guessing.** The library returns a bare 10-vector and documents
+nothing about the last two elements — not in `hsemotion_onnx`, not in the maintainer's PyTorch source, not in
+either README. The ONNX graph is one fused `Gemm` emitting a single tensor named `output`, no per-head names,
+no metadata. Ordering was settled from the author's own training notebook for this exact checkpoint
+(`face-emotion-recognition`, `training_and_examples/affectnet/train_emotions-pytorch.ipynb`):
+
+```python
+loss_valence = self.loss_valence(preds[:, num_classes],   target[1])   # index 8
+loss_arousal = self.loss_arousal(preds[:, num_classes+1], target[2])   # index 9
+```
+
+with `num_classes = 8`. Targets are raw AffectNet annotations on `[-1, +1]`, unnormalised, fitted with a
+Concordance-Correlation-Coefficient loss — so the head is already in PAD's units and needs no rescaling. An
+independent check agreed: correlating each output against class probabilities, anger (the one emotion whose
+valence and arousal have opposite signs) came out −0.51 on `[-2]` and +0.55 on `[-1]`.
+
+**Tried and rejected:** a live webcam probe. `/dev/video0` is a wide room-view camera, not a user-facing
+webcam, so a frontal cascade finds nothing; the probe blocked in its positioning loop. Also unnecessary once
+the training source settled the ordering. Synthetic faces were built and discarded — anger separated correctly
+but Fear and Surprise contradicted, and both outputs stayed in a narrow positive band, because the model was
+never trained on schematic drawings.
+
+**Measured over 480 real faces** (60/class, `Affectnet-HQ + RAF-DB`, folder names as truth):
+
+| | categorical acc | valence range | arousal range | 20×20 grid cells |
+|---|---|---|---|---|
+| `best_vgaf` + lookup | 67.5% | [−0.698, +0.800] | [−0.390, +0.799] | 93 / 400 |
+| `va_mtl` regressed | **68.8%** | [−1.063, +0.985] | [−0.649, +1.484] | **204 / 400** |
+
+The blend's observed range lands within a rounding error of the table's hull, confirming the analysis on real
+data. Coverage of the V/A plane rises 2.2×; distinct PAD descriptor triplets over that face distribution roughly
+double (CHATBOX 33 → 63 across all tiers, ELLEBOT 35 → 50). Classification does **not** regress, so the
+regression head is not bought at the price of the label the KG and prompt paths still use.
+
+**Caveats, stated rather than buried:** the dataset carries categorical labels only — no V/A ground truth — so
+these are *capacity* measurements, not accuracy ones; no claim is made that the regression is more *correct*,
+only that it spans a space the lookup structurally cannot. Its shipped `labels.csv` also disagrees with the
+folder names on 37% of rows, so 67.5 / 68.8 are a relative comparison, not absolute benchmarks.
+
+**Fixed along the way:**
+- A latent `KeyError`. `_infer` looped `for i, score in enumerate(scores)` and indexed `self._labels[i]`; on a
+  10-element MTL vector that raises at index 8. Now slices `scores[:n]`, which also stops a V/A value being
+  read as class confidence.
+- V/A is clamped to `[-1, +1]` at the detector boundary. The CCC loss does not bound the head — real faces
+  produced arousal `+1.484` and valence `−1.063` — and everything downstream (`affect.feel`, then the published
+  Eq. 9 / Eq. A1 mapping) assumes a coordinate in that interval.
+- A comment claiming `_VA_TABLE` "mirrors `kg_bridge._EMOTION_VA`" was false: they disagree on six of seven
+  shared labels, and so does `affect.CATEGORY_VA`. Left un-retuned deliberately (the blended path's published
+  numbers were taken with these values) but the divergence is now recorded and pinned by a test.
+
+**Verified — `test_emotion_va.py` 7/7 (new):** the V/A path had **no automated coverage at all**. A comment in
+`kg_bridge` claimed `test_pad_affect` guarded the tables; that file was deleted in `324f569` and the claim went
+stale without anything failing. New tests pin the default backend, the clamp, both paths staying inside the PAD
+domain, confidence excluding the V/A tail, the documented head indices, and the three-table divergence.
+`test_pad_core.py` 7/7 and `test_affect.py` unchanged and green.
+
+**Kept for comparison:** the old path is selectable as `--emotion hsemotion-lookup`, so the A/B above stays
+reproducible — only the model differs between it and the default.
+
+---
+
 ## feat: first-impression integration — auto-enrol strangers into the culture pipeline  *(branch `feature/cultural-awareness`)*
 
 **Goal (user):** port the `first-impression` branch's "meet a stranger" pipeline into the culture branch, but

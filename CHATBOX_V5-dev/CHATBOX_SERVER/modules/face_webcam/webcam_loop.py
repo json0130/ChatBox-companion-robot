@@ -2674,8 +2674,11 @@ def main() -> None:
     p.add_argument("--model",      default=_DEFAULT_MODEL,
                    help=f"Ollama model (default: {_DEFAULT_MODEL})")
     p.add_argument("--emotion",    default="hsemotion",
-                   choices=["hsemotion", "hsemotion-b2", "efficientnet"],
-                   help="Emotion detection backend (default: hsemotion)")
+                   choices=["hsemotion", "hsemotion-lookup",
+                            "hsemotion-b2", "efficientnet"],
+                   help="Emotion detection backend (default: hsemotion, which "
+                        "regresses V/A; 'hsemotion-lookup' is the older "
+                        "lookup-table path, for comparison)")
     p.add_argument("--detector",   default="opencv",
                    choices=["opencv", "mtcnn"],
                    help="Face locator: 'opencv' (single Haar pass shared by "

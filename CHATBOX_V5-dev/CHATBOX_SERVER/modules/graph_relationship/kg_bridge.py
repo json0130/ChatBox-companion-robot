@@ -16,6 +16,14 @@ D (Dominance) is derived fresh from KG edges each turn via derive_tier()
 and is NEVER written back to the graph.  V and A come from the face model only
 (blended with the graph's FAST MoodEdge to soften frame spikes).  Long-term
 state enters the PAD adapter exclusively as text via BridgeInput.structured_memory.
+
+FAST edges are session-scoped on read
+-------------------------------------
+The graph is persisted whole, with no timescale filter on save or load, so a
+FAST MoodEdge survives a process restart even though the schema describes it as
+decaying between sessions.  pre_turn therefore ignores mood written before this
+KGBridge was constructed; see __init__.  Nothing decays these edges, so without
+that gate a mood of unbounded age would blend into the first turn of every run.
 """
 
 from __future__ import annotations
@@ -183,6 +191,20 @@ def _prov(source: str) -> Provenance:
     return Provenance(source=source, confidence=1.0, timestamp=datetime.now(timezone.utc))
 
 
+def _written_since(edge: AnyEdge, since: datetime) -> bool:
+    """True if this edge was written at or after `since`.
+
+    Used to enforce the FAST timescale on read. Timestamps loaded from JSON come
+    back timezone-aware, but an edge built by older code may carry a naive one;
+    those are read as UTC rather than raising, since the alternative is crashing
+    the turn over a mood value.
+    """
+    ts = edge.provenance.timestamp
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts >= since
+
+
 def _ensure_robot_node(store: GraphStore, robot_id: str) -> str:
     """Return robot_id after ensuring a robot node with id=robot_id exists."""
     if store.get_node(robot_id) is None:
@@ -217,6 +239,22 @@ class KGBridge:
         # land on a new Session node under the pair's InteractionNode.
         # person_id -> current session node id.
         self._session: dict[str, str] = {}
+        # When this session began. FAST edges (mood, attention) are only valid
+        # within the session that wrote them — schema.Timescale.FAST says they
+        # "decay within a session" and MoodEdge says it "decays between
+        # sessions" — but nothing ever implemented that, and the graph is
+        # persisted to kg_state.json with no timescale filter on either save or
+        # load. The result was that a MoodEdge written days earlier was reloaded
+        # at startup and blended into turn 1 at its full 0.3 weight: a fresh
+        # process would open a conversation carrying a stale mood nothing could
+        # decay, which also silently contaminated the first turns of any
+        # experiment run. `pre_turn` now ignores FAST edges older than this.
+        #
+        # A session boundary rather than a decay curve, deliberately: it is the
+        # semantics the schema already documents, and it introduces no tuned
+        # time constant that would then need defending. Within a session the
+        # question does not arise, since the loop rewrites mood every tick.
+        self._session_start = datetime.now(timezone.utc)
 
     def current_sessions(self) -> dict:
         """person_id -> current session node id for this bridge's lifetime.
@@ -263,8 +301,14 @@ class KGBridge:
 
         # Valence blend: camera is primary (0.7); graph MoodEdge softens spikes (0.3).
         # Arousal is NOT blended — only the camera frame contributes A.
+        #
+        # The mood edge is FAST, so it counts only if THIS session wrote it. A
+        # persisted one from an earlier run is ignored rather than blended, which
+        # is what stops turn 1 of a fresh process inheriting a stale mood (see
+        # __init__). Nothing decays it, so without this gate its age is unbounded.
         graph_mood = next(
-            (e.value for e in ctx.person_attribute_edges if e.edge_type == "mood"),
+            (e.value for e in ctx.person_attribute_edges
+             if e.edge_type == "mood" and _written_since(e, self._session_start)),
             None,
         )
         blended_v = (0.7 * camera_v + 0.3 * graph_mood) if graph_mood is not None else camera_v

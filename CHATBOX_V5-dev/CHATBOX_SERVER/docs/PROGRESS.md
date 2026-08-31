@@ -6,6 +6,51 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## fix(kg): a mood is FAST, so only the session that wrote it may blend it  *(branch `feature/pad-affect-core`)*
+
+**Goal (user):** close the cross-session mood leak found by the audit. `pre_turn` blends the graph's stored
+`MoodEdge` into camera valence at weight 0.3. That edge is declared FAST — `schema.Timescale.FAST` says mood
+and attention "decay within a session", and `MoodEdge` itself says it "decays between sessions" — but **no
+decay was ever implemented**, and the graph is persisted whole with no timescale filter on either `save`
+(`store.py:313-314`) or `load` (`store.py:330-336`, which writes `self._edges` directly and would bypass a
+filter in `upsert_edge` anyway).
+
+**What that actually did,** measured on the repo's own `kg_state.json`: it holds a `MoodEdge` for `jay` of
+−0.0545 written 2026-08-19. Loading that graph and calling `pre_turn("jay","chatbox","happy")` on a fresh
+`KGBridge` returned valence **0.5436** instead of the camera's **0.80** — a 12-day-old mood steering turn 1 of
+a new process, with nothing able to decay it. Beyond being wrong, it silently contaminates the first turns of
+any experiment: every A/B run would have inherited state from whenever the system last ran.
+
+**Fix — session-scope the read, not the write.** `KGBridge.__init__` records `_session_start`; `pre_turn`
+ignores mood edges written before it. Deliberately a session boundary and not a decay curve:
+
+- It is the semantics the schema already documents, so it makes the code match the comment rather than
+  inventing new behaviour.
+- It introduces **no tuned time constant**. The model already carries more by-eye constants than it can
+  defend, and a half-life here would be one more with no evidence behind it.
+- Within a session the question does not arise: the loop rewrites mood every tick (1 Hz), so a live mood is
+  never stale.
+
+**Why not stop persisting FAST edges instead:** the per-tick save exists so the live viz server can poll
+`kg_state.json` within ~1 s (`webcam_loop.py:2306-2313`). Dropping mood at save would fix the leak and break
+the visualiser. Gating the read fixes the leak and leaves the viz untouched.
+
+**Deliberately unchanged:** SLOW state still persists in full. After the fix the same `jay` graph still derives
+`tier == "close"` from stored rapport/trust — long-term relationship memory is exactly as it was, which is the
+point of the FAST/SLOW split. `AttentionEdge` is also FAST but is written and never read back into the
+pipeline, so it needs no gate; noted in the code rather than pre-emptively handled.
+
+**Verified — `tests_kg_bridge.py` 19/19 (one new):** `test_A_stale_mood_from_a_previous_session_is_ignored`
+pins both halves — a mood timestamped 2020 is ignored on turn 1 (raw camera value passes through), and a mood
+written by the current session still blends to the documented 0.24, so the gate scopes the feature rather than
+disabling it. It also asserts `tier` is untouched. Naive timestamps are read as UTC rather than raising, since
+crashing a turn over a mood value is the worse failure. Full graph suite 51 passed; `test_pad_prompt.py`,
+`test_emotion_va.py` and `pad_core` all green.
+
+**Closes** `AUDIT_REPORT_2.md` OPEN #4 and #5 (outcome was `PERSISTS-UNDECAYED`).
+
+---
+
 ## feat(emotion): the camera regresses V/A instead of manufacturing it from a lookup  *(branch `feature/pad-affect-core`)*
 
 **Goal (user):** the emotion axis of the PAD model was supposed to be a dimensional signal. An audit of the

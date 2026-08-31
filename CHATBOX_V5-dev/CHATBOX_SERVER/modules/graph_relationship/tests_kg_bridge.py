@@ -232,6 +232,44 @@ def test_A_same_turn_blend_isolation():
     assert abs(inp2.valence - 0.24) < 1e-9, "Second pre_turn must see the updated mood"
 
 
+def test_A_stale_mood_from_a_previous_session_is_ignored():
+    """A MoodEdge is FAST: only the session that wrote it may blend it.
+
+    The graph is persisted whole and reloaded at startup with no timescale
+    filter, and nothing decays a mood, so before this gate existed a value
+    written days earlier was blended into turn 1 of a fresh process at its full
+    0.3 weight. Measured on the repo's own kg_state.json: a mood of -0.0545 from
+    12 days prior turned a camera valence of 0.80 into 0.5436 on the first turn.
+    """
+    store, _robot, person = _make_store_with_robot_and_person()
+
+    # Written BEFORE the bridge exists — i.e. by an earlier run.
+    stale = Provenance(source="chatbox", confidence=0.9,
+                       timestamp=datetime(2020, 1, 1, tzinfo=timezone.utc))
+    store.upsert_edge(MoodEdge(source_id=person.id, target_id=person.id,
+                               provenance=stale, value=0.5))
+
+    bridge = KGBridge(store)
+    inp = bridge.pre_turn(person.id, "chatbox", "happy")
+
+    camera_v, _ = emotion_label_to_va("happy")
+    assert abs(inp.valence - camera_v) < 1e-9, (
+        f"stale mood leaked into turn 1: got {inp.valence}, expected the raw "
+        f"camera value {camera_v}"
+    )
+
+    # SLOW state must be unaffected — this gate is about FAST edges only.
+    assert inp.tier == "unknown"
+
+    # And a mood written by THIS session must still blend, or the gate has
+    # simply disabled the feature instead of scoping it.
+    bridge.post_turn(person.id, "chatbox", {"pad_state": (0.8, 0.3, 0.2)})
+    inp2 = bridge.pre_turn(person.id, "chatbox", "neutral")
+    assert abs(inp2.valence - 0.24) < 1e-9, (
+        "a mood written in this session must still be blended"
+    )
+
+
 # ---------------------------------------------------------------------------
 # B. D-axis purity
 # ---------------------------------------------------------------------------

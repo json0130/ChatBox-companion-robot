@@ -6,6 +6,74 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## feat(client-link): the unmodified v4 robot client speaks to the V5 pipeline  *(branch `feature/pad-affect-core`)*
+
+**Goal (user):** the Jetson robot client (`CHATBOX-DEMO_V4/CHATBOX_CLIENT/client.py` on `main`) had no server
+left to talk to — V5's work all happened behind the webui. Give it one, without editing the client: only
+`server_url` in its `client_config.json` should have to change.
+
+**New `modules/webui/robot_link.py`.** A Socket.IO server run alongside the webui's HTTP server, answering on
+exactly the events that client already emits — `client_init` / `chat_message` / `speech` in, and
+`client_init_response` / `chat_response` / `speech_response` back. Mic audio arrives as base64 16 kHz mono WAV
+and is transcribed **server-side** with faster-whisper, the same placement v4 used in
+`Modules/speech_processor.py`.
+
+The decision that mattered: a spoken turn is pushed into **the same queue the web page's text box feeds**,
+not a parallel one. So voice and typed turns take an identical path through face-reco → PAD → KG → prompt
+builder. A second chat path would have drifted out of step with the first within a commit or two — that is
+how the tag-synonym rot below happened.
+
+`enqueue` grew an `on_reply` callback (the web page passes `None`; it just reads state). The reply goes back
+in main's wire format — the tag at the **head** of the response text, `[TAG] words`, which is the only place
+the v4 client looks: its TTS strips that span before speaking, its Arduino output reads it for the gesture.
+The servo STYLE line does **not** go out; this server drives the servos over its own ESP32 socket.
+
+Both optional deps degrade instead of crashing: no `flask-socketio` disables the link, no `faster-whisper`
+disables speech and the link still serves typed chat (`--no-stt` forces it). Whisper loads on a background
+thread so the webui keeps serving frames through a multi-hundred-MB model load, and reports not-ready rather
+than queueing, so a client that speaks too early gets an answer instead of a hang.
+
+**Didn't work / fixed on the way** — four bugs, all found by the two read-only audit passes in
+`AUDIT_REPORT.md` / `AUDIT_REPORT_2.md`, and all of them about *who the robot thinks it is talking to*.
+They matter more once turns arrive from off-machine, because identity is decided by the **server's** camera,
+not by whoever sent the audio.
+
+1. **A stranger inherited the last person's identity.** The 60 s `PID_GRACE` was meant to cover a dropout —
+   nobody in frame. It was also firing when a face *was* in frame and simply did not match, which is not a
+   dropout: `FaceIdentifier._confirm_identity` has already spent its own miss-grace on the hard-pose case and
+   concluded this is someone else. Holding the old id through that handed a stranger the previous person's
+   tier, memories and name — literally "Your name is Jay". The grace now covers only the no-face case.
+
+2. **`dets[0]` was not the person being spoken to.** The identifier votes on the largest box; the overlay read
+   index 0, which is largest-first only during the hold phase. In a sample window `dets[0]` can be a
+   bystander, so the two disagreed about who "the person" was. Both now take the largest box.
+
+3. **An unidentified speaker's history was written and never read back.** Turns were filed under
+   `"__unknown__"` but read with `pid or ""` — two different buckets. Every access now goes through one
+   `_history_key()`, so the writer and the readers cannot disagree again.
+
+4. **Dead expression tags were being sent to the ESP32, and the robot wore a departed person's mood.**
+   `_TAG_SYNONYMS` still mapped `SMILING`→`HAPPY`, `CURIOUS`→`NOD` and friends after those expressions were
+   retired from `_TAG_TO_ESP32`; the dead name sailed through the lookup and out to the robot. One
+   `_resolve_tag()` now gates both callers on the real map, so a synonym can never outlive its target. The
+   families with no honest survivor were **dropped rather than remapped** — forcing `JOY` onto `IDLE` would
+   make an enthusiastic line stand perfectly still, which is worse than the second LLM call `score_tag` spends
+   choosing from the real list.
+
+   Separately, with nobody identified the PAD pipeline could not run (no person → no interaction record → no
+   tier), so `style`/`wire` stayed at their `None` defaults and the servos held whatever mood the last person
+   put them in — and `_last_pad_result` kept **their** tier's manner line, which `_build_system_prompt` then
+   stamped onto a stranger's prompt (only the WHO block is gated on `pid`). `neutral_pad()` now publishes the
+   robot's own resting temperament at a neutral face. It is built on a **throwaway** adapter: the live one
+   carries a smoothing stream, and feeding it invented neutral frames every second while the room is empty
+   would drag the next real person's first reading toward zero. It depends only on (robot, tier), so it is
+   computed once and cached.
+
+**Verified:** 66 + 15 tests still green, nothing regressed. The link itself is not unit-tested — it is I/O
+against a client on another machine; it was exercised by hand.
+
+---
+
 ## feat(padeval): evaluation harness core + E3 chattering, the first zero-LLM result  *(branch `feature/pad-affect-core`)*
 
 **Goal (user):** build the evaluation harness for the ICRA submission. Plan in

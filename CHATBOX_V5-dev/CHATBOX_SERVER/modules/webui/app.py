@@ -40,7 +40,8 @@ sys.path.insert(0, os.path.abspath(
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 
-from modules.affect_bridge import affect  # noqa: E402
+from modules.affect_bridge import PADPipelineAdapter, affect  # noqa: E402
+from modules.webui import robot_link  # noqa: E402
 from modules.graph_relationship.kg_bridge import derive_tier  # noqa: E402
 from modules.graph_relationship.schema import Embodiment, RobotNode  # noqa: E402
 
@@ -48,6 +49,30 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _INDEX = os.path.join(_HERE, "index.html")
 
 ROBOTS = ("chatbox", "ellebot")
+
+_NEUTRAL_PAD: dict[tuple[str, str], dict] = {}
+
+
+def neutral_pad(robot_id: str, tier: str = "unknown") -> dict:
+    """The robot's resting affect, for ticks where nobody is identified.
+
+    PAD state is per-person: with no `person_id` there is no interaction record
+    to read a tier, rapport or trust from, so the pipeline can't run. That left
+    `style`/`wire` at their None defaults, and the servos held whatever mood the
+    last person put them in. This is the fallback — the robot's own temperament
+    at a neutral face, which is exactly what it should be wearing when the room
+    is empty.
+
+    Built on a THROWAWAY adapter: the live one carries a smoothing stream, and
+    feeding it invented neutral frames every second while no one is in view
+    would drag the next real person's first reading toward zero. Depends only on
+    (robot, tier), so it is computed once and held.
+    """
+    key = (robot_id, tier)
+    if key not in _NEUTRAL_PAD:
+        _NEUTRAL_PAD[key] = PADPipelineAdapter(robot_id).process_turn(
+            valence=0.0, arousal=0.0, relationship_tier=tier)
+    return _NEUTRAL_PAD[key]
 
 
 class LiveState:
@@ -373,10 +398,24 @@ def main(argv=None) -> int:
                         "which lines PAD contributed")
     p.add_argument("--esp32-host", default="")
     p.add_argument("--esp32-port", type=int, default=8888)
+    # The robot client dials out to us, so this is on by default — the client's
+    # client_config.json just points server_url at this host:port.
+    p.add_argument("--client-port", type=int, default=robot_link.DEFAULT_PORT,
+                   help="Socket.IO port the CHATBOX CLIENT connects to "
+                        f"(default {robot_link.DEFAULT_PORT}; 0 to disable)")
+    p.add_argument("--stt-model", default="base",
+                   help="faster-whisper size: tiny/base/small/medium/large-v3")
+    p.add_argument("--stt-device", default="cpu", choices=("cpu", "cuda", "auto"),
+                   help="'auto' tries CUDA and falls back to CPU (default cpu)")
+    p.add_argument("--stt-language", default=None,
+                   help="force the STT language, e.g. 'en' (default: auto-detect)")
+    p.add_argument("--no-stt", action="store_true",
+                   help="accept the client's typed chat but not its microphone")
     args = p.parse_args(argv)
 
     from modules.face_webcam.webcam_loop import (
-        LLMClient, WebcamKGLoop, _DetectionWorker, _parse_llm_response, score_tag,
+        LLMClient, WebcamKGLoop, _DetectionWorker, _history_key,
+        _parse_llm_response, score_tag,
     )
 
     llm = None
@@ -438,14 +477,17 @@ def main(argv=None) -> int:
         print(f"[webui] tier override -> {t or 'auto'}", flush=True)
         return True
 
-    pending: list[str] = []
+    # {"msg": str, "on_reply": callable|None}. The callback is how a turn that
+    # came from the robot client gets its answer back to that client — the web
+    # page just reads state, so it passes None.
+    pending: list[dict] = []
     plock = threading.Lock()
 
-    def enqueue(msg: str):
+    def enqueue(msg: str, on_reply=None):
         state.push_chat("you", msg)
         state.update(thinking=True)
         with plock:
-            pending.append(msg)
+            pending.append({"msg": msg, "on_reply": on_reply})
 
     worker = _DetectionWorker(
         loop.face_id, emotion_backend="hsemotion", max_faces=4, det_scale=0.5,
@@ -459,7 +501,21 @@ def main(argv=None) -> int:
     handler = make_handler(state, loop, enqueue, switch_robot, set_tier)
     httpd = ThreadingHTTPServer(("0.0.0.0", args.port), handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    print(f"\n  webui → http://localhost:{args.port}\n")
+    print(f"\n  webui → http://localhost:{args.port}")
+
+    if args.client_port:
+        stt = None
+        if not args.no_stt:
+            stt = robot_link.SpeechToText(model_size=args.stt_model,
+                                          device=args.stt_device,
+                                          language=args.stt_language)
+            stt.start()          # loads in the background; webui serves meanwhile
+        link = robot_link.RobotLink(enqueue, port=args.client_port, stt=stt,
+                                    robot_name=args.robot)
+        if link.start():
+            print(f"  robot client → socket.io on port {args.client_port}"
+                  f"{'  (mic + chat)' if stt else '  (chat only, --no-stt)'}")
+    print(flush=True)
 
     cap = cv2.VideoCapture(args.camera)
     if not cap.isOpened():
@@ -480,6 +536,12 @@ def main(argv=None) -> int:
     # the instantaneous detection: looking away while typing dropped the
     # person to None, which silently emptied the prompt of all memory and
     # made every tier read like a stranger.
+    #
+    # The grace covers ONE case: nobody in frame. A face that IS in frame and
+    # did not match is not a dropout — FaceIdentifier._confirm_identity has
+    # already spent its own miss-grace on the hard-pose case and concluded this
+    # is someone else. Holding the old id through that handed a stranger the
+    # last person's tier, memories and name ("Your name is Jay").
     last_pid, last_pid_t = None, 0.0
     PID_GRACE = 60.0
     overlay = state.snapshot()   # refreshed on the 1 Hz tick, not per frame
@@ -507,10 +569,18 @@ def main(argv=None) -> int:
                 state.update(fps=round(frames / (time.time() - fps_t), 1))
                 frames, fps_t = 0, time.time()
 
-            primary = dets[0] if dets else None
+            # Largest box = who the robot is talking to — the same rule the
+            # identifier votes on, so the two agree about who "the person" is.
+            # dets is only largest-first during the hold phase; in a sample
+            # window dets[0] can be a bystander, and the identity rides on the
+            # biggest box regardless of where it lands in the list.
+            primary = (max(dets, key=lambda d: _DetectionWorker._box_area(d["box"]))
+                       if dets else None)
             pid = primary["person_id"] if primary else None
             if pid is not None:
                 last_pid, last_pid_t = pid, time.time()
+            elif primary is not None:
+                last_pid, last_pid_t = None, 0.0   # an unmatched face: not them
             elif last_pid and time.time() - last_pid_t < PID_GRACE:
                 pid = last_pid          # hold identity through a brief dropout
 
@@ -535,9 +605,9 @@ def main(argv=None) -> int:
                        "sim": (primary or {}).get("sim", 0.0),
                        "emotion": emo, "valence": va[0], "arousal": va[1],
                        "known_people": loop.face_id.known_people()}
+                with tier_lock:
+                    forced = tier_override[0]
                 if pid:
-                    with tier_lock:
-                        forced = tier_override[0]
                     with loop._store_lock:           # noqa: SLF001
                         bi, pad = loop._pipeline_tick(  # noqa: SLF001
                             pid, emo, va=va, tier_override=forced)
@@ -555,6 +625,28 @@ def main(argv=None) -> int:
                         "trust": it.trust if it else 0.0,
                         "interactions": it.interaction_count if it else 0,
                     })
+                else:
+                    # Nobody identified — publish the robot's resting affect so
+                    # the servos have a style to hold and the page shows a real
+                    # state. This also CLEARS the last person: without it their
+                    # tier and words linger in the snapshot after they leave and
+                    # get stamped onto a stranger's turn below.
+                    npad = neutral_pad(loop.robot_id, forced or "unknown")
+                    loop._maybe_send_style(npad["style"])               # noqa: SLF001
+                    # Overwrite, don't just leave: _build_system_prompt reads the
+                    # manner line and its topic directive straight off this pad,
+                    # and only the WHO block is gated on pid. A stale pad from
+                    # the person who just left would put THEIR tier's manner on
+                    # a stranger's prompt.
+                    loop._last_pad_result = npad                        # noqa: SLF001
+                    upd.update({
+                        "tier": npad["tier"], "derived_tier": None,
+                        "pad": npad["pad_state"],
+                        "shown": npad["shown"], "words": npad["words"],
+                        "affect_name": npad["name"], "style": npad["style"],
+                        "wire": npad["wire"],
+                        "rapport": 0.0, "trust": 0.0, "interactions": 0,
+                    })
                 state.update(**upd)
                 overlay = state.snapshot()
                 loop._drain_adapt_events(worker)     # noqa: SLF001
@@ -562,11 +654,16 @@ def main(argv=None) -> int:
 
             # ── chat ──────────────────────────────────────────────────────────
             with plock:
-                msg = pending.pop(0) if pending else None
-            if msg is not None:
+                item = pending.pop(0) if pending else None
+            if item is not None:
+                msg, on_reply = item["msg"], item["on_reply"]
                 if loop.llm is None or not loop.llm.available:
                     state.push_chat("robot", "[no LLM — start with --llm]")
                     state.update(thinking=False)
+                    if on_reply:
+                        # Answer anyway: a robot client left waiting on a reply
+                        # that never comes looks like a dead link.
+                        on_reply("Sorry, my language model isn't running.")
                 else:
                     with loop._store_lock:           # noqa: SLF001
                         prompt = loop._build_system_prompt(   # noqa: SLF001
@@ -574,7 +671,8 @@ def main(argv=None) -> int:
                     if args.trace_prompt:
                         trace_prompt(prompt, loop._last_pad_result,  # noqa: SLF001
                                      pid, msg, loop.robot_id)
-                    hist = list(loop._chat_history.get(pid or "", []))  # noqa: SLF001
+                    hist = list(loop._chat_history.get(  # noqa: SLF001
+                        _history_key(pid), []))
                     raw = loop.llm.respond(prompt, msg, history=hist)
                     tag, verbal = _parse_llm_response(raw)
                     if not tag:
@@ -596,6 +694,16 @@ def main(argv=None) -> int:
                     state.update(thinking=False, results=res)
                     print(f"  [{loop.robot_id}] [{tag or '—'}] {verbal!r}", flush=True)
                     print(f"  [servo] {st['wire']}", flush=True)
+                    if on_reply:
+                        # Main's wire format: the tag rides at the HEAD of the
+                        # response text, which is the only place the client looks
+                        # — its TTS strips a leading '[TAG] ' before speaking and
+                        # its Arduino output reads the same span for the gesture.
+                        # The STYLE line still stays here; the client has no use
+                        # for it and this server drives the servos directly.
+                        reply = f"[{tag}] {verbal}".strip() if tag else (verbal or "")
+                        on_reply(reply)
+                        print(f"  [robot] → client: {reply!r}", flush=True)
                     with loop._store_lock:           # noqa: SLF001
                         loop._apply_chat_result({    # noqa: SLF001
                             "pid": pid, "msg": msg, "verbal": verbal,

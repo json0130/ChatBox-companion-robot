@@ -155,23 +155,29 @@ _TAG_ANY = re.compile(r'\[[^\]]{0,24}\]')      # for stripping, incl. invalid on
 _TAG_TO_ESP32: dict[str, str] = {
     "GREETING": "greeting",
     "WAVE":     "wave",
-    "NOD":      "head_nod",
-    "CONFUSED": "confused",
     "SAD":      "sad",
     "ANGRY":    "angry",
     "SHRUG":    "shrug",
     "POINT":    "point",
-    "DANCE":    "seq_dance",
     "SLEEP":    "sleep",
     "IDLE":     "idle",
-    "HAPPY":    "ears_wiggle",
-    "SURPRISE": "ears_perk",
-    "EARS":     "ears_perk",
 }
 
 
 _LEAK_MARKERS = ("<|im_start|>", "<|im_end|>", "<|endoftext|>",
                  "\nuser", "\nUser", "\nassistant", "\nAssistant")
+
+UNKNOWN_HISTORY_KEY = "__unknown__"
+
+
+def _history_key(pid: Optional[str]) -> str:
+    """Bucket `_chat_history` is stored under for `pid`.
+
+    One function because writer and readers disagreed: turns were filed under
+    "__unknown__" but read back with `pid or ""`, so an unidentified speaker's
+    history was written and never found again. Every access goes through here.
+    """
+    return pid or UNKNOWN_HISTORY_KEY
 
 
 def _clean_reply(text: Optional[str]) -> str:
@@ -189,17 +195,30 @@ def _clean_reply(text: Optional[str]) -> str:
 # Tags the model reaches for that are not in the ESP32 map. Mapping them beats
 # dropping them: the robot performs something sensible instead of nothing, and
 # it saves a second LLM call in the common case.
+#
+# Only near-exact stand-ins belong here. The NOD / HAPPY / SURPRISE / CONFUSED
+# families that used to live here lost their target when those expressions were
+# retired, and there is no honest substitute among the survivors — forcing JOY
+# onto IDLE would make an enthusiastic line stand perfectly still, which is worse
+# than the second LLM call score_tag spends choosing from the real list.
 _TAG_SYNONYMS: dict[str, str] = {
-    "SMILING": "HAPPY", "SMILE": "HAPPY", "CHEERFUL": "HAPPY", "EXCITED": "HAPPY",
-    "LAUGH": "HAPPY", "PLAYFUL": "HAPPY", "JOY": "HAPPY",
     "HI": "GREETING", "HELLO": "GREETING", "WELCOME": "GREETING", "HEY": "GREETING",
-    "CURIOUS": "NOD", "INTERESTED": "NOD", "THINKING": "NOD", "LISTENING": "NOD",
-    "AGREE": "NOD", "YES": "NOD",
     "CONCERNED": "SAD", "SORRY": "SAD", "SYMPATHY": "SAD", "EMPATHY": "SAD",
-    "UNSURE": "CONFUSED", "PUZZLED": "CONFUSED", "QUESTION": "CONFUSED",
-    "WOW": "SURPRISE", "SURPRISED": "SURPRISE", "AMAZED": "SURPRISE",
     "CALM": "IDLE", "NEUTRAL": "IDLE", "DEFAULT": "IDLE",
 }
+
+
+def _resolve_tag(word: str) -> str:
+    """A bare word → a tag the ESP32 can actually perform, or "".
+
+    Both callers route through here so a synonym can never outlive its target:
+    retiring an expression used to leave the synonyms pointing at it, and the
+    dead name would sail through the lookup and out to the robot.
+    """
+    cand = (word or "").strip().upper()
+    if cand in _TAG_TO_ESP32:
+        return cand
+    return _TAG_SYNONYMS.get(cand, "") if _TAG_SYNONYMS.get(cand) in _TAG_TO_ESP32 else ""
 
 
 def _parse_llm_response(text: str) -> tuple[str, str]:
@@ -208,13 +227,12 @@ def _parse_llm_response(text: str) -> tuple[str, str]:
     The tag may appear anywhere — leading, trailing or mid-sentence — and every
     bracketed span is stripped from the spoken text either way, so a stray or
     invalid tag is never read aloud. Returns the FIRST tag that resolves to a
-    real robot expression, so '[SMILING] ... [CURIOUS]' still yields one action.
+    real robot expression, so '[HELLO] ... [SORRY]' still yields one action.
     """
     text = (text or "").strip()
     tag = ""
     for m in _TAG_RE.finditer(text):
-        cand = m.group(1).upper()
-        cand = cand if cand in _TAG_TO_ESP32 else _TAG_SYNONYMS.get(cand, "")
+        cand = _resolve_tag(m.group(1))
         if cand:
             tag = cand
             break
@@ -249,7 +267,7 @@ def score_tag(llm, reply: str, user_msg: str = "") -> str:
         best = str(json.loads(raw[i:j + 1]).get("best", "")).upper()
     except Exception:  # noqa: BLE001 — a tag is never worth crashing a turn over
         return ""
-    return best if best in _TAG_TO_ESP32 else _TAG_SYNONYMS.get(best, "")
+    return _resolve_tag(best)
 
 
 def _send_esp32(expression: str, host: str, port: int = 8888,
@@ -1427,7 +1445,7 @@ class WebcamKGLoop:
                 else:
                     print(f"  [ESP32] no mapping for [{tag}]")
         print(f"  [{self._robot_display}]  \"{verbal}\"\n")
-        pid_key = pid or "__unknown__"
+        pid_key = _history_key(pid)
         if pid_key not in self._chat_history:
             self._chat_history[pid_key] = deque(maxlen=5)
         self._chat_history[pid_key].append((msg, verbal))
@@ -2425,7 +2443,7 @@ class WebcamKGLoop:
                                     # top of the loop). History is snapshotted now — only
                                     # the main thread mutates self._chat_history.
                                     hist = list(self._chat_history.get(
-                                        last_person_id or "", []))
+                                        _history_key(last_person_id), []))
                                     self._chat_requests.put({
                                         "msg": msg, "pid": last_person_id,
                                         "emotion": last_emotion, "history": hist,

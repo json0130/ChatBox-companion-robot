@@ -153,6 +153,57 @@ silently becoming a null. All 75 pre-existing tests unaffected.
 
 ---
 
+## exp(padeval): the full-rung ladder — no directive effect, and the honest power bound  *(branch `feature/padeval-phase3`)*
+
+The decisive controllability probe. Persona and tier **pinned** (CHATBOX, `known`), Dominance forced to the
+midpoint of each of the seven directive bands, descriptor words deliberately left **unchanged** so the only
+thing varying is the directive clause. Every midpoint asserted against `prompt.manner_directive` before use.
+This removes the persona/rung confound (plan R1) and isolates the directive channel. 448 generations, 363 s.
+
+| rung | D | directive | init% (deployed) | init% (distractions removed) |
+|---|---|---|---|---|
+| 0 | +0.81 | open with something you already know | 66% | 9% |
+| 1 | +0.47 | propose the next topic yourself | 62% | 16% |
+| 2 | +0.22 | offer a topic if they do not bring one | 56% | 6% |
+| 3 | −0.16 | either of you may open a topic | 66% | 9% |
+| 4 | −0.59 | follow their topic, one follow-up | 66% | 9% |
+| 5 | −0.83 | ask about what they bring up, do not introduce | 75% | 3% |
+| 6 | −0.96 | answer only what they ask | 75% | 3% |
+
+**Deployed prompt: no effect, and the sign is backwards.** tau = +0.083 (p = 0.16) on the binary; rung 6
+("answer only what they ask") initiates *more often* than rung 0 ("open with something you already know") —
+75% vs 66%, Fisher p = 0.59. At a ~70% base rate with n = 32/rung the minimum detectable difference is ~26
+points, so this is not a precision problem: an effect large enough to matter would have shown.
+
+**Distractions removed: the right direction, but genuinely underpowered.** tau = −0.093 (p = 0.11), rung 0 at
+9% falling to 3% at rung 6. That is the ordering the ladder predicts, and rungs 5/6 are the lowest — but with
+a 3-16% base rate, n = 32 gives 1-5 events per cell and a minimum detectable difference of ~23 points. **This
+arm cannot resolve the effect it is hinting at, and reporting it as a null would be wrong.**
+
+Power for the rung-0 vs rung-6 contrast at alpha .05, power .80:
+
+| arm | observed | n needed per rung | total generations |
+|---|---|---|---|
+| deployed | 66% vs 75% | 402 | ~2,800 (~70 min) |
+| distractions removed | 9% vs 3% | **245** | **~1,715 (~30 min)** |
+
+**Where this leaves the claim.** Two separate statements, and they must not be merged:
+
+1. *In the deployed configuration the behavioural directive does not control topic initiation.* Adequately
+   powered for any effect worth claiming, and the point estimate runs the wrong way. This is a real finding.
+2. *With the memory and capability blocks removed, a small effect in the predicted direction may exist and
+   this experiment cannot resolve it.* Underpowered by roughly 8x. Not a null — an open question with a
+   costed answer.
+
+The honest headline is (1): **a prompt-resident behavioural instruction is overridden by the same prompt's
+memory block**, which is a result about prompt-based control rather than about PAD. The architecture's other
+two claims are untouched by it — E3's setpoint stability and E2's rank result are structural and stand.
+
+**Next, if pursued:** the ~30-minute powered run on the stripped arm settles (2) properly. Nothing else should
+be written about controllability until it does.
+
+---
+
 ## fix(padeval): cry-wolf coder fixed; the distractor is MEMORY, not capabilities; no tier gradient  *(branch `feature/padeval-phase3`)*
 
 ### Coder fix — the directional bias is gone

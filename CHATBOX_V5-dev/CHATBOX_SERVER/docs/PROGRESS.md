@@ -153,6 +153,78 @@ silently becoming a null. All 75 pre-existing tests unaffected.
 
 ---
 
+## feat(padeval): Phase 3 — seeded, paired generation, and bit-reproducibility measured rather than assumed  *(branch `feature/padeval-phase3`)*
+
+**Worktree.** Built in `../chatbox-phase3` on its own branch. A second session had committed to
+`webcam_loop.py` (`dc87d93`) mid-flight, and Phase 3 is the first phase whose measured artifact depends on
+that exact file, so the campaign runs isolated and merges deliberately.
+
+`dc87d93` was diffed before proceeding: five hunks, all outside the harness's contract surface —
+`_build_system_prompt`, `LLMClient`, `respond`, `manner_directive`, the pad-dict reads, `_adapter` and
+`gesture_style` had **0 changed lines** each. The one overlap is `_parse_llm_response` routing through the new
+`_resolve_tag` with pruned synonyms: the recorded `tag` changes, but `_TAG_ANY.sub` strips every bracketed
+span regardless, so the reply text E1 codes is byte-identical. Consequence to note: the `tag` column in
+pre-existing `runs/*.jsonl` predates that change and is not comparable across it.
+
+**`LLMClient.respond` gained optional `temperature` / `seed`,** applied after the built-in defaults so they
+win only when passed, and omitted from the request entirely when `None`. Wrapped rather than subclassed in
+`padeval/llm.py`: a subclass would have restated the stop-string list and `_clean_reply` and drifted, which
+would mean measuring something other than the deployed path. Behaviour preservation is asserted with a stub
+client capturing request kwargs — no Ollama needed, so that half runs in CI.
+
+**Pairing (requested).** `pair_key` deliberately excludes the assignment and the seed derives from it, so the
+`identity` and `perm_emotion_D` trials for the same (robot, tier, emotion, stimulus, arm, replicate) draw the
+**same seed** and differ only by the manipulation. E1 is therefore a paired comparison by construction rather
+than two runs argued to be comparable afterwards. Run sequentially instead and every difference is confounded
+with whatever drifted between batches; not recoverable later, because the seeds would already be wrong.
+
+**Finding 1 — bit-reproducibility is NOT available on this backend, and the approved gate is withdrawn.**
+
+| | byte-level replication, 10 interleaved prompts |
+|---|---|
+| temperature 0.7, fixed seeds | **80%** |
+| temperature 0.0, fixed seeds | **80%** |
+
+Same seed repeated back-to-back on one prompt reproduces perfectly (10/10 identical). It is **interleaving**
+distinct prompts that breaks it, and greedy decoding does not rescue it — identical 80% — so the residue is
+backend batching / KV-cache state, not the sampler. Warming every distinct prompt first does not close it
+either. A `warm_up` bug was found and fixed on the way (it keyed on the system prompt alone, but the prefix
+cache is over the whole token sequence, so warming a batch warmed only its first member).
+
+The Phase 3 gate of "100% byte-identical" would either fail forever or force a false claim into a methods
+section, so it is replaced by: report the byte-level rate, and assert only a floor (>= 0.5) as a smoke test
+that the seed reaches the backend at all — a broken seed would sit near chance, not near 80%.
+
+**The reproducibility claim the paper should make is OUTCOME-level.** Every observed mismatch is a
+near-paraphrase — *"learn new things"* vs *"learn lots of new things"* — which no topic-initiation coder would
+separate. `outcome_replication()` measures agreement on the coded label rather than the raw text and is the
+figure to publish; it runs in Phase 4 once a coder exists.
+
+**Finding 2 — reply diversity is a property of the PROMPT, and it is not uniform.**
+
+| prompt | distinct replies across 5 seeds | modal share |
+|---|---|---|
+| tag-constrained + `"mm."` | 2/5 | 80% |
+| tag-constrained + open question | 5/5 | 20% |
+
+A low-entropy stimulus collapses toward one continuation, so replicates on that cell buy almost no
+information. The approved power calculation assumed 32 stimuli x 3 replicates with a uniform ICC; that
+overstates the effective n for low-entropy cells. `sample_diversity()` exists to screen the stimulus set
+before the main run so the distribution can be reported rather than assumed. **This needs a design decision
+before Phase 6** — see the open question below.
+
+**Verified — `padeval/tests/test_llm_determinism.py` 10 checks (7 offline, 3 live), 32 padeval tests total,
+43 pre-existing green.** Offline half pins that spoken-reply and json_mode requests are byte-identical to
+before, that overrides win when passed, that history expansion is unchanged, that paired assignments share a
+seed while keeping distinct trial keys, and that the seed responds to every design field and is
+order-independent.
+
+**Open for the next session:** with replicates buying little on low-entropy cells and bit-reproducibility
+capped at ~80% regardless, the stimulus/replicate split needs revisiting — most likely more stimuli and fewer
+replicates, since generalisation rests on `n_stimuli` anyway.
+
+---
+
 ## feat(padeval): E2 analytic Jacobian — a calibrated leakage metric, and collapse proved degenerate  *(branch `feature/pad-affect-core`)*
 
 **Goal (user):** Phase 2 of the harness, run as a PAIR — once against the deployed system with the

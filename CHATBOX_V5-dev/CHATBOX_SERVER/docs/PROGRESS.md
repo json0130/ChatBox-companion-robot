@@ -153,6 +153,72 @@ silently becoming a null. All 75 pre-existing tests unaffected.
 
 ---
 
+## feat(padeval): Phase 4a — the rule coder, 100% on 48 authored cases  *(branch `feature/padeval-phase3`)*
+
+**Goal (user):** build E1's primary outcome coder. Rule-based and PRIMARY on purpose: it is deterministic and
+fixed before the data exists, so it cannot be tuned after seeing a result — an LLM judge can be re-prompted
+until the numbers improve and nobody can prove it wasn't.
+
+**Two corrections to the plan's assumptions, found by checking rather than trusting.**
+
+*The "free labelled data" is 36 replies, not 250.* The plan claimed ~8,700 qwen replies were already on disk;
+that counted JSONL **lines** (each carrying a ~2,000-char prompt), not replies. Actual inventory:
+`A_adj.jsonl` 18 + `B_dir.jsonl` 18 = **36 distinct replies**, and the other two run files were `--no-llm` with
+empty replies. So the 250-reply gold set cannot come from existing artifacts; it needs a fresh unlabelled pool,
+which is cheap (~250 seeded generations) and does not require the full campaign.
+
+*NLTK's tagger was missing.* `averaged_perceptron_tagger_eng` (the name newer NLTK requires) was absent, so
+`pos_tag` raised. Downloaded, and `nltk==3.9.4` is now pinned in a new `requirements-eval.txt` — a tagger
+revision would silently change coded outcomes, which is not something to leave floating.
+
+**Design — why a rule coder is tractable here.** The experiment controls the topic universe on all three
+sides: person memory is seeded identically in every cell (guitar/music, space/science), robot capabilities are
+authored in the spec YAMLs, and stimulus topics are authored by us. So the coder matches against sets we wrote
+down rather than guessing at open-domain semantics. Two detectors OR'd: a closed-lexicon match (20 topics, 121
+surface forms) and an open-noun detector for the residual case. Morphology is a hand-written irregular map plus
+an explicit suffix rule, **not a stemmer** — Porter folds `space` and `spacing`, and "we used the Porter
+stemmer" is not something a reviewer can audit.
+
+**Binary AND ordinal.** The binary saturates: rungs 4/5/6 all predict "no new topic" and 0/1/2 all predict
+"new topic", so it resolves at most three of seven commanded levels and would understate the controller. The
+0-5 ordinal (answers-only / asks-back / follow-up+expansion / hedged offer / asserts / opens-with-a-remembered-
+fact) maps monotonically onto the ladder and is what Kendall's tau gets computed on. Level 5 is exactly rung
+0's wording, reachable only by ELLEBOT at `close`.
+
+**Four real bugs found by the authored cases, which is what they are for.**
+
+1. *`Was` tagged NNP.* Sentence-initial capitals fooled the tagger, so `"How did it go? Was it hard?"` coded as
+   introducing a topic — a false positive on precisely the ask-back behaviour the suppressing rungs produce,
+   which would have destroyed the effect. Fixed by tagging lower-cased tokens; a genuine proper-noun topic
+   still tags NN (`tim` -> NN), so nothing is lost.
+2. *Verbs mis-tagged as nouns.* `want`, `let`, `cover` and friends fired the open detector. Added a `VERB_LIKE`
+   guard, kept separate from `NON_TOPIC_NOUNS` so the two reasons for exclusion stay legible.
+3. *`"you like"` collided with the hedge `"if you like"`,* so *"We could talk about space if you like"* coded
+   as a remembered fact (level 5) instead of a hedged offer (level 3). Removed `you like`/`you love` from the
+   recall markers — a recall marker has to be unambiguous about who said it.
+4. *The open detector fired on elaboration.* `"Did the maths test cover fractions?"` counted as initiating
+   because `fractions` is not in the lexicon. Now suppressed when the reply still mentions a stimulus topic:
+   a specific noun inside their topic is elaboration, not initiation. **The cost is a documented false
+   negative** — a reply that stays on their topic and bolts on an off-lexicon new one reads as not-initiated —
+   accepted because the stimuli raise at most one lexicon topic and the robot's plausible new topics are its
+   capability list, which IS in the lexicon. Novel lexicon topics are never suppressed this way.
+
+One "miss" was **not** a bug: `"Space is wonderful, isn't it?"` was coded level 1 against an expected 0. A tag
+question does ask back, so the coder was right and the authored expectation was wrong. Corrected in the test
+rather than worked around in the coder.
+
+**Verified — `padeval/tests/test_rule_coder.py`, 48/48 (100%), 37 padeval tests total.** The cases are written
+to be hard rather than flattering: follow-up questions about their topic, topics the stimulus already raised,
+negated mentions, the hedge/assert boundary, the recall/pitch boundary, backchannels and empty input. Also
+pinned: binary and ordinal stay consistent (`initiated` iff `level >= 3`), the lexicon has no surface-form
+collisions, negation scope stops at a clause break rather than swallowing the sentence, and the coder is
+deterministic over repeats.
+
+**Still open before the gold set:** kappa against human-coded replies must clear 0.70 before any GPU hours,
+and the pool has to be generated first (see the 36-vs-250 correction above).
+
+---
+
 ## feat(padeval): Phase 3 — seeded, paired generation, and bit-reproducibility measured rather than assumed  *(branch `feature/padeval-phase3`)*
 
 **Worktree.** Built in `../chatbox-phase3` on its own branch. A second session had committed to

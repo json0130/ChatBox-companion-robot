@@ -98,8 +98,9 @@ def _clamp(v: float) -> float:
     return max(-1.0, min(1.0, v))
 
 
-def tier_deltas(assignment: AxisAssignment, tier: str) -> Dict[str, float]:
-    """Route a tier's (dP, dAr, dD) offset tuple onto axes.
+def route_offsets(assignment: AxisAssignment,
+                  offsets: Tuple[float, float, float]) -> Dict[str, float]:
+    """Route an explicit (dP, dAr, dD) offset triple onto axes.
 
     `affect.TIER_OFFSETS` is authored in AXIS space, not source space: index 2 is
     the tier's principal displacement and indices 0/1 are deliberate secondary
@@ -111,13 +112,22 @@ def tier_deltas(assignment: AxisAssignment, tier: str) -> Dict[str, float]:
     to `tier_axis`, the pleasure-nudge follows whichever axis valence owns, and
     the arousal-nudge follows whichever axis arousal owns. Under IDENTITY this is
     the identity mapping.
+
+    Taking the triple explicitly is what lets E2 run the leak/no-leak pair
+    without monkey-patching `affect.TIER_OFFSETS` — the ablation is a caller's
+    argument, not a mutation of the shipped model.
     """
-    d_p, d_ar, d_d = affect.tier_offset(tier)
+    d_p, d_ar, d_d = offsets
     out = {"P": 0.0, "Ar": 0.0, "D": 0.0}
     out[assignment.tier_axis] += d_d
     out[assignment.valence_axis] += d_p
     out[assignment.arousal_axis] += d_ar
     return out
+
+
+def tier_deltas(assignment: AxisAssignment, tier: str) -> Dict[str, float]:
+    """Route a named tier's offset onto axes. See `route_offsets`."""
+    return route_offsets(assignment, affect.tier_offset(tier))
 
 
 def compose(assignment: AxisAssignment,
@@ -134,6 +144,23 @@ def compose(assignment: AxisAssignment,
     clamping destroys information (CHATBOX at `unknown` wants D=-1.043) and fires
     far more often under permutation, which makes its rate a measure of
     interference rather than a nuisance.
+    """
+    return compose_offsets(assignment, baseline, valence, arousal,
+                           affect.tier_offset(tier), empathy)
+
+
+def compose_offsets(assignment: AxisAssignment,
+                    baseline: Dict[str, float],
+                    valence: float,
+                    arousal: float,
+                    offsets: Tuple[float, float, float],
+                    empathy: float = affect.EMPATHY,
+                    ) -> Tuple[Dict[str, float], Dict[str, bool]]:
+    """`compose` with the relationship supplied as an explicit offset triple.
+
+    Lets E2 sweep the relationship continuously (a tier is a discrete factor, so
+    a derivative with respect to it is otherwise undefined) and run the
+    leak/no-leak ablation without mutating the shipped table.
     """
     felt = dict(baseline)
 
@@ -156,7 +183,7 @@ def compose(assignment: AxisAssignment,
             + empathy * (arousal - baseline[assignment.arousal_axis])
         )
 
-    deltas = tier_deltas(assignment, tier)
+    deltas = route_offsets(assignment, offsets)
     raw = {axis: felt[axis] + deltas[axis] for axis in AXES}
     clamped = {axis: _clamp(raw[axis]) for axis in AXES}
     flags = {axis: raw[axis] != clamped[axis] for axis in AXES}

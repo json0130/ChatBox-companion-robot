@@ -58,12 +58,20 @@ class Volatility:
     tier: str
     sigma: float
     duration_s: float
+    # --- signal level: every camera frame ---
     n_frames: int
     rung_switches: int
     switches_per_min: float
     distinct_rungs: int
     dwell_median_s: float
     dwell_min_s: float
+    # --- controller level: decimated to the deployed tick ---
+    tick_hz: float
+    n_ticks: int
+    tick_switches: int
+    tick_switches_per_min: float
+    tick_distinct_rungs: int
+    # --- interference ---
     clamp_rate: float          # fraction of frames with any axis clamped
     clamp_rate_d: float        # fraction with the DOMINANCE axis clamped
 
@@ -73,13 +81,33 @@ def directive_volatility(assignment: AxisAssignment,
                          tier: str,
                          trace: Trace,
                          empathy: float = affect.EMPATHY,
-                         smoothing_window: int = 5) -> Volatility:
+                         smoothing_window: int = 5,
+                         tick_hz: float = 1.0) -> Volatility:
     """Drive a V/A trace through the real AffectStream and report rung stability.
 
     The AffectStream is the deployed smoother (pad_core/stream.py, 5-sample mean),
     included on purpose: it is part of the system under test, and giving the
     permuted assignment the benefit of the real smoother makes the comparison
     fair rather than rhetorical.
+
+    TWO RATES ARE REPORTED, and conflating them would overstate the result.
+
+    The FRAME-level numbers describe the signal: how stable the commanded rung is
+    as a function of the camera stream. A 0.10 s median dwell there is a property
+    of the signal, NOT a claim that the robot visibly changes behaviour ten times
+    a second.
+
+    The TICK-level numbers describe what the controller can actually observe.
+    `webcam_loop` recomputes PAD once per `_DEFAULT_TICK` (1.0 s), and the
+    directive only reaches the LLM when a system prompt is built, i.e. once per
+    conversational turn — slower still. So the deployed system SAMPLES this
+    signal; it does not track it.
+
+    That is what makes the permuted assignment a control failure rather than a
+    cosmetic one. When the signal's dwell falls below the sampling interval, the
+    directive that reaches the model is decided by which instant happened to be
+    sampled. It does not chatter visibly — it becomes arbitrary. `tick_hz`
+    defaults to the deployed 1.0 Hz.
     """
     baseline = affect.to_pad(affect.ROBOTS[robot]["ocean"])
     stream = AffectStream(smoothing_window=smoothing_window)
@@ -101,6 +129,11 @@ def directive_volatility(assignment: AxisAssignment,
     runs = np.diff(np.concatenate(([0], boundaries, [len(arr)])))
     dwell_s = runs / trace.fps
 
+    # Decimate to the controller's sampling rate.
+    stride = max(1, int(round(trace.fps / tick_hz)))
+    ticked = arr[::stride]
+    tick_switches = int(np.count_nonzero(np.diff(ticked))) if len(ticked) > 1 else 0
+
     return Volatility(
         assignment=assignment.name,
         robot=robot,
@@ -113,6 +146,11 @@ def directive_volatility(assignment: AxisAssignment,
         distinct_rungs=int(len(np.unique(arr))),
         dwell_median_s=float(np.median(dwell_s)),
         dwell_min_s=float(dwell_s.min()),
+        tick_hz=float(tick_hz),
+        n_ticks=int(len(ticked)),
+        tick_switches=tick_switches,
+        tick_switches_per_min=tick_switches / (trace.duration_s / 60.0),
+        tick_distinct_rungs=int(len(np.unique(ticked))),
         clamp_rate=clamped_any / len(arr),
         clamp_rate_d=clamped_d / len(arr),
     )
@@ -140,20 +178,39 @@ def sweep(assignments: Sequence[str] = ("identity", "perm_emotion_D",
     return rows
 
 
+_CAPTION = """
+**Reading the two rates.** `frame switches/min` and `median dwell` describe the
+SIGNAL, sampled at the camera's frame rate (30 fps here). They are not a claim
+that the robot visibly changes behaviour many times a second.
+
+`tick switches/min` is what the controller can actually observe: `webcam_loop`
+recomputes PAD once per `_DEFAULT_TICK` (1.0 s), and the directive only reaches
+the LLM when a system prompt is assembled — once per conversational turn, slower
+still. The deployed system therefore SAMPLES this signal rather than tracking it.
+
+That is the point. When median dwell falls below the sampling interval, the
+directive reaching the model is decided by whichever instant happened to be
+sampled: it does not chatter visibly, it becomes arbitrary. Under `identity`
+both rates are exactly zero, so the question does not arise.
+"""
+
+
 def format_table(rows: Sequence[Dict]) -> str:
     """Markdown, grouped by sigma. Kept here so the result is reproducible from
     one command with no reporting stack."""
-    out: List[str] = []
+    out: List[str] = [_CAPTION]
     for sigma in sorted({r["sigma"] for r in rows}):
         out.append(f"\n### frame noise sigma = {sigma:.2f}\n")
-        out.append("| assignment | robot | tier | switches/min | distinct rungs "
-                   "| median dwell (s) | min dwell (s) | clamp rate (D) |")
+        out.append("| assignment | robot | tier | frame switches/min "
+                   "| tick switches/min (1 Hz) | distinct rungs "
+                   "| median dwell (s) | clamp rate (D) |")
         out.append("|---|---|---|---|---|---|---|---|")
         for r in [x for x in rows if x["sigma"] == sigma]:
             out.append(
                 f"| `{r['assignment']}` | {r['robot']} | {r['tier']} "
-                f"| **{r['switches_per_min']:.1f}** | {r['distinct_rungs']} "
-                f"| {r['dwell_median_s']:.2f} | {r['dwell_min_s']:.3f} "
+                f"| **{r['switches_per_min']:.1f}** "
+                f"| **{r['tick_switches_per_min']:.1f}** "
+                f"| {r['distinct_rungs']} | {r['dwell_median_s']:.2f} "
                 f"| {r['clamp_rate_d']:.2%} |"
             )
     return "\n".join(out)

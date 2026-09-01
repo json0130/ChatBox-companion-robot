@@ -108,18 +108,26 @@ the face; under `perm_emotion_D` a 30 Hz signal drives a per-session effector. M
 trace through the **real** `AffectStream` (giving the permuted assignment the benefit of the deployed smoother,
 so the comparison is fair rather than rhetorical) and counting rung switches.
 
-**Result — and it is categorical, not marginal:**
+**Result — and it is categorical, not marginal.** Two rates are reported, because conflating them would
+overstate it. The frame rate describes the *signal*; the tick rate is what the controller actually samples
+(`_DEFAULT_TICK` = 1.0 s, and the directive only reaches the LLM once per conversational turn, slower still).
 
-| sigma | identity | perm_emotion_D (ELLEBOT) | collapse_D (CHATBOX) |
+| sigma | identity (frame / tick) | perm_emotion_D ELLEBOT (frame / tick) | collapse_D CHATBOX (frame) |
 |---|---|---|---|
-| 0.00 | **0.0 /min** | 18.8 /min | 11.2 /min |
-| 0.10 | **0.0 /min** | 101.2 /min | 71.2 /min |
-| 0.20 | **0.0 /min** | 240.0 /min | 86.2 /min |
-| 0.28 | **0.0 /min** | 262 /min | — |
+| 0.00 | **0.0 / 0.0** | 18.8 / — | 11.2 |
+| 0.10 | **0.0 / 0.0** | 101.2 / 15.0 | 71.2 |
+| 0.20 | **0.0 / 0.0** | 240.0 / 35.6 | 86.2 |
+| 0.28 | **0.0 / 0.0** | 328.1 / 41.2 | 93.8 |
 
-`identity` is **exactly zero at every noise level**, by construction rather than by tuning — the face has no
-path to D at all — while the permutations degrade monotonically with noise. Median dwell falls from the full
-32 s trace to 0.10 s.
+`identity` is **exactly zero at every noise level and at both rates**, by construction rather than by tuning —
+the face has no path to D at all — while the permutations degrade monotonically with noise.
+
+The frame-level median dwell falls from the full 32 s trace to 0.10 s, and that is the number most open to
+being overstated: it is a property of the signal, not a claim that the robot visibly changes behaviour ten
+times a second. The honest framing is the tick row. When dwell falls below the sampling interval, the
+directive that reaches the model is decided by whichever instant happened to be sampled — it does not chatter
+visibly, **it becomes arbitrary**. At sigma = 0.20 the sampled directive still changes ~36x/min, and more than
+one rung is reachable within a single fixed relationship tier.
 
 **The noise range is empirically anchored, not chosen.** `traces.measure_model_dispersion` runs the deployed
 regression head over the real corpus: pooled within-class dispersion over 320 faces is **sd_v = 0.279,
@@ -142,6 +150,90 @@ leakage metric resolves it, so if anyone zeroes it the E2 sensitivity result mus
 silently becoming a null. All 75 pre-existing tests unaffected.
 
 **Artifacts:** `runs/eval/e3_chatter.{md,jsonl}`, regenerable from one command.
+
+---
+
+## feat(padeval): E2 analytic Jacobian — a calibrated leakage metric, and collapse proved degenerate  *(branch `feature/pad-affect-core`)*
+
+**Goal (user):** Phase 2 of the harness, run as a PAIR — once against the deployed system with the
+`close`-tier +0.10 arousal term present, once with that single term zeroed. A lone leakage number would have
+to be taken on faith; a pair shows the metric responds to a known manipulation.
+
+**Why this is algebra and not a classifier.** The style vector is a closed-form function of the felt
+coordinate, so a classifier on noiseless style data scores 100% and demonstrates nothing (R10 in the plan).
+The real question is whether the forward map preserves the distinction between sources, which is a question
+about a Jacobian and is answerable exactly:
+
+    J = d[amplitude, tempo, posture, droop, idle] / d[valence, arousal, tier]      (5x3)
+
+The relationship is a discrete factor, so a derivative w.r.t. it is undefined as stated. It is made continuous
+by ramping the tier offset from the `known` reference along s in [0,1] — the path the system actually
+traverses as a relationship deepens. `axes.compose_offsets` takes the offset triple explicitly, so the
+ablation is a caller's argument rather than a monkey-patch of the shipped table.
+
+**Result 1 — `collapse_D` is provably unidentifiable.**
+
+| assignment | rank | cond | sigma_min |
+|---|---|---|---|
+| identity | 3/3 | 3.5 | 2.44e-01 |
+| perm_emotion_D | 3/3 | 2.3 | 2.57e-01 |
+| perm_arousal_D | 3/3 | 5.1 | 1.70e-01 |
+| **collapse_D** | **2/3** | **inf** | **7.75e-18** |
+
+Rank-deficient means two sources move the effectors along the same direction, so no observer — however
+clever, however noise-free — can attribute a change to one of them. Unidentifiability *proved*, with no
+dataset, no noise model and no train/test split.
+
+**Stated plainly because it would be easy to overclaim:** the condition number does **not** favour the
+deployed assignment. `perm_emotion_D` is better conditioned (2.3) than `identity` (3.5). Conditioning
+separates the degenerate assignment from the non-degenerate ones; it does not rank the non-degenerate ones
+against each other. What distinguishes `identity` from the permutations is the timescale argument (E3) and
+the noise-threshold sweep in E2's empirical half — not this table. The report says so in the artifact itself.
+
+**Result 2 — the leakage metric is calibrated.** `idle = 0.45 + 0.4·Ar` is a pure function of arousal
+(affect.py:355), asserted against the real `gesture_style` rather than trusted from a comment, so any
+tier→idle sensitivity *is* arousal leakage with no attribution ambiguity:
+
+| | d(Ar)/d(tier), leak present | leak zeroed | recovered |
+|---|---|---|---|
+| identity | **+0.1000** | **+0.0000** | **0.1000** |
+
+Exactly 0.10 in, exactly 0.10 out, to 1e-6. And with the leak removed the source→axis map is **exactly
+diagonal** — the disjoint-axis claim as an equation rather than a sentence — while with it present there is
+**exactly one** off-diagonal term (Ar ← tier, 0.10). One named, located violation, not a diffuse smear.
+
+Two rows read `n/a` and that is correct, not a failure: under `perm_arousal_D` the tier's *principal*
+displacement is routed to arousal, so d(Ar)/d(tier) = 0.40 by design and the 0.10 secondary term is not
+separable from it; under `collapse_D` nothing writes arousal at all.
+
+**Verified — `padeval/tests/test_e2_jacobian.py` 6/6 (new), 22 padeval tests total.** Pins both structural
+facts the attribution rests on (droop pure pleasure, idle pure arousal) against the real `gesture_style`;
+rank deficiency for collapse and full rank for the rest, on both robots; recovery of the injected 0.10;
+diagonality with the leak removed; exactly one off-diagonal term with it present; and Jacobian stability
+across step sizes 1e-5..1e-7, since central differences on a clamped piecewise function can be fragile.
+
+**Also in this commit — two E3 closeouts.**
+
+*`collapse_D` at sigma = 0.28 was never missing.* The sweep ran all 4 assignments x 2 robots x 2 tiers x 5
+sigmas = 80 rows; the em-dash was a transcription gap in a hand-written summary table in the previous
+PROGRESS entry, now corrected. The value is 93.8/min (CHATBOX/known) rising to 172.5 (ELLEBOT/close).
+
+*Frame rate vs tick rate.* The frame-level "0.10 s median dwell" describes the SIGNAL and could be misread as
+the robot visibly twitching ten times a second. `directive_volatility` now also decimates to the controller's
+actual sampling rate (`tick_hz`, default 1.0 Hz = `_DEFAULT_TICK`; the directive only reaches the LLM once per
+conversational turn, slower still) and reports both:
+
+| sigma | identity frame/tick | perm_emotion_D ELLEBOT frame/tick |
+|---|---|---|
+| 0.10 | 0.0 / 0.0 | 101.2 / 15.0 |
+| 0.20 | 0.0 / 0.0 | 240.0 / 35.6 |
+| 0.28 | 0.0 / 0.0 | 328.1 / 41.2 |
+
+The honest framing is the tick column, and it survives: identity is zero at **both** rates while the
+permutation still moves ~36x/min at 1 Hz with more than one rung reachable inside a single fixed tier. When
+dwell falls below the sampling interval the directive is decided by whichever instant was sampled — it does
+not chatter visibly, **it becomes arbitrary**. A new test pins the claim at the decimated rate so it cannot
+survive only as a frame-rate artefact.
 
 ---
 

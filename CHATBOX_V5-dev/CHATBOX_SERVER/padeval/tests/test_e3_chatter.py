@@ -81,6 +81,28 @@ def test_the_gap_is_categorical_not_marginal():
           f"{perm.switches_per_min:.0f}/min ✓")
 
 
+def test_the_result_survives_decimation_to_the_deployed_tick():
+    """The frame-rate number describes the SIGNAL. The claim has to hold at the
+    rate the controller actually samples it (1 Hz, `_DEFAULT_TICK`), or
+    "chattering" would be an artefact of measuring faster than the system reads.
+
+    Under identity both rates are exactly zero, so the honest comparison only
+    strengthens the result."""
+    trace = synth_trace(sigma=0.20, seed=1)
+    ident = directive_volatility(IDENTITY, "ELLEBOT", "known", trace, tick_hz=1.0)
+    perm = directive_volatility(PERM_EMOTION_D, "ELLEBOT", "known", trace,
+                                tick_hz=1.0)
+    assert ident.tick_switches == 0, ident.tick_switches
+    assert ident.tick_distinct_rungs == 1
+    assert perm.tick_switches_per_min > 10.0, perm.tick_switches_per_min
+    # And the sampled signal must be genuinely ambiguous, not merely moving:
+    # more than one rung is reachable within a single fixed relationship tier.
+    assert perm.tick_distinct_rungs > 1
+    print(f"5. at the deployed 1 Hz tick: identity 0.0/min ({ident.tick_distinct_rungs} "
+          f"rung) vs perm {perm.tick_switches_per_min:.1f}/min "
+          f"({perm.tick_distinct_rungs} rungs) ✓")
+
+
 def test_rung_is_invariant_to_emotion_under_identity():
     """The static version of the same claim, straight off the affect model —
     this is the property the trace measurement is the dynamic evidence for."""
@@ -111,6 +133,7 @@ if __name__ == "__main__":
     test_identity_never_chatters_at_any_noise_level()
     test_permutation_chatters_and_worsens_with_noise()
     test_the_gap_is_categorical_not_marginal()
+    test_the_result_survives_decimation_to_the_deployed_tick()
     test_rung_is_invariant_to_emotion_under_identity()
     test_sweep_shape()
     print("\nthe deployed assignment is the only one with a stable setpoint.")

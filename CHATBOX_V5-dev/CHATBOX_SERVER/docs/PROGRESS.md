@@ -6,6 +6,77 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## feat(padeval): evaluation harness core + E3 chattering, the first zero-LLM result  *(branch `feature/pad-affect-core`)*
+
+**Goal (user):** build the evaluation harness for the ICRA submission. Plan in
+`~/.claude/plans/then-can-we-plan-glowing-beaver.md`; it front-loads the results that need **no LLM calls**,
+because those cannot fail for infrastructure reasons and are likely the strongest figures. This commit is
+Phase 0 (the permutation core) and Phase 1 (the chattering metric).
+
+**New package `padeval/`**, deliberately outside `modules/`. Dependency direction is one-way — `padeval`
+imports `modules.*`, nothing under `modules/` or `PAD_CORE/` imports `padeval`, so the runtime never depends
+on the harness. Core modules import **numpy only**; scipy/sklearn/pandas stay behind `padeval.analysis` and a
+separate `requirements-eval.txt`.
+
+**`padeval/axes.py` — the permutation object.** `AxisAssignment` parameterises which source writes which PAD
+axis, and `compose()` routes baseline + face + relationship accordingly. Four assignments: `identity` (the
+deployed system), `perm_emotion_D`, `perm_arousal_D`, `collapse_D`.
+
+`affect.py` is **not modified**. `compose` calls `affect.to_pad` and routes the deltas itself, and the gate is
+that under `identity` it reproduces `affect.feel_with_relationship` **bit for bit** — asserted over all 56
+reachable cells plus 1000 random points across four empathy values. That mirrors the guarantee
+`affect.pipeline` already makes about `tier="known"` (affect.py:365-369) and is what makes this a strict
+superset rather than a second implementation of the model. Without it, every E3 number would be a comparison
+between the real system and a slightly different one.
+
+One routing decision worth recording: `TIER_OFFSETS` is authored in AXIS space, not source space. The
+principal displacement (index 2) follows `tier_axis`; the secondary nudges follow whichever axes valence and
+arousal own. So the `close` tier's +0.10 arousal leak stays attached to *arousal* under permutation, which is
+its semantics. Under `identity` the routing is the identity map, asserted.
+
+**`padeval/analysis/e3_permute.py` — the chattering metric.** The behavioural directive is a per-SESSION
+control. Under the deployed assignment the face cannot write Dominance, so the commanded rung is invariant to
+the face; under `perm_emotion_D` a 30 Hz signal drives a per-session effector. Measured by driving a V/A frame
+trace through the **real** `AffectStream` (giving the permuted assignment the benefit of the deployed smoother,
+so the comparison is fair rather than rhetorical) and counting rung switches.
+
+**Result — and it is categorical, not marginal:**
+
+| sigma | identity | perm_emotion_D (ELLEBOT) | collapse_D (CHATBOX) |
+|---|---|---|---|
+| 0.00 | **0.0 /min** | 18.8 /min | 11.2 /min |
+| 0.10 | **0.0 /min** | 101.2 /min | 71.2 /min |
+| 0.20 | **0.0 /min** | 240.0 /min | 86.2 /min |
+| 0.28 | **0.0 /min** | 262 /min | — |
+
+`identity` is **exactly zero at every noise level**, by construction rather than by tuning — the face has no
+path to D at all — while the permutations degrade monotonically with noise. Median dwell falls from the full
+32 s trace to 0.10 s.
+
+**The noise range is empirically anchored, not chosen.** `traces.measure_model_dispersion` runs the deployed
+regression head over the real corpus: pooled within-class dispersion over 320 faces is **sd_v = 0.279,
+sd_a = 0.292**. That is an upper bound (it also mixes identity, pose and lighting), so it bounds the sweep
+rather than naming an operating point — and sigma = 0.20 sits inside the plausible range.
+
+**Stated before a reviewer says it:** this does **not** show the prompt-to-behaviour map breaks under
+permutation. That map still works; it is merely commanded from the wrong source. E1 measures the map, this
+measures the signal driving it. Expect E1 fidelity to largely survive permutation — permutation breaks the
+*system-level* properties (setpoint stability, and identifiability in E2), which is the more interesting
+result anyway.
+
+**Verified — `padeval/tests/` 15/15 (new):** bit-identity on the grid and on 1000 random points; tier routing
+is the identity map under `identity`; permutation actually moves the signal (a permutation that changed
+nothing would make E3 vacuous); `collapse_D` leaves unwritten axes at baseline; clamp flags fire at
+CHATBOX/`unknown` (D wants −1.043) and nowhere at `known`; `rung_of` agrees with `prompt.manner_directive`
+across [−1,+1]; zero switches at every sigma under `identity`; monotone worsening under permutation. A
+tripwire test also pins the `close`-tier +0.10 arousal leak — kept deliberately so E2 can demonstrate its
+leakage metric resolves it, so if anyone zeroes it the E2 sensitivity result must be regenerated rather than
+silently becoming a null. All 75 pre-existing tests unaffected.
+
+**Artifacts:** `runs/eval/e3_chatter.{md,jsonl}`, regenerable from one command.
+
+---
+
 ## fix(closeness): rapport and trust are two axes, not one written twice  *(branch `feature/pad-affect-core`)*
 
 **Goal (user):** the tier reads `score = (rapport + trust) / 2`, but both live write paths called

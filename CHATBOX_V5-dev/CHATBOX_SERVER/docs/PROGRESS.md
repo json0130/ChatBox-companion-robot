@@ -153,6 +153,77 @@ silently becoming a null. All 75 pre-existing tests unaffected.
 
 ---
 
+## feat(padeval): Phase 4b — gold pool, agreement maths, and two blocking findings  *(branch `feature/padeval-phase3`)*
+
+**Built:** `padeval/stimuli.py` (32 authored utterances, 4 strata x 8, each raising at most one lexicon topic
+and none touching the seeded memory), `padeval/fixtures.py` (`TIER_RECIPE` + `seed_person` moved out of
+`tools/pad_prompt_grid.py`, plus `build_world`), `padeval/coding/agreement.py` (Cohen's kappa with bootstrap
+CI, quadratic-weighted kappa for the ordinal, exact McNemar, per-stratum report — numpy only, checked against
+a worked example).
+
+**Pool generated:** 256 replies = 2 robots x 4 tiers x 32 stimuli, real prompts through the deployed
+`_build_system_prompt`, seeded, 252 s. `runs/eval/gold_pool.jsonl`.
+
+### A note on who coded what
+
+The blind sample was coded by **Claude, labelled `claude_ai_v1`** — an LLM, not a human. Reported as an AI
+adjudicator and nothing else. It cannot stand in for `kappa(rule, human)`: an LLM's errors correlate with the
+generator's in exactly the way a gold set exists to rule out, and a methods section claiming human coding when
+an LLM did it would be false about provenance. **The human gold set is still required before any campaign.**
+The AI pass is useful for what it did here — it caught a coder bug early, for the cost of 60 items.
+
+### Finding 1 (blocking) — the rule coder over-fires, and directionally
+
+60 blinded items, stratified: binary agreement 90%, `kappa = 0.74 [0.52, 0.91]`, ordinal
+`kappa_w = 0.65 [0.38, 0.85]`. Kappa clears the 0.70 bar — but **McNemar is 6/0, p = 0.031**. Every single
+disagreement runs the same way: the rule coder says "initiated" where the AI coder says it did not. A
+systematic bias in a rate is worse than symmetric noise, because it inflates the outcome everywhere at once.
+
+Root cause found: **20 of the 32 stimuli declare no topics**, and the elaboration guard added in Phase 4a only
+suppresses the open-noun detector when the reply mentions a *stimulus* topic. On a stimulus with no declared
+topics nothing suppresses it, so any noun in the reply counts as a new topic — `laugh`, `guy`, `kitty`,
+`alright`, `course`. Four of the six over-fires are exactly this case.
+
+The fix is not more stoplist entries; that is whack-a-mole. The open detector should fire only on nouns inside
+a **topic-introducing frame** ("talk about X", "tell you about X", "did you know X"), which is what
+introducing a topic actually looks like. Deferred rather than rushed, because it changes the primary outcome
+measure and wants its own authored cases.
+
+### Finding 2 (blocking, and bigger) — the directive is being swamped
+
+Initiation rate by tier, rule coder, over the whole 256-reply pool:
+
+| robot | unknown | visitor | known | close |
+|---|---|---|---|---|
+| chatbox | 72% | 69% | 75% | 69% |
+| ellebot | 75% | 75% | 84% | 81% |
+
+**No ordering by tier, and the floor is ~70%.** At `unknown` the directive reads *"answer only what they ask,
+and do not introduce a topic of your own"* — and the robot proposes space anyway, in roughly three replies out
+of four. Inspection confirms these are genuine initiations, not coder artefacts: *"mm."* -> *"Did you know
+space is filled with billions of stars?"*
+
+This is plan risk R2 confirmed and quantified. The IDENTITY block's capability list and the seeded person
+memory are a standing invitation, identical in every condition, and they dominate the directive. Two
+consequences: the `A7_no_capabilities` arm is **essential, not optional**, and a memory-suppressed arm is
+probably needed too, since `space` and `guitar` come from the seed rather than the capability list.
+
+The stimulus stratum also dwarfs the tier — disclosure 38% vs quiet 98% vs closing 95% — so the stratum has to
+enter the model as a factor, not be averaged over.
+
+Also observed: **ordinal levels 1 and 5 never occur** in 256 replies. Level 5 is rung 0's own wording ("open
+with something you already know about them"), commandable only by ELLEBOT at `close`, and it never appears —
+the top of the ladder does not produce its distinctive behaviour.
+
+### What this means for the campaign
+
+Neither finding is a reason to abandon E1, but both must be resolved before spending GPU hours: a directional
+coder bias would inflate every cell, and a 70% floor with no tier ordering would produce a null that says more
+about the prompt's other blocks than about the directive. The floor is itself a publishable result — it is
+just not the result E1 was designed to measure.
+
+---
+
 ## feat(padeval): Phase 4a — the rule coder, 100% on 48 authored cases  *(branch `feature/padeval-phase3`)*
 
 **Goal (user):** build E1's primary outcome coder. Rule-based and PRIMARY on purpose: it is deterministic and

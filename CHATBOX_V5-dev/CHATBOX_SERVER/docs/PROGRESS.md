@@ -153,6 +153,76 @@ silently becoming a null. All 75 pre-existing tests unaffected.
 
 ---
 
+## exp(padeval): powered ladder — a BOUNDED null, and the measured ICC  *(branch `feature/padeval-phase3`)*
+
+The run that settles the open half. Persona and tier pinned, memory and capability blocks removed, all seven
+rungs, **32 stimuli x 8 replicates = 256 per rung, 1,792 generations, 724 s.** Every reply generated (1792/1792
+ok).
+
+| rung | directive | init% | mean ordinal |
+|---|---|---|---|
+| 0 | open with something you already know | 9.0% | 1.12 |
+| 1 | propose the next topic yourself | 9.4% | 1.55 |
+| 2 | offer a topic if they do not bring one | 5.5% | 1.16 |
+| 3 | either of you may open a topic | 6.2% | 1.12 |
+| 4 | follow their topic, one follow-up | 4.3% | 1.77 |
+| 5 | ask about what they bring up, do not introduce | 3.9% | 1.22 |
+| 6 | answer only what they ask | 7.8% | 1.02 |
+
+**The 9% -> 3% trend from the n=32 probe did not replicate.** At 256 per rung it is 9.0% -> 7.8%, and the
+series is not monotone. That earlier hint was noise, which is exactly what the underpowered warning said it
+might be.
+
+### Cluster-robust inference — bootstrap over the 32 stimuli, not the 1,792 replies
+
+| statistic | point | 95% CI |
+|---|---|---|
+| tau(rung, initiated) | −0.0393 | [−0.0884, +0.0068] |
+| tau(rung, ordinal) | −0.0137 | [−0.0615, +0.0324] |
+| rate difference, rung 0 − rung 6 | +0.0117 | [−0.0391, +0.0586] |
+
+This is a **bounded null, not merely a non-significant one**. The interval on the rung-0 vs rung-6 difference
+excludes any effect larger than about **6 percentage points in either direction**. The claim is no longer
+"we failed to detect an effect" but "any effect is smaller than 6 points" — a far stronger statement, and the
+one worth writing down.
+
+(The naive Fisher p of 0.75 is reported alongside only to show it agrees; it ignores clustering and should not
+be the quoted figure.)
+
+### The ICC, measured rather than assumed
+
+| outcome | ICC | design effect (m=8) | effective n | per rung |
+|---|---|---|---|---|
+| initiated | **0.128** | 1.90 | 944 of 1792 (53%) | 135 of 256 |
+| ordinal level | **0.193** | 2.35 | 763 of 1792 (43%) | 109 of 256 |
+
+Lower than the 0.3 the plan assumed, so replicates are worth more than feared — but still nearly half the
+nominal sample is lost to clustering. **Any future budget must be quoted in effective n.** At ICC 0.13 with 8
+replicates, 256 replies per rung buys 135, so a design needing 245 effective per rung would need ~465 raw, or
+more stimuli instead — and adding stimuli is the better buy, since it raises the cluster count rather than the
+cluster size.
+
+This closes the ICC item that was outstanding before any generation budget was committed.
+
+### Where the E1 claim now rests
+
+**Settled, both directions:**
+1. *Deployed configuration:* the directive does not control topic initiation, and the point estimate runs
+   backwards. Adequately powered.
+2. *Memory and capabilities removed:* no effect either, and now bounded at <6 points. The previous "open
+   question with a costed answer" is closed, and the answer is no.
+
+**The headline is therefore a clean, well-powered negative result:** a behavioural instruction resident in an
+LLM system prompt did not measurably control the behaviour it names, across the full seven-rung range of the
+instruction, with and without competing prompt content, at 1,792 + 448 + 512 + 256 generations.
+
+That is a genuine contribution about prompt-based behavioural control, and it is more useful stated plainly
+than dressed up. It does **not** touch the architecture's other two claims: E3's setpoint stability and E2's
+rank/leakage results are structural properties of the equations and stand independently of what any LLM does
+with a prompt.
+
+---
+
 ## exp(padeval): the full-rung ladder — no directive effect, and the honest power bound  *(branch `feature/padeval-phase3`)*
 
 The decisive controllability probe. Persona and tier **pinned** (CHATBOX, `known`), Dominance forced to the

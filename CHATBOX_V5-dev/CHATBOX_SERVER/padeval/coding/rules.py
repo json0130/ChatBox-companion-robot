@@ -39,8 +39,9 @@ import nltk
 
 from padeval.coding.lexicon import (
     CLAUSE_BREAKS, HEDGE_MARKERS, MEMORY_RECALL_MARKERS, NEGATION_CUES,
-    NEGATION_SCOPE_TOKENS, NON_TOPIC_NOUNS, PERSON_MEMORY_TOPICS, VERB_LIKE,
-    multiword_forms, normalise, topic_surface_index,
+    FRAME_SCOPE_TOKENS, NEGATION_SCOPE_TOKENS, NON_TOPIC_NOUNS,
+    PERSON_MEMORY_TOPICS, TOPIC_FRAMES, VERB_LIKE, multiword_forms,
+    normalise, topic_surface_index,
 )
 
 _SURFACE = topic_surface_index()
@@ -104,10 +105,58 @@ def mentioned_topics(text: str) -> Set[str]:
     return found
 
 
-def _content_nouns(text: str) -> Set[str]:
-    """Normalised nouns that could be a topic, before any subtraction."""
+def _framed_spans(text: str, tokens: Sequence[str]) -> Set[int]:
+    """Token indices inside the scope of a topic-introducing frame.
+
+    Frames are matched on the lower-cased raw text, then mapped back to token
+    positions by walking the tokens and tracking a character offset — the
+    tokenizer drops and reshapes punctuation, so index arithmetic on the raw
+    string alone would drift.
+    """
+    low = text.lower()
+    hits = [low.find(f) for f in TOPIC_FRAMES]
+    starts = sorted(h for h in hits if h >= 0)
+    for f in TOPIC_FRAMES:                       # every occurrence, not just first
+        pos = low.find(f)
+        while pos >= 0:
+            starts.append(pos + len(f))
+            pos = low.find(f, pos + 1)
+    if not starts:
+        return set()
+
+    # character offset of each token
+    offsets, cur = [], 0
+    for tok in tokens:
+        idx = low.find(tok.lower(), cur)
+        if idx < 0:
+            idx = cur
+        offsets.append(idx)
+        cur = idx + len(tok)
+
+    out: Set[int] = set()
+    for start in starts:
+        began = None
+        for i, off in enumerate(offsets):
+            if off >= start:
+                began = i
+                break
+        if began is None:
+            continue
+        for j in range(began, min(began + FRAME_SCOPE_TOKENS, len(tokens))):
+            out.add(j)
+    return out
+
+
+def _content_nouns(text: str, framed_only: bool = False) -> Set[str]:
+    """Normalised nouns that could be a topic, before any subtraction.
+
+    `framed_only` restricts to nouns inside a topic-introducing frame, which is
+    what makes the open detector mean "introduced a subject" rather than "used a
+    word we had not seen".
+    """
     tokens = nltk.word_tokenize(text)
     negated = _negated_spans(tokens)
+    framed = _framed_spans(text, tokens) if framed_only else None
     out: Set[str] = set()
     # Tag the LOWER-CASED tokens. Sentence-initial capitals otherwise get tagged
     # NNP — "Was it hard?" tagged `Was` as a proper noun, which coded a pure
@@ -117,6 +166,8 @@ def _content_nouns(text: str) -> Set[str]:
     # the detector accepts NN as readily as NNP.
     for i, (tok, tag) in enumerate(nltk.pos_tag([t.lower() for t in tokens])):
         if i in negated or tag not in _NOUN_TAGS:
+            continue
+        if framed is not None and i not in framed:
             continue
         n = normalise(tok)
         if (n and n not in NON_TOPIC_NOUNS and n not in VERB_LIKE
@@ -161,7 +212,7 @@ def rule_code(reply: str,
 
     stimulus_nouns = _content_nouns(stimulus.text)
     known_words = set(_SURFACE)                     # lexicon words are handled above
-    novel_nouns = _content_nouns(reply) - stimulus_nouns - known_words
+    novel_nouns = _content_nouns(reply, framed_only=True) - stimulus_nouns - known_words
     if person_name:
         novel_nouns.discard(normalise(person_name))
 

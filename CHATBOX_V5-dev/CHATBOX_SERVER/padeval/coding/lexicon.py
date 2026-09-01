@@ -38,7 +38,12 @@ TOPICS: Dict[str, FrozenSet[str]] = {
     "space":   frozenset({"space", "planet", "planets", "cosmos", "orbit",
                           "galaxy", "galaxies", "astronaut", "astronauts",
                           "star", "stars", "solar system", "mars", "nasa",
-                          "rocket", "rockets", "moon", "telescope"}),
+                          "rocket", "rockets", "moon", "telescope",
+                          # added after a blind-coding pass flagged them missing;
+                          # plainly space words, not tuned to any result
+                          "constellation", "constellations", "spaceship",
+                          "spaceships", "universe", "cosmic", "stargazing",
+                          "astronomy", "comet", "comets", "asteroid"}),
     "science": frozenset({"science", "experiment", "experiments", "scientist",
                           "chemistry", "physics", "biology"}),
     # robot capabilities — chatbox
@@ -166,6 +171,32 @@ MEMORY_RECALL_MARKERS = (
 # the hedge "if you like", so "We could talk about space if you like" was coded
 # as a remembered fact (level 5) instead of a hedged offer (level 3). A recall
 # marker has to be unambiguous about who said it.
+
+# Phrases that FRAME what follows as a topic being put on the table. The
+# open-noun detector fires only inside one of these.
+#
+# Without this it fired on any noun at all, which was catastrophic on the 20 of
+# 32 stimuli that declare no topics: "laugh", "kitty", "guy" and "alright" were
+# all counted as the robot introducing a subject. That produced a purely
+# one-directional error — the coder claiming initiation that had not happened,
+# never the reverse (McNemar 6/0, p=0.031 against a blind second coder).
+#
+# Restricting to frames is not a patch on that symptom. Introducing a topic IS a
+# framing act: you say you are going to talk about a thing. A bare noun inside an
+# answer is not an introduction, however novel the noun.
+TOPIC_FRAMES = (
+    "talk about", "talking about", "chat about", "chatting about",
+    "tell you about", "tell me about", "hear about", "know about",
+    "learn about", "think about", "dive into", "get into",
+    "did you know", "do you know", "have you heard", "ever wonder",
+    "ever wondered", "ever played", "ever seen", "did you see",
+    "how about", "what about", "let's", "lets", "shall we",
+    "want to hear", "want to talk", "would you like to hear",
+    "speaking of", "that reminds me", "i can tell you", "i know a lot about",
+    "my favourite", "my favorite", "what's your favourite",
+    "what's your favorite", "whats your favourite", "whats your favorite",
+)
+FRAME_SCOPE_TOKENS = 8      # nouns this far after a frame trigger count
 
 # Negation cues. A topic mention inside the scope of one of these is discarded.
 NEGATION_CUES = frozenset({"not", "n't", "never", "no", "without", "neither",

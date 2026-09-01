@@ -153,6 +153,71 @@ silently becoming a null. All 75 pre-existing tests unaffected.
 
 ---
 
+## fix(padeval): cry-wolf coder fixed; the distractor is MEMORY, not capabilities; no tier gradient  *(branch `feature/padeval-phase3`)*
+
+### Coder fix — the directional bias is gone
+
+The open-noun detector now fires only on nouns inside a **topic-introducing frame** ("talk about X", "did you
+know X", "how about X"). Introducing a topic is a framing act; a bare noun inside an answer is not an
+introduction however novel it is. That is a fix to the concept, not a patch on the symptom — the previous
+version had nothing to constrain it on the 20 of 32 stimuli that declare no topics, so `laugh`, `kitty`, `guy`
+and `alright` all read as new subjects.
+
+Against the same 60 blinded items (coded by `claude_ai_v1` — an AI adjudicator, **not** a human gold set):
+
+| | before | after frames | + lexicon gap closed |
+|---|---|---|---|
+| binary agreement | 90% | 93% | **97%** |
+| kappa (binary) | 0.74 [0.52, 0.91] | 0.85 [0.68, 0.96] | **0.92 [0.79, 1.00]** |
+| kappa_w (ordinal) | 0.65 | 0.82 | **0.84 [0.62, 0.96]** |
+| McNemar b/c, p | **6/0, p=0.031** | 1/3, p=0.625 | **1/1, p=1.000** |
+
+The bias is symmetric now. The lexicon gap was `constellation`/`spaceship`/`universe` and similar missing from
+the `space` topic — plainly space words, added on their face rather than tuned to a result. 48/48 authored
+cases still pass.
+
+### Finding — the competing block is the seeded MEMORY, not the capability list
+
+512 new generations across two suppression arms, same grid as the baseline:
+
+| arm | mean initiation |
+|---|---|
+| `A1_full` (as deployed) | **70%** |
+| `A7_no_caps` (capability list removed) | **66%** |
+| `A9_no_caps_no_mem` (also no seeded interests) | **10%** |
+
+Removing the "You can: tells stories, knows jazz, knows about space..." list **barely moves anything** — 70%
+to 66%. Removing the seeded person memory as well collapses initiation to 10%. So the earlier diagnosis was
+wrong in its target: plan risk R2 named the capability list, but `space` and `guitar` reach the robot through
+the MEMORY block, and that is what overrides the directive.
+
+### Finding — no tier gradient survives in ANY arm
+
+Kendall's tau between tier rank and behaviour, per robot:
+
+| arm | robot | binary tau | ordinal tau | p (ordinal) |
+|---|---|---|---|---|
+| A1_full | chatbox | +0.040 | −0.002 | 0.975 |
+| A1_full | ellebot | +0.044 | +0.057 | 0.451 |
+| A7_no_caps | chatbox | +0.013 | +0.003 | 0.968 |
+| A7_no_caps | ellebot | +0.014 | +0.054 | 0.474 |
+| A9_no_caps_no_mem | chatbox | −0.016 | +0.141 | 0.065 |
+| A9_no_caps_no_mem | ellebot | +0.070 | +0.076 | 0.320 |
+
+Nothing reaches significance, and nothing is monotone. Clearing the floor from 70% to 10% did **not** reveal a
+hidden gradient — so the null is not simply a ceiling artefact.
+
+**The honest statement, scoped:** *at the four reachable tiers*, the behavioural directive does not measurably
+control topic initiation, on either the binary or the ordinal, with or without competing prompt blocks.
+
+**What is NOT yet tested, and is the decisive remaining probe:** the reachable tiers cover only 4 of the 7
+rungs per robot, and rung is confounded with persona (plan R1 — only rung 3 is shared). The `A1_full_ladder`
+arm, which pins one persona and forces Dominance across all seven rungs, decouples the two and gives the
+prompt-to-behaviour map its strongest test. ~224 generations, about four minutes. That should run before any
+claim about controllability is written down in either direction.
+
+---
+
 ## feat(padeval): Phase 4b — gold pool, agreement maths, and two blocking findings  *(branch `feature/padeval-phase3`)*
 
 **Built:** `padeval/stimuli.py` (32 authored utterances, 4 strata x 8, each raising at most one lexicon topic

@@ -55,10 +55,28 @@ MAX_RETRIES = 1          # hard cap: an unbounded loop is unmeasurable
 # Fallback text per rung family, used only when the correction pass ALSO
 # violates. Deliberately bland: the point is to be safe and obviously templated,
 # so a fallback is visible in a transcript rather than passing as a real reply.
+# NOTE: a fallback must SATISFY the rule it stands in for, or it is not a
+# fallback — it is a violation with a friendlier face. The first version used
+# "What would you like to talk about?" for `require`, which asks a question but
+# introduces nothing, so it failed the very rule it existed to guarantee: 48 of
+# 1,536 emitted replies (3.12%) violated, ALL of them this template. Caught by
+# re-coding the final emitted text rather than trusting the path label.
 FALLBACKS = {
     "suppress": "Okay.",
-    "require": "What would you like to talk about?",
+    "require": "Shall we talk about space?",
 }
+
+
+def _assert_fallbacks_satisfy_their_rules() -> None:
+    """Import-time guard so this class of bug cannot recur silently."""
+    from padeval.coding.rules import Stimulus
+    probe = Stimulus("_fb", "mm.", "quiet", frozenset())
+    for rule, text in FALLBACKS.items():
+        initiated = rule_code(text, probe).initiated
+        ok = (not initiated) if rule == "suppress" else initiated
+        if not ok:
+            raise AssertionError(
+                f"fallback for {rule!r} does not satisfy its own rule: {text!r}")
 
 
 @dataclass
@@ -71,6 +89,9 @@ class VerifiedResult:
     initial_text: str = ""
     rule: str = ""
     log: List[str] = field(default_factory=list)
+
+
+_assert_fallbacks_satisfy_their_rules()
 
 
 def rule_for(rung: int, stimulus: Stimulus) -> Optional[str]:

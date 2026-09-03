@@ -6,6 +6,36 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## exp(padeval): 6c — tier-offset magnitude sweep, and a rank correction  *(branch `feature/pad-affect-core`)*
+
+STRETCH item, timeboxed. **Registered prediction met**: across offset magnitude `m in [0.10,0.60]` (deployed
+`m=0.40`, tier ratios held fixed, passed explicitly — `TIER_OFFSETS`/`affect.py` untouched), `identity` stays
+full rank (3/3) and structurally zero-switching at every `m`; `collapse_D` stays rank-deficient and switching
+at every `m`; the permuted assignments stay switching at every `m`. `identity`'s condition number improves
+monotonically with `m` (11.07 -> 3.40), so the deployed value is not a knife-edge.
+
+**A correction surfaced by sweeping a range rather than one point.** `collapse_D`'s true rank is **1, not the
+2 the earlier E2 report gave** (`6b81fc4`). Under that assignment P and Ar are structurally frozen at baseline,
+so every style output is a function of the scalar D alone, and every Jacobian row is provably a scalar multiple
+of one direction vector — exactly rank 1, not approximately. The earlier "2" was a finite-difference artifact:
+`h=1e-6` left a spurious second singular value at machine-noise scale that still cleared the rank tolerance: an
+h-scan showed the classic V-shaped noise curve of float-cancellation error, not the flat plateau a real second
+dimension would produce, and no single fixed `h` was robust across the swept `m` range either, since the noise
+floor scales with the Jacobian's own magnitude. Fixed by reading the rank from the closed-form structural fact
+(`assignment.collapse`) rather than trusting numerical SVD rank detection for this case at all. The qualitative
+conclusion is unchanged and strengthened: collapse loses two degrees of freedom, not one.
+
+**Clamping tightens exactly on the analytic bound**, not merely correlates with it: `m <= 1-|D_baseline|` gives
+CHATBOX `m<=0.357`, already exceeded by the deployed `m=0.40` by precisely the 0.043 the original audit
+measured as the `unknown`-tier saturation. Stated as a design rule: a persona nearer the edge of the PAD cube
+has less room for relationship-driven displacement before the ladder's bottom rung saturates.
+
+Verified — `padeval/tests/test_tier_sensitivity.py` 7/7 (new), 44 padeval tests total.
+
+Report for the draft: `docs/paper/6c_tier_sensitivity_sweep.md`.
+
+---
+
 ## exp(padeval): 6b result — human gold set, kappa 0.861, bias-free  *(branch `feature/pad-affect-core`)*
 
 The number `docs/paper/6b_gold_set_protocol.md` was built to produce. Coded by a human, blind, on all 30

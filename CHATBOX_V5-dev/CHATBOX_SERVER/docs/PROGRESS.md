@@ -1887,3 +1887,49 @@ the person turned or looked away. Four separate causes, not one.
   absolute threshold into a relative one. jay still has a single enrolled view until re-enrolled
   with the guided poses. Emotion now receives profile crops it was not validated on (emotion is off
   by default).
+
+## 8.0 — reconciliation of the mood-decay and trust/disclosure claims (read-only)
+
+**Tried.** Re-verified two claims from the original audits against the current HEAD of
+every branch that has the code, rather than trusting the earlier summaries.
+
+**Worked.** *Fix 2 (FAST-tier mood decay): CONFIRMED.* `_session_start` (kg_bridge.py:257),
+`_written_since` (kg_bridge.py:194-205) and the `pre_turn` gate (kg_bridge.py:309-314) are
+all present and identical on `feature/pad-affect-core` and `feature/padeval-phase3`.
+`store.save`/`load` (store.py:309-339) remain unfiltered — by design, since the fix is a
+read-side session gate, not a write-side filter.
+
+*Fix 3 (rapport/trust decoupling): PARTIALLY DONE.* The decoupling is real — independent
+`d_rapport`/`d_trust` (webcam_loop.py:711-747), live tick moves rapport only
+(webcam_loop.py:1584-1585). But `disclosure_depth` is **not a real field**: it appears only
+in two comments (schema.py:10, store.py:64), there is no `DisclosureEdge` among schema.py's
+16 edge classes, and `_RELATIONSHIP_TYPES` is `{rapport, trust, interaction_count}`
+(store.py:49-51). The only non-manual write path to trust was the end-of-session LLM
+(extraction.py:39-50), so "disclosure-gated" meant "LLM-judged".
+
+**Didn't.** No merge gap: hardware runs `feature/pad-affect-core`, the same branch that
+carries both fixes. `main`/`origin/main` lack them, but also lack the whole
+`modules/graph_relationship/` tree, so they were never a deployment candidate.
+
+## 8a — a rule-based disclosure detector (`padeval/coding/disclosure.py`)
+
+**Tried.** Replace the LLM trust judgement with a deterministic detector, following the
+Phase 4a rule-coder discipline: authored cases first, zero model calls, every list
+hand-written.
+
+**Worked.** All four registered predictions held. The organising principle — *disclosure is
+a first-person statement carrying information the camera does not already have* — does real
+work: it is why "I'm happy" is excluded (the emotion head already has it; counting it would
+launder valence into trust and undo `2be86bb`) while "I was scared when the lights went out"
+is included. Held out against the 32 E1 stimuli, never seen during development: κ=0.739,
+precision 0.857, recall 0.750, flagging 6/8 disclosure and 0/8 question, 0/8 quiet.
+The divergence test now *exhibits* rapport and trust separating at the scripted disclosure
+turn, where before the claim rested on the type signature alone. 73/73 padeval tests pass.
+
+**Didn't.** The 100% on the 38 authored cases is spec-conformance, not evidence, and is
+labelled that way — the set was patched against. The two held-out misses (past-tense action
+verbs: "I drew…", "I fell…") were deliberately **left unfixed**; patching `FACT_VERBS`
+against the held-out set would turn it into a second training set and destroy the only
+unbiased number in the report. Not yet wired into the live loop — the detector is built to
+be wireable (`turn_deltas` reproduces the deployed rapport rule verbatim) but hardware runs
+this branch, so the live edit is held as a separate decision.

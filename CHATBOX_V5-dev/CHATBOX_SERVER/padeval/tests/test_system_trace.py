@@ -27,9 +27,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import pytest                                              # noqa: E402
 
 from modules.affect_bridge import affect                   # noqa: E402
+import numpy as np                                          # noqa: E402
+
+from modules.graph_relationship.kg_bridge import _tier_from_scores  # noqa: E402
 from padeval.analysis.system_trace import (                # noqa: E402
-    SCRIPT, format_trace, run_trace, tau_d_sessions,
+    SCRIPT, TICKS_PER_TURN, _camera_va, format_trace, run_trace, tau_d_sessions,
 )
+from padeval.coding.disclosure import SessionAccrual        # noqa: E402
 
 SEED = 7
 
@@ -177,34 +181,95 @@ def test_P4_chatbox_clamps_at_unknown_and_ellebot_never_does(traces):
     print(f"      CHATBOX loses {lost:.3f} of commanded D at `unknown`")
 
 
-def test_tau_D_recomputed_under_the_8a_mechanism():
-    """8a changed the accrual, so 6a's tau_D cannot be carried over unchanged."""
-    res = tau_d_sessions("CHATBOX", turns_per_session=2, depth=3, seed=SEED)
-    print(f"7. tau_D under 8a: close reached at session "
-          f"{res['sessions_to_close']} "
-          f"(2 turns/session, deepest disclosure every turn); "
-          f"first seen at each tier {res['first_session_at_tier']}")
-    assert res["sessions_to_close"] is not None, "close never reached"
-    assert res["sessions_to_close"] >= 3, (
-        f"close now reachable in {res['sessions_to_close']} sessions — under 3, "
-        f"the relationship is no longer the slow axis and 6a's separation claim "
-        f"needs restating, not just recomputing")
+def test_tau_D_floor_is_hard_again_typical_AND_worst_case():
+    """The floor must hold at EVERY session length, not just the median.
 
-    # The median is a FAVOURABLE choice, and reporting only it would hide a real
-    # regression. 6a's 3-session floor was hard: trust moved once per session,
-    # capped at +/-0.2 by the extractor, so the floor held "independent of
-    # session length or how warm the interaction is". 8a made trust accrue PER
-    # TURN with no per-session cap, and that independence is gone — at the IQR
-    # upper bound the floor breaks.
-    across = {n: tau_d_sessions("CHATBOX", turns_per_session=n, depth=3,
-                                seed=SEED)["sessions_to_close"]
-              for n in (1, 2, 4)}
-    print(f"      sessions-to-close by session length (6a IQR [1,4]): {across}")
-    assert across[4] < 3, (
-        "the floor appears restored at 4 turns/session — if a per-session trust "
-        "cap was added, update this test and 6a's floor claim together")
-    print("      -> tau_D is now session-length DEPENDENT; 6a's hard floor is "
-          "gone. Restoring it needs a per-session trust cap (see 8b report).")
+    The mistake this test exists to prevent was already made once in this phase:
+    tau_D was first reported at the empirical median (4 sessions, an improvement
+    on 6a) while the IQR upper bound had quietly dropped to 2. A single number
+    from a favourable parameter is not a floor. So the claim is checked as a
+    sweep, and the WORST case is the number that gets reported.
+    """
+    lengths = (1, 2, 4, 8, 16, 32, 64, 128)
+    capped = {n: tau_d_sessions("CHATBOX", turns_per_session=n, depth=3,
+                                seed=SEED, max_sessions=60)["sessions_to_close"]
+              for n in lengths}
+    uncapped = {n: tau_d_sessions("CHATBOX", turns_per_session=n, depth=3,
+                                  seed=SEED, max_sessions=60,
+                                  trust_cap=None)["sessions_to_close"]
+                for n in lengths}
+    print(f"7. sessions-to-close by session length")
+    print(f"      capped   {capped}")
+    print(f"      uncapped {uncapped}")
+    print(f"      -> typical (2 turns/session) {capped[2]}, "
+          f"WORST over all lengths {min(capped.values())}")
+
+    assert min(capped.values()) >= 3, (
+        f"floor broken at {min(capped.values())} sessions — `close` is reachable "
+        f"in under 3 sessions at some session length, so 6a's "
+        f"'independent of session length' claim is false again")
+    assert min(uncapped.values()) == 1, (
+        "the uncapped path no longer reaches close in one session — if the "
+        "accrual changed, this comparison is stale and the cap's justification "
+        "needs re-deriving rather than inheriting")
+    # And the floor must be FLAT in session length, which is what "guaranteed"
+    # means. A floor that merely happens to be >= 3 at the lengths tested is not
+    # the same claim.
+    assert len(set(capped[n] for n in (8, 16, 32, 64, 128))) == 1, (
+        f"floor still varies with session length: {capped}")
+
+
+def test_rapport_alone_cannot_rush_the_ladder_to_close():
+    """The direct question: is the old per-tick mechanism still able to sprint?
+
+    ANSWER, both halves:
+
+    (a) It cannot reach `close`. Rapport saturates at 1.0 and trust stays 0
+        without disclosure, so score tops out at (1.0+0)/2 = 0.50, below the 0.70
+        threshold. The original 48-second bug is fixed STRUCTURALLY — by trust
+        being a required second term — not by a tuned rate. No cap needed.
+
+    (b) It absolutely can sprint the rungs BELOW close. Measured here: a single
+        unbroken cheerful session crosses `unknown` -> `visitor` -> `known` in
+        about 80 seconds. That is half the ladder in under two minutes, and it is
+        the old uncapped per-tick mechanism still fully active.
+
+    So D is not a "slow axis" as a blanket statement. It is slow where trust
+    gates it and fast where rapport alone does. That distinction is the honest
+    version of the claim and it belongs in the paper.
+    """
+    results = {}
+    for robot in ("CHATBOX", "ELLEBOT"):
+        b = affect.to_pad(affect.ROBOTS[robot]["ocean"])
+        rng = np.random.default_rng(SEED)
+        accrual = SessionAccrual()          # ONE session, never reset
+        rap = tr = 0.0
+        count = 0
+        first = {}
+        for turn in range(500):
+            tier = _tier_from_scores(rap, tr, count)
+            first.setdefault(tier, turn)
+            v, a = _camera_va("happy", rng)
+            felt = affect.feel_with_relationship(b, v, a, tier)
+            dr, dt = accrual.turn("you're funny", felt["P"], ticks=TICKS_PER_TURN)
+            rap, tr = min(1.0, rap + dr), min(1.0, tr + dt)
+            count += 1
+        final = _tier_from_scores(rap, tr, count)
+        results[robot] = (final, rap, tr, first)
+        secs = first.get("known", -1) * TICKS_PER_TURN
+        print(f"8. {robot}: 500 turns, ONE session, zero disclosure -> "
+              f"tier={final!r} rapport={rap:.3f} trust={tr:.3f} "
+              f"score={(rap+tr)/2:.3f}; reached `known` at ~{secs}s")
+
+        assert final == "known", (
+            f"a smile-only session reached {final!r} — if this is 'close', the "
+            f"48-second bug is back and trust has stopped gating the top rung")
+        assert tr == 0.0, "trust moved with nothing disclosed"
+        assert (rap + tr) / 2 <= 0.5 + 1e-9, "rapport alone exceeded score 0.5"
+        # The finding, pinned: the lower rungs ARE fast.
+        assert first["known"] * TICKS_PER_TURN < 300, (
+            "`known` now takes over 5 minutes of smiling — the rapport rate "
+            "changed; re-measure before repeating the 80s figure")
 
 
 def test_the_style_vector_moves_with_the_tier(traces):

@@ -205,6 +205,22 @@ ATTACH_WINDOW = 5
 # multi-session state rather than a single-conversation one.
 DEPTH_TRUST_DELTA: Dict[int, float] = {0: 0.0, 1: 0.02, 2: 0.04, 3: 0.06}
 
+# Maximum trust a single session may add, whatever is said in it.
+#
+# This is not a new idea — it restores a property the LLM extractor had for free.
+# That path ran ONCE per session and clamped its output to +/-0.2
+# (extraction.py:46-47, `_clamp_delta`), so "close takes at least 3 sessions" was
+# guaranteed by arithmetic: reaching score > 0.70 with rapport saturated needs
+# trust > 0.4, and trust could not gain more than 0.2 in a sitting.
+#
+# Moving to a per-TURN rule silently removed that guarantee, because nothing
+# bounded how many turns a session has. Measured before the cap was added: at 8
+# turns per session `close` arrives in ONE session, and the 3-session floor 6a
+# reported as "independent of session length or how warm the interaction is" was
+# simply false. The cap is what makes that sentence true again, and it is set to
+# the extractor's own number so the floor is unchanged rather than re-tuned.
+SESSION_TRUST_CAP: float = 0.20
+
 
 @dataclass(frozen=True)
 class DisclosureResult:
@@ -326,6 +342,45 @@ def detect(text: str) -> DisclosureResult:
         trust_delta=DEPTH_TRUST_DELTA[depth],
         features={"hits": hits, "detector": DETECTOR_VERSION},
     )
+
+
+class SessionAccrual:
+    """Per-session closeness accrual, with the cap the extractor used to provide.
+
+    One instance per session — construct a new one at each session boundary,
+    exactly as `KGBridge` takes a fresh `_session_start` per process
+    (kg_bridge.py:257). Keeping the budget in an object rather than in a module
+    global is what makes the cap a SESSION property instead of a process one; a
+    global would silently share the budget across people.
+
+    `rapport_cap` defaults to None — uncapped, i.e. the deployed behaviour. It is
+    a parameter rather than a constant because rapport reaching its ceiling
+    quickly is not obviously a defect the way uncapped trust was: it tops out at
+    score 0.5, which cannot reach `close`. See the 8c report for the measurement
+    that establishes that, and for why the `unknown -> known` rungs are
+    nonetheless not a "slow" axis in any useful sense.
+    """
+
+    def __init__(self, trust_cap: float = SESSION_TRUST_CAP,
+                 rapport_cap: Optional[float] = None):
+        self.trust_cap = trust_cap
+        self.rapport_cap = rapport_cap
+        self.trust_accrued = 0.0
+        self.rapport_accrued = 0.0
+
+    def turn(self, child_text: str, felt_pleasure: float,
+             ticks: int = 1, **kw) -> Tuple[float, float]:
+        """(d_rapport, d_trust) for one turn, after this session's budget."""
+        d_rapport, d_trust = turn_deltas(child_text, felt_pleasure, **kw)
+        d_rapport *= ticks
+        if self.trust_cap is not None:
+            d_trust = max(0.0, min(d_trust, self.trust_cap - self.trust_accrued))
+        if self.rapport_cap is not None:
+            d_rapport = max(0.0, min(d_rapport,
+                                     self.rapport_cap - self.rapport_accrued))
+        self.trust_accrued += d_trust
+        self.rapport_accrued += d_rapport
+        return d_rapport, d_trust
 
 
 def turn_deltas(child_text: str, felt_pleasure: float,

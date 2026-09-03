@@ -60,7 +60,9 @@ import numpy as np
 from modules.affect_bridge import affect
 from modules.graph_relationship.kg_bridge import _tier_from_scores
 from padeval.analysis.noise_propagation import SIGMA_A, SIGMA_V, WINDOW
-from padeval.coding.disclosure import detect, turn_deltas
+from padeval.coding.disclosure import (
+    SESSION_TRUST_CAP, SessionAccrual, detect, turn_deltas,
+)
 
 STYLE_KEYS = ("amplitude", "tempo", "posture", "droop", "idle")
 
@@ -102,7 +104,8 @@ def _camera_va(emotion: str, rng: np.random.Generator) -> Tuple[float, float]:
 
 
 def run_trace(robot: str, sessions: Sequence[Session], seed: int = 0,
-              mood_gate: bool = True) -> List[Dict]:
+              mood_gate: bool = True,
+              trust_cap: Optional[float] = SESSION_TRUST_CAP) -> List[Dict]:
     """Walk the deployed mechanism forward. One row per turn.
 
     `mood_gate=False` reproduces the PRE-f5bfac9 behaviour — a persisted mood
@@ -119,6 +122,9 @@ def run_trace(robot: str, sessions: Sequence[Session], seed: int = 0,
     rows: List[Dict] = []
 
     for s_idx, session in enumerate(sessions):
+        # A fresh budget per session — that is what makes the cap a session
+        # property. Reusing one across sessions would cap the whole run.
+        accrual = SessionAccrual(trust_cap=trust_cap)
         for t_idx, turn in enumerate(session.turns):
             camera_v, camera_a = _camera_va(turn.emotion, rng)
 
@@ -144,8 +150,8 @@ def run_trace(robot: str, sessions: Sequence[Session], seed: int = 0,
             # Closeness. Rapport accrues per TICK across the turn; disclosure is
             # one event per utterance. The two are read from the same function
             # so neither can silently drift from the deployed rule.
-            d_rap_tick, d_trust_turn = turn_deltas(turn.text, felt["P"])
-            d_rapport = d_rap_tick * TICKS_PER_TURN
+            d_rapport, d_trust_turn = accrual.turn(
+                turn.text, felt["P"], ticks=TICKS_PER_TURN)
             disc = detect(turn.text)
 
             r_before, t_before = rapport, trust
@@ -211,7 +217,8 @@ SCRIPT: Tuple[Session, ...] = (
 
 def tau_d_sessions(robot: str = "CHATBOX", max_sessions: int = 40,
                    turns_per_session: int = 2, depth: int = 3,
-                   seed: int = 0) -> Dict:
+                   seed: int = 0,
+                   trust_cap: Optional[float] = SESSION_TRUST_CAP) -> Dict:
     """Recompute 6a's tau_D under the 8a accrual mechanism, same method.
 
     6a measured tau_D as SESSIONS TO TRAVERSE ONE TIER STEP, under the old rule
@@ -232,13 +239,14 @@ def tau_d_sessions(robot: str = "CHATBOX", max_sessions: int = 40,
     count = 0
     first: Dict[str, int] = {}
     for s in range(max_sessions):
+        accrual = SessionAccrual(trust_cap=trust_cap)
         for _ in range(turns_per_session):
             tier = _tier_from_scores(rapport, trust, count)
             first.setdefault(tier, s + 1)
             v, a = _camera_va("happy", rng)
             felt = affect.feel_with_relationship(baseline, v, a, tier)
-            dr, dt = turn_deltas(text, felt["P"])
-            rapport = min(1.0, rapport + dr * TICKS_PER_TURN)
+            dr, dt = accrual.turn(text, felt["P"], ticks=TICKS_PER_TURN)
+            rapport = min(1.0, rapport + dr)
             trust = min(1.0, trust + dt)
             count += 1
         if _tier_from_scores(rapport, trust, count) == "close":

@@ -35,6 +35,25 @@ concerns a moment the camera never saw. The discriminator is a *displacement* ma
 present. Non-facial states — "left out", "lonely", "embarrassed" — need no such marker,
 because they are not among the seven classes the detector predicts and never will be.
 
+### This is the paper's own thesis, applied one level down
+
+The architecture's central claim is that three influences compose additively because each
+**owns an axis nothing else writes**: persona sets the baseline, the face writes P and Ar,
+the relationship writes D. Sources that overlap do not compose — they overwrite, and 7a
+proves the degenerate case is genuinely unrecoverable rather than merely noisy.
+
+The rule above is that same principle applied *inside* the relationship axis. Rapport and
+trust are two inputs to one quantity, so they must own disjoint information or the sum is
+double-counting. Defining disclosure as *what the camera cannot see* is exactly the
+disjointness condition: it makes rapport the face's contribution and trust the
+transcript's, with no shared term. Their earlier collapse into one number
+(`rapport ≡ trust`, so `score ≡ rapport`) was the same failure as `collapse_D` at a smaller
+scale — a second channel carrying no information the first did not already have.
+
+Worth stating explicitly in the paper, because it turns a defensible engineering choice
+into evidence that the design principle generalises: **the criterion that separates the
+axes is the same one that separates the two terms inside an axis.**
+
 Three routes, ordered by depth, because these are not equivalent acts:
 
 | depth | route | example | trust delta |
@@ -89,7 +108,7 @@ the contraction silently disabled *all three routes*. Children contract constant
 the detector would have looked calm while missing most of what it exists to catch. Fixed
 by expanding contractions at token level rather than loosening the marker set.
 
-**Held out (n=32, the E1 stimuli): κ = 0.739.** These utterances were authored months
+**Held out (n=32, the E1 stimuli): κ = 0.739, 95% CI [0.389, 1.000].** These utterances were authored months
 earlier for a different experiment, stratified independently into
 `question / disclosure / quiet / closing`, and were never seen during development.
 Taking `stratum == "disclosure"` as gold:
@@ -100,9 +119,16 @@ Taking `stratum == "disclosure"` as gold:
 | recall | 0.750 |
 | specificity | 0.958 |
 | accuracy | 0.906 |
-| Cohen's κ | 0.739 |
+| Cohen's κ | **0.739**, 95% CI **[0.389, 1.000]** (5×10³ bootstrap) |
 
 Per stratum, the detector flagged **6/8 disclosure, 0/8 question, 0/8 quiet, 1/8 closing**.
+
+**The interval is wide and is quoted rather than buried.** n = 32 with only 8 positives
+cannot support a precise estimate, and a bare κ = 0.739 would read as far more settled than
+the data allows. What the interval does establish is that agreement is distinguishable from
+chance (the lower bound is well clear of 0); what it does not establish is *where in
+[0.39, 1.00]* the true value sits. A larger held-out sample is the obvious next
+strengthening, and it is cheap — the detector costs nothing to run.
 
 The two misses are the same class — past-tense action facts whose verb is not in
 `FACT_VERBS` ("I drew a picture of a dragon", "I fell over at playtime"). The single
@@ -121,3 +147,13 @@ by implicature are not detected. Errors run toward false **negatives** by constr
 since every route requires an explicit first-person marker — the safe direction: a
 missed disclosure only slows trust accrual, whereas a false one would let trust drift up
 on ordinary chat and re-collapse it onto rapport.
+
+## The per-session cap (added in 8c, after the floor regression was found)
+
+`SESSION_TRUST_CAP = 0.20` bounds how much trust one session may add, whatever is said in
+it. This **restores a property rather than introducing a tuning knob**: the LLM extractor
+ran once per session and clamped its output to ±0.2 (`extraction.py:46-47`), which is what
+made "close takes at least 3 sessions" true by arithmetic. Moving to a per-turn rule
+removed that bound silently, because nothing limits how many turns a session has. The cap
+is set to the extractor's own number so the floor is unchanged rather than re-tuned. See
+the 8c section of `8b_system_trace.md` for the measurement.

@@ -34,9 +34,11 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))))
 
+from padeval.coding.agreement import cohens_kappa, kappa_ci   # noqa: E402
 from padeval.coding.disclosure import (            # noqa: E402
-    DEPTH_TRUST_DELTA, detect, turn_deltas,
+    DEPTH_TRUST_DELTA, SESSION_TRUST_CAP, SessionAccrual, detect, turn_deltas,
 )
+from padeval.stimuli import STIMULI                # noqa: E402
 
 # ── The 2x2. (text, expect_disclosed, note) ─────────────────────────────────
 # Authored to the definition in the module docstring: disclosure is information
@@ -259,3 +261,54 @@ if __name__ == "__main__":
     test_P4_the_two_diverge_at_the_scripted_disclosure_turn()
     test_tier_score_is_no_longer_just_rapport()
     print("\ndisclosure is a rule, and trust is demonstrably not rapport.")
+
+
+# ── held-out validation, with an interval ──────────────────────────────────
+
+def test_held_out_agreement_on_the_E1_stimuli():
+    """The only unbiased number in this file, reported WITH its interval.
+
+    The 32 E1 stimuli were authored months earlier for a different experiment and
+    stratified independently; the detector never saw them during development.
+    `stratum == "disclosure"` is the gold label.
+
+    The point estimate alone would read as far more precise than n=32 with 8
+    positives supports, which is why the CI is asserted rather than just printed.
+    The two misses are past-tense action verbs absent from FACT_VERBS ("I drew…",
+    "I fell…") and are deliberately LEFT UNFIXED: patching against a held-out set
+    turns it into a second training set and destroys the only honest number here.
+    """
+    gold = [s.stratum == "disclosure" for s in STIMULI]
+    pred = [detect(s.text).disclosed for s in STIMULI]
+    k = cohens_kappa(gold, pred)
+    point, lo, hi = kappa_ci(gold, pred, n_boot=10000, seed=0)
+    n_pos = sum(gold)
+    print(f"10. held out (n={len(STIMULI)}, {n_pos} positive): kappa {k:.3f}, "
+          f"95% CI [{lo:.3f}, {hi:.3f}]")
+    assert k >= 0.70, f"held-out kappa {k:.3f} below the 0.70 bar"
+    assert lo > 0.0, "CI includes zero — agreement is not distinguishable from chance"
+
+
+def test_session_cap_restores_the_floor_the_extractor_used_to_provide():
+    """The cap is a restoration, not a new tuning knob.
+
+    The LLM extractor ran once per session and clamped to +/-0.2
+    (extraction.py:46-47), which is what made "close takes >= 3 sessions" true
+    by arithmetic. Moving to a per-turn rule removed that bound silently, because
+    nothing limits how many turns a session has.
+    """
+    a = SessionAccrual()
+    total = sum(a.turn("i felt left out at school", 0.5, ticks=20)[1]
+                for _ in range(50))
+    assert abs(total - SESSION_TRUST_CAP) < 1e-9, (
+        f"50 deep disclosures accrued {total:.3f} trust, cap is "
+        f"{SESSION_TRUST_CAP}")
+    # A fresh session gets a fresh budget, or the cap would bound the whole run.
+    b = SessionAccrual()
+    assert b.turn("i felt left out at school", 0.5, ticks=20)[1] > 0
+    # Rapport is uncapped by default — the deployed behaviour, preserved.
+    c = SessionAccrual()
+    rap = sum(c.turn("you're funny", 0.5, ticks=20)[0] for _ in range(50))
+    assert rap > 1.0, "rapport was capped; that is a separate design decision"
+    print(f"11. trust caps at {total:.2f}/session and resets per session; "
+          f"rapport left uncapped ({rap:.1f} over 50 turns) ✓")

@@ -1962,3 +1962,32 @@ floor came from the extractor's ±0.2-per-session cap, which 8a removed; at the 
 so the test asserts the regression explicitly rather than sampling a favourable parameter. Fix
 is a one-line per-session trust cap — flagged, not applied, since it would change the accrual
 mechanism a third time.
+
+## 8c — chasing P1's falsification to the bottom, and restoring the floor
+
+**Tried.** P1 failing raised a sharper question than "soften a sentence": if D moves
+mid-session, is the old per-tick rapport mechanism still uncapped, and could one long cheerful
+session sprint the ladder the way the original 48-second bug did? Measured directly rather
+than reasoned about — 500 turns, one unbroken session, maximally warm face, zero disclosure.
+
+**Worked.** Two-part answer. (a) It **cannot** reach `close`: rapport saturates at 1.0 with
+trust at 0, so score tops out at 0.50 against a 0.70 threshold — the old bug is fixed by
+*arithmetic*, trust being a required second term a face cannot supply, not by a tuned rate.
+(b) It **does** sprint the lower rungs: `unknown → visitor → known` in 60–80 s of smiling,
+half the ladder in under two minutes. So the honest claim is "D is slow where trust gates it
+and fast where rapport alone does", which also explains P1's mid-session steps exactly.
+
+Separately, swept sessions-to-close across session length instead of sampling the median, and
+found the uncapped 8a rule reaches `close` in **one** session at ≥8 turns — worse than the
+2-session figure reported earlier, which came from testing only the IQR upper bound. Added
+`SESSION_TRUST_CAP = 0.20` via a per-session `SessionAccrual`; the floor is now 3 and **flat**
+in session length (verified to 128 turns/session). The cap restores the LLM extractor's own
+±0.2 clamp rather than introducing a new tuning knob, so the floor returns to 6a's value.
+Held-out κ now reported with its interval: 0.739, 95% CI [0.389, 1.000] — wide, and quoted as
+wide, since n=32 with 8 positives cannot support a point estimate. 85/85 padeval tests pass.
+
+**Didn't.** Rapport is deliberately left **uncapped** — it tops out at score 0.50 and cannot
+reach `close`, so capping it is a separate design decision, not a defect fix. Still not wired
+into the live loop, per the standing decision to keep hardware off an unverified accrual
+change; both open items (the cap and the rapport question) are now resolved and reverified, so
+wiring is unblocked whenever wanted.

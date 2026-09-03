@@ -92,6 +92,68 @@ before the trace was read, not recovered from it.
 The visible cost is in the effectors: amplitude is 0.300 at `unknown` where the true command
 wanted lower, against 0.355/0.425 at the rungs above.
 
+## 8c — the falsified prediction, chased to the bottom
+
+P1's failure raised a sharper question than "one sentence needs softening": if D can move
+mid-session, is the old per-tick *"closeness grows every second you're smiling at it"*
+mechanism still fully active and uncapped — and could a single long, cheerful session
+still sprint the ladder the way the original 48-second bug did?
+
+**Measured directly: 500 turns, one unbroken session, maximally warm face, zero disclosure.**
+
+| robot | final tier | rapport | trust | score | `known` reached at |
+|---|---|---|---|---|---|
+| CHATBOX | `known` | 1.000 | 0.000 | 0.500 | ~80 s |
+| ELLEBOT | `known` | 1.000 | 0.000 | 0.500 | ~60 s |
+
+The answer has two halves and both matter.
+
+**(a) It cannot reach `close`, and the reason is structural.** Rapport saturates at 1.0 and
+trust stays at 0 without disclosure, so the score tops out at `(1.0 + 0)/2 = 0.50` — below
+the 0.70 threshold, permanently, at any session length. The original bug is fixed *by
+arithmetic*: trust is a required second term that a face cannot supply. Not by a tuned
+rate, which is what makes it a guarantee rather than a margin.
+
+**(b) But it absolutely does sprint the rungs below `close`.** `unknown → visitor → known`
+in **60–80 seconds** of continuous smiling — half the four-rung ladder in under two minutes.
+That is the old uncapped per-tick mechanism, fully active, exactly as suspected.
+
+So the honest statement is not "D is the slow axis". It is:
+
+> **D is slow where trust gates it and fast where rapport alone does.** The top rung is
+> guaranteed multi-session; the lower rungs are not, and move on the order of a minute.
+
+This is a sharper claim than the original and it is the one the paper should make, because
+it is the one that survives being checked. It also explains P1 cleanly: the mid-session
+steps the trace found are exactly the rapport-gated ones.
+
+## The floor regression, and the fix
+
+8a moved trust from once-per-session (LLM, clamped ±0.2) to per-turn with no bound. Nothing
+limits how many turns a session has, so the bound vanished with it. Sessions to reach
+`close`, swept across session length rather than sampled at the median:
+
+| turns/session | 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128 |
+|---|---|---|---|---|---|---|---|---|
+| **uncapped (8a as first written)** | 7 | 4 | 2 | **1** | **1** | **1** | **1** | **1** |
+| **capped at 0.20/session (8c)** | 7 | 4 | 3 | 3 | 3 | 3 | 3 | 3 |
+
+**Uncapped, `close` arrives in a single session at ≥ 8 turns** — worse than the 2-session
+figure first reported, which came from testing only the IQR upper bound. `SESSION_TRUST_CAP
+= 0.20` restores a floor that is not merely ≥ 3 but **flat in session length**, which is
+what "guaranteed" has to mean. The cap is set to the extractor's own clamp, so the floor
+returns to 6a's value rather than being re-tuned to a new one.
+
+**Reported as typical *and* worst case, deliberately.** The first pass through this phase
+quoted τ_D at the empirical median — 4 sessions, an improvement on 6a — while the tail had
+silently dropped to 2. A single number drawn from a favourable parameter is not a floor, and
+the same mistake is easy to make twice. The sweep above is now asserted in
+`test_tau_D_floor_is_hard_again_typical_AND_worst_case`, including a check that the
+uncapped path *still* reaches `close` in one session, so the cap's justification cannot
+quietly go stale.
+
+**Typical: 4 sessions (2 turns/session, 6a's median). Worst case over all session lengths: 3.**
+
 ## τ_D recomputed under the 8a mechanism — and a regression 6a's method would have missed
 
 8a replaced end-of-session LLM trust with per-turn rule-based trust, so 6a's τ_D cannot be
@@ -104,7 +166,8 @@ profile, deepest disclosure every turn):
 | **2 (6a median)** | **4** |
 | 4 (6a IQR upper) | **2** |
 
-**At the median, τ_D = 4 sessions, up from 6a's 3 — the separation is slightly stronger.**
+**At the median, τ_D = 4 sessions, up from 6a's 3 — the separation is slightly stronger, and
+with the 8c cap the worst case across all session lengths is 3, matching 6a's floor exactly.**
 Re-deriving 6a's ratio table with τ_D = 4:
 
 | session length | τ_D (ticks) | ratio to τ_P = 2.025 | orders |
@@ -115,19 +178,11 @@ Re-deriving 6a's ratio table with τ_D = 4:
 
 **The two-order-of-magnitude separation holds, and improves.**
 
-**But a property was lost, and it is not visible at the median.** 6a's 3-session figure was a
-*hard floor*: trust moved once per session and the extractor capped it at ±0.2, so the floor
-held "independent of session length or how warm the interaction is" — a property of the
-controller rather than of the deployment. 8a accrues trust **per turn with no per-session
-cap**, so that independence is gone: at 4 turns/session, `close` arrives in **2** sessions,
-below 6a's floor.
-
-Reporting only the median (4 sessions, an improvement) would have concealed this. The fix is
-one line — cap cumulative trust gain per session at the extractor's old ±0.2 — and it would
-restore the floor while keeping the determinism 8a bought. **This is flagged, not applied:**
-it changes the accrual mechanism a third time, and the test
-(`test_tau_D_recomputed_under_the_8a_mechanism`) pins the current behaviour so the change
-cannot land silently.
+**The property that was lost has been restored** — see the 8c section above. It is worth
+recording that it was lost at all: 6a's floor held "independent of session length or how
+warm the interaction is" because the extractor's ±0.2 clamp made it arithmetic, and moving
+to a per-turn rule dropped that guarantee without any test noticing. The cap is now pinned
+by a session-length sweep rather than a point estimate.
 
 ## Verified — `padeval/tests/test_system_trace.py`, 9/9 (new), 82 padeval tests total
 

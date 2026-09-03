@@ -1,0 +1,12 @@
+# Analysis-only dependencies for padeval. NOT part of the runtime requirements —
+# the generation half of the harness imports numpy only, so a machine that runs
+# the campaign does not need any of this.
+#
+# nltk is pinned: the rule coder's open-noun detector uses the perceptron tagger,
+# and a tagger revision would silently change coded outcomes. It also needs the
+# `punkt`, `punkt_tab` and `averaged_perceptron_tagger_eng` data packages:
+#   python3 -c "import nltk; [nltk.download(p) for p in ('punkt','punkt_tab','averaged_perceptron_tagger_eng')]"
+nltk==3.9.4
+scipy>=1.15
+scikit-learn>=1.7
+pandas>=2.3

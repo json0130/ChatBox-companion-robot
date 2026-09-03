@@ -153,6 +153,401 @@ silently becoming a null. All 75 pre-existing tests unaffected.
 
 ---
 
+## exp(padeval): powered ladder — a BOUNDED null, and the measured ICC  *(branch `feature/padeval-phase3`)*
+
+The run that settles the open half. Persona and tier pinned, memory and capability blocks removed, all seven
+rungs, **32 stimuli x 8 replicates = 256 per rung, 1,792 generations, 724 s.** Every reply generated (1792/1792
+ok).
+
+| rung | directive | init% | mean ordinal |
+|---|---|---|---|
+| 0 | open with something you already know | 9.0% | 1.12 |
+| 1 | propose the next topic yourself | 9.4% | 1.55 |
+| 2 | offer a topic if they do not bring one | 5.5% | 1.16 |
+| 3 | either of you may open a topic | 6.2% | 1.12 |
+| 4 | follow their topic, one follow-up | 4.3% | 1.77 |
+| 5 | ask about what they bring up, do not introduce | 3.9% | 1.22 |
+| 6 | answer only what they ask | 7.8% | 1.02 |
+
+**The 9% -> 3% trend from the n=32 probe did not replicate.** At 256 per rung it is 9.0% -> 7.8%, and the
+series is not monotone. That earlier hint was noise, which is exactly what the underpowered warning said it
+might be.
+
+### Cluster-robust inference — bootstrap over the 32 stimuli, not the 1,792 replies
+
+| statistic | point | 95% CI |
+|---|---|---|
+| tau(rung, initiated) | −0.0393 | [−0.0884, +0.0068] |
+| tau(rung, ordinal) | −0.0137 | [−0.0615, +0.0324] |
+| rate difference, rung 0 − rung 6 | +0.0117 | [−0.0391, +0.0586] |
+
+This is a **bounded null, not merely a non-significant one**. The interval on the rung-0 vs rung-6 difference
+excludes any effect larger than about **6 percentage points in either direction**. The claim is no longer
+"we failed to detect an effect" but "any effect is smaller than 6 points" — a far stronger statement, and the
+one worth writing down.
+
+(The naive Fisher p of 0.75 is reported alongside only to show it agrees; it ignores clustering and should not
+be the quoted figure.)
+
+### The ICC, measured rather than assumed
+
+| outcome | ICC | design effect (m=8) | effective n | per rung |
+|---|---|---|---|---|
+| initiated | **0.128** | 1.90 | 944 of 1792 (53%) | 135 of 256 |
+| ordinal level | **0.193** | 2.35 | 763 of 1792 (43%) | 109 of 256 |
+
+Lower than the 0.3 the plan assumed, so replicates are worth more than feared — but still nearly half the
+nominal sample is lost to clustering. **Any future budget must be quoted in effective n.** At ICC 0.13 with 8
+replicates, 256 replies per rung buys 135, so a design needing 245 effective per rung would need ~465 raw, or
+more stimuli instead — and adding stimuli is the better buy, since it raises the cluster count rather than the
+cluster size.
+
+This closes the ICC item that was outstanding before any generation budget was committed.
+
+### Where the E1 claim now rests
+
+**Settled, both directions:**
+1. *Deployed configuration:* the directive does not control topic initiation, and the point estimate runs
+   backwards. Adequately powered.
+2. *Memory and capabilities removed:* no effect either, and now bounded at <6 points. The previous "open
+   question with a costed answer" is closed, and the answer is no.
+
+**The headline is therefore a clean, well-powered negative result:** a behavioural instruction resident in an
+LLM system prompt did not measurably control the behaviour it names, across the full seven-rung range of the
+instruction, with and without competing prompt content, at 1,792 + 448 + 512 + 256 generations.
+
+That is a genuine contribution about prompt-based behavioural control, and it is more useful stated plainly
+than dressed up. It does **not** touch the architecture's other two claims: E3's setpoint stability and E2's
+rank/leakage results are structural properties of the equations and stand independently of what any LLM does
+with a prompt.
+
+---
+
+## exp(padeval): the full-rung ladder — no directive effect, and the honest power bound  *(branch `feature/padeval-phase3`)*
+
+The decisive controllability probe. Persona and tier **pinned** (CHATBOX, `known`), Dominance forced to the
+midpoint of each of the seven directive bands, descriptor words deliberately left **unchanged** so the only
+thing varying is the directive clause. Every midpoint asserted against `prompt.manner_directive` before use.
+This removes the persona/rung confound (plan R1) and isolates the directive channel. 448 generations, 363 s.
+
+| rung | D | directive | init% (deployed) | init% (distractions removed) |
+|---|---|---|---|---|
+| 0 | +0.81 | open with something you already know | 66% | 9% |
+| 1 | +0.47 | propose the next topic yourself | 62% | 16% |
+| 2 | +0.22 | offer a topic if they do not bring one | 56% | 6% |
+| 3 | −0.16 | either of you may open a topic | 66% | 9% |
+| 4 | −0.59 | follow their topic, one follow-up | 66% | 9% |
+| 5 | −0.83 | ask about what they bring up, do not introduce | 75% | 3% |
+| 6 | −0.96 | answer only what they ask | 75% | 3% |
+
+**Deployed prompt: no effect, and the sign is backwards.** tau = +0.083 (p = 0.16) on the binary; rung 6
+("answer only what they ask") initiates *more often* than rung 0 ("open with something you already know") —
+75% vs 66%, Fisher p = 0.59. At a ~70% base rate with n = 32/rung the minimum detectable difference is ~26
+points, so this is not a precision problem: an effect large enough to matter would have shown.
+
+**Distractions removed: the right direction, but genuinely underpowered.** tau = −0.093 (p = 0.11), rung 0 at
+9% falling to 3% at rung 6. That is the ordering the ladder predicts, and rungs 5/6 are the lowest — but with
+a 3-16% base rate, n = 32 gives 1-5 events per cell and a minimum detectable difference of ~23 points. **This
+arm cannot resolve the effect it is hinting at, and reporting it as a null would be wrong.**
+
+Power for the rung-0 vs rung-6 contrast at alpha .05, power .80:
+
+| arm | observed | n needed per rung | total generations |
+|---|---|---|---|
+| deployed | 66% vs 75% | 402 | ~2,800 (~70 min) |
+| distractions removed | 9% vs 3% | **245** | **~1,715 (~30 min)** |
+
+**Where this leaves the claim.** Two separate statements, and they must not be merged:
+
+1. *In the deployed configuration the behavioural directive does not control topic initiation.* Adequately
+   powered for any effect worth claiming, and the point estimate runs the wrong way. This is a real finding.
+2. *With the memory and capability blocks removed, a small effect in the predicted direction may exist and
+   this experiment cannot resolve it.* Underpowered by roughly 8x. Not a null — an open question with a
+   costed answer.
+
+The honest headline is (1): **a prompt-resident behavioural instruction is overridden by the same prompt's
+memory block**, which is a result about prompt-based control rather than about PAD. The architecture's other
+two claims are untouched by it — E3's setpoint stability and E2's rank result are structural and stand.
+
+**Next, if pursued:** the ~30-minute powered run on the stripped arm settles (2) properly. Nothing else should
+be written about controllability until it does.
+
+---
+
+## fix(padeval): cry-wolf coder fixed; the distractor is MEMORY, not capabilities; no tier gradient  *(branch `feature/padeval-phase3`)*
+
+### Coder fix — the directional bias is gone
+
+The open-noun detector now fires only on nouns inside a **topic-introducing frame** ("talk about X", "did you
+know X", "how about X"). Introducing a topic is a framing act; a bare noun inside an answer is not an
+introduction however novel it is. That is a fix to the concept, not a patch on the symptom — the previous
+version had nothing to constrain it on the 20 of 32 stimuli that declare no topics, so `laugh`, `kitty`, `guy`
+and `alright` all read as new subjects.
+
+Against the same 60 blinded items (coded by `claude_ai_v1` — an AI adjudicator, **not** a human gold set):
+
+| | before | after frames | + lexicon gap closed |
+|---|---|---|---|
+| binary agreement | 90% | 93% | **97%** |
+| kappa (binary) | 0.74 [0.52, 0.91] | 0.85 [0.68, 0.96] | **0.92 [0.79, 1.00]** |
+| kappa_w (ordinal) | 0.65 | 0.82 | **0.84 [0.62, 0.96]** |
+| McNemar b/c, p | **6/0, p=0.031** | 1/3, p=0.625 | **1/1, p=1.000** |
+
+The bias is symmetric now. The lexicon gap was `constellation`/`spaceship`/`universe` and similar missing from
+the `space` topic — plainly space words, added on their face rather than tuned to a result. 48/48 authored
+cases still pass.
+
+### Finding — the competing block is the seeded MEMORY, not the capability list
+
+512 new generations across two suppression arms, same grid as the baseline:
+
+| arm | mean initiation |
+|---|---|
+| `A1_full` (as deployed) | **70%** |
+| `A7_no_caps` (capability list removed) | **66%** |
+| `A9_no_caps_no_mem` (also no seeded interests) | **10%** |
+
+Removing the "You can: tells stories, knows jazz, knows about space..." list **barely moves anything** — 70%
+to 66%. Removing the seeded person memory as well collapses initiation to 10%. So the earlier diagnosis was
+wrong in its target: plan risk R2 named the capability list, but `space` and `guitar` reach the robot through
+the MEMORY block, and that is what overrides the directive.
+
+### Finding — no tier gradient survives in ANY arm
+
+Kendall's tau between tier rank and behaviour, per robot:
+
+| arm | robot | binary tau | ordinal tau | p (ordinal) |
+|---|---|---|---|---|
+| A1_full | chatbox | +0.040 | −0.002 | 0.975 |
+| A1_full | ellebot | +0.044 | +0.057 | 0.451 |
+| A7_no_caps | chatbox | +0.013 | +0.003 | 0.968 |
+| A7_no_caps | ellebot | +0.014 | +0.054 | 0.474 |
+| A9_no_caps_no_mem | chatbox | −0.016 | +0.141 | 0.065 |
+| A9_no_caps_no_mem | ellebot | +0.070 | +0.076 | 0.320 |
+
+Nothing reaches significance, and nothing is monotone. Clearing the floor from 70% to 10% did **not** reveal a
+hidden gradient — so the null is not simply a ceiling artefact.
+
+**The honest statement, scoped:** *at the four reachable tiers*, the behavioural directive does not measurably
+control topic initiation, on either the binary or the ordinal, with or without competing prompt blocks.
+
+**What is NOT yet tested, and is the decisive remaining probe:** the reachable tiers cover only 4 of the 7
+rungs per robot, and rung is confounded with persona (plan R1 — only rung 3 is shared). The `A1_full_ladder`
+arm, which pins one persona and forces Dominance across all seven rungs, decouples the two and gives the
+prompt-to-behaviour map its strongest test. ~224 generations, about four minutes. That should run before any
+claim about controllability is written down in either direction.
+
+---
+
+## feat(padeval): Phase 4b — gold pool, agreement maths, and two blocking findings  *(branch `feature/padeval-phase3`)*
+
+**Built:** `padeval/stimuli.py` (32 authored utterances, 4 strata x 8, each raising at most one lexicon topic
+and none touching the seeded memory), `padeval/fixtures.py` (`TIER_RECIPE` + `seed_person` moved out of
+`tools/pad_prompt_grid.py`, plus `build_world`), `padeval/coding/agreement.py` (Cohen's kappa with bootstrap
+CI, quadratic-weighted kappa for the ordinal, exact McNemar, per-stratum report — numpy only, checked against
+a worked example).
+
+**Pool generated:** 256 replies = 2 robots x 4 tiers x 32 stimuli, real prompts through the deployed
+`_build_system_prompt`, seeded, 252 s. `runs/eval/gold_pool.jsonl`.
+
+### A note on who coded what
+
+The blind sample was coded by **Claude, labelled `claude_ai_v1`** — an LLM, not a human. Reported as an AI
+adjudicator and nothing else. It cannot stand in for `kappa(rule, human)`: an LLM's errors correlate with the
+generator's in exactly the way a gold set exists to rule out, and a methods section claiming human coding when
+an LLM did it would be false about provenance. **The human gold set is still required before any campaign.**
+The AI pass is useful for what it did here — it caught a coder bug early, for the cost of 60 items.
+
+### Finding 1 (blocking) — the rule coder over-fires, and directionally
+
+60 blinded items, stratified: binary agreement 90%, `kappa = 0.74 [0.52, 0.91]`, ordinal
+`kappa_w = 0.65 [0.38, 0.85]`. Kappa clears the 0.70 bar — but **McNemar is 6/0, p = 0.031**. Every single
+disagreement runs the same way: the rule coder says "initiated" where the AI coder says it did not. A
+systematic bias in a rate is worse than symmetric noise, because it inflates the outcome everywhere at once.
+
+Root cause found: **20 of the 32 stimuli declare no topics**, and the elaboration guard added in Phase 4a only
+suppresses the open-noun detector when the reply mentions a *stimulus* topic. On a stimulus with no declared
+topics nothing suppresses it, so any noun in the reply counts as a new topic — `laugh`, `guy`, `kitty`,
+`alright`, `course`. Four of the six over-fires are exactly this case.
+
+The fix is not more stoplist entries; that is whack-a-mole. The open detector should fire only on nouns inside
+a **topic-introducing frame** ("talk about X", "tell you about X", "did you know X"), which is what
+introducing a topic actually looks like. Deferred rather than rushed, because it changes the primary outcome
+measure and wants its own authored cases.
+
+### Finding 2 (blocking, and bigger) — the directive is being swamped
+
+Initiation rate by tier, rule coder, over the whole 256-reply pool:
+
+| robot | unknown | visitor | known | close |
+|---|---|---|---|---|
+| chatbox | 72% | 69% | 75% | 69% |
+| ellebot | 75% | 75% | 84% | 81% |
+
+**No ordering by tier, and the floor is ~70%.** At `unknown` the directive reads *"answer only what they ask,
+and do not introduce a topic of your own"* — and the robot proposes space anyway, in roughly three replies out
+of four. Inspection confirms these are genuine initiations, not coder artefacts: *"mm."* -> *"Did you know
+space is filled with billions of stars?"*
+
+This is plan risk R2 confirmed and quantified. The IDENTITY block's capability list and the seeded person
+memory are a standing invitation, identical in every condition, and they dominate the directive. Two
+consequences: the `A7_no_capabilities` arm is **essential, not optional**, and a memory-suppressed arm is
+probably needed too, since `space` and `guitar` come from the seed rather than the capability list.
+
+The stimulus stratum also dwarfs the tier — disclosure 38% vs quiet 98% vs closing 95% — so the stratum has to
+enter the model as a factor, not be averaged over.
+
+Also observed: **ordinal levels 1 and 5 never occur** in 256 replies. Level 5 is rung 0's own wording ("open
+with something you already know about them"), commandable only by ELLEBOT at `close`, and it never appears —
+the top of the ladder does not produce its distinctive behaviour.
+
+### What this means for the campaign
+
+Neither finding is a reason to abandon E1, but both must be resolved before spending GPU hours: a directional
+coder bias would inflate every cell, and a 70% floor with no tier ordering would produce a null that says more
+about the prompt's other blocks than about the directive. The floor is itself a publishable result — it is
+just not the result E1 was designed to measure.
+
+---
+
+## feat(padeval): Phase 4a — the rule coder, 100% on 48 authored cases  *(branch `feature/padeval-phase3`)*
+
+**Goal (user):** build E1's primary outcome coder. Rule-based and PRIMARY on purpose: it is deterministic and
+fixed before the data exists, so it cannot be tuned after seeing a result — an LLM judge can be re-prompted
+until the numbers improve and nobody can prove it wasn't.
+
+**Two corrections to the plan's assumptions, found by checking rather than trusting.**
+
+*The "free labelled data" is 36 replies, not 250.* The plan claimed ~8,700 qwen replies were already on disk;
+that counted JSONL **lines** (each carrying a ~2,000-char prompt), not replies. Actual inventory:
+`A_adj.jsonl` 18 + `B_dir.jsonl` 18 = **36 distinct replies**, and the other two run files were `--no-llm` with
+empty replies. So the 250-reply gold set cannot come from existing artifacts; it needs a fresh unlabelled pool,
+which is cheap (~250 seeded generations) and does not require the full campaign.
+
+*NLTK's tagger was missing.* `averaged_perceptron_tagger_eng` (the name newer NLTK requires) was absent, so
+`pos_tag` raised. Downloaded, and `nltk==3.9.4` is now pinned in a new `requirements-eval.txt` — a tagger
+revision would silently change coded outcomes, which is not something to leave floating.
+
+**Design — why a rule coder is tractable here.** The experiment controls the topic universe on all three
+sides: person memory is seeded identically in every cell (guitar/music, space/science), robot capabilities are
+authored in the spec YAMLs, and stimulus topics are authored by us. So the coder matches against sets we wrote
+down rather than guessing at open-domain semantics. Two detectors OR'd: a closed-lexicon match (20 topics, 121
+surface forms) and an open-noun detector for the residual case. Morphology is a hand-written irregular map plus
+an explicit suffix rule, **not a stemmer** — Porter folds `space` and `spacing`, and "we used the Porter
+stemmer" is not something a reviewer can audit.
+
+**Binary AND ordinal.** The binary saturates: rungs 4/5/6 all predict "no new topic" and 0/1/2 all predict
+"new topic", so it resolves at most three of seven commanded levels and would understate the controller. The
+0-5 ordinal (answers-only / asks-back / follow-up+expansion / hedged offer / asserts / opens-with-a-remembered-
+fact) maps monotonically onto the ladder and is what Kendall's tau gets computed on. Level 5 is exactly rung
+0's wording, reachable only by ELLEBOT at `close`.
+
+**Four real bugs found by the authored cases, which is what they are for.**
+
+1. *`Was` tagged NNP.* Sentence-initial capitals fooled the tagger, so `"How did it go? Was it hard?"` coded as
+   introducing a topic — a false positive on precisely the ask-back behaviour the suppressing rungs produce,
+   which would have destroyed the effect. Fixed by tagging lower-cased tokens; a genuine proper-noun topic
+   still tags NN (`tim` -> NN), so nothing is lost.
+2. *Verbs mis-tagged as nouns.* `want`, `let`, `cover` and friends fired the open detector. Added a `VERB_LIKE`
+   guard, kept separate from `NON_TOPIC_NOUNS` so the two reasons for exclusion stay legible.
+3. *`"you like"` collided with the hedge `"if you like"`,* so *"We could talk about space if you like"* coded
+   as a remembered fact (level 5) instead of a hedged offer (level 3). Removed `you like`/`you love` from the
+   recall markers — a recall marker has to be unambiguous about who said it.
+4. *The open detector fired on elaboration.* `"Did the maths test cover fractions?"` counted as initiating
+   because `fractions` is not in the lexicon. Now suppressed when the reply still mentions a stimulus topic:
+   a specific noun inside their topic is elaboration, not initiation. **The cost is a documented false
+   negative** — a reply that stays on their topic and bolts on an off-lexicon new one reads as not-initiated —
+   accepted because the stimuli raise at most one lexicon topic and the robot's plausible new topics are its
+   capability list, which IS in the lexicon. Novel lexicon topics are never suppressed this way.
+
+One "miss" was **not** a bug: `"Space is wonderful, isn't it?"` was coded level 1 against an expected 0. A tag
+question does ask back, so the coder was right and the authored expectation was wrong. Corrected in the test
+rather than worked around in the coder.
+
+**Verified — `padeval/tests/test_rule_coder.py`, 48/48 (100%), 37 padeval tests total.** The cases are written
+to be hard rather than flattering: follow-up questions about their topic, topics the stimulus already raised,
+negated mentions, the hedge/assert boundary, the recall/pitch boundary, backchannels and empty input. Also
+pinned: binary and ordinal stay consistent (`initiated` iff `level >= 3`), the lexicon has no surface-form
+collisions, negation scope stops at a clause break rather than swallowing the sentence, and the coder is
+deterministic over repeats.
+
+**Still open before the gold set:** kappa against human-coded replies must clear 0.70 before any GPU hours,
+and the pool has to be generated first (see the 36-vs-250 correction above).
+
+---
+
+## feat(padeval): Phase 3 — seeded, paired generation, and bit-reproducibility measured rather than assumed  *(branch `feature/padeval-phase3`)*
+
+**Worktree.** Built in `../chatbox-phase3` on its own branch. A second session had committed to
+`webcam_loop.py` (`dc87d93`) mid-flight, and Phase 3 is the first phase whose measured artifact depends on
+that exact file, so the campaign runs isolated and merges deliberately.
+
+`dc87d93` was diffed before proceeding: five hunks, all outside the harness's contract surface —
+`_build_system_prompt`, `LLMClient`, `respond`, `manner_directive`, the pad-dict reads, `_adapter` and
+`gesture_style` had **0 changed lines** each. The one overlap is `_parse_llm_response` routing through the new
+`_resolve_tag` with pruned synonyms: the recorded `tag` changes, but `_TAG_ANY.sub` strips every bracketed
+span regardless, so the reply text E1 codes is byte-identical. Consequence to note: the `tag` column in
+pre-existing `runs/*.jsonl` predates that change and is not comparable across it.
+
+**`LLMClient.respond` gained optional `temperature` / `seed`,** applied after the built-in defaults so they
+win only when passed, and omitted from the request entirely when `None`. Wrapped rather than subclassed in
+`padeval/llm.py`: a subclass would have restated the stop-string list and `_clean_reply` and drifted, which
+would mean measuring something other than the deployed path. Behaviour preservation is asserted with a stub
+client capturing request kwargs — no Ollama needed, so that half runs in CI.
+
+**Pairing (requested).** `pair_key` deliberately excludes the assignment and the seed derives from it, so the
+`identity` and `perm_emotion_D` trials for the same (robot, tier, emotion, stimulus, arm, replicate) draw the
+**same seed** and differ only by the manipulation. E1 is therefore a paired comparison by construction rather
+than two runs argued to be comparable afterwards. Run sequentially instead and every difference is confounded
+with whatever drifted between batches; not recoverable later, because the seeds would already be wrong.
+
+**Finding 1 — bit-reproducibility is NOT available on this backend, and the approved gate is withdrawn.**
+
+| | byte-level replication, 10 interleaved prompts |
+|---|---|
+| temperature 0.7, fixed seeds | **80%** |
+| temperature 0.0, fixed seeds | **80%** |
+
+Same seed repeated back-to-back on one prompt reproduces perfectly (10/10 identical). It is **interleaving**
+distinct prompts that breaks it, and greedy decoding does not rescue it — identical 80% — so the residue is
+backend batching / KV-cache state, not the sampler. Warming every distinct prompt first does not close it
+either. A `warm_up` bug was found and fixed on the way (it keyed on the system prompt alone, but the prefix
+cache is over the whole token sequence, so warming a batch warmed only its first member).
+
+The Phase 3 gate of "100% byte-identical" would either fail forever or force a false claim into a methods
+section, so it is replaced by: report the byte-level rate, and assert only a floor (>= 0.5) as a smoke test
+that the seed reaches the backend at all — a broken seed would sit near chance, not near 80%.
+
+**The reproducibility claim the paper should make is OUTCOME-level.** Every observed mismatch is a
+near-paraphrase — *"learn new things"* vs *"learn lots of new things"* — which no topic-initiation coder would
+separate. `outcome_replication()` measures agreement on the coded label rather than the raw text and is the
+figure to publish; it runs in Phase 4 once a coder exists.
+
+**Finding 2 — reply diversity is a property of the PROMPT, and it is not uniform.**
+
+| prompt | distinct replies across 5 seeds | modal share |
+|---|---|---|
+| tag-constrained + `"mm."` | 2/5 | 80% |
+| tag-constrained + open question | 5/5 | 20% |
+
+A low-entropy stimulus collapses toward one continuation, so replicates on that cell buy almost no
+information. The approved power calculation assumed 32 stimuli x 3 replicates with a uniform ICC; that
+overstates the effective n for low-entropy cells. `sample_diversity()` exists to screen the stimulus set
+before the main run so the distribution can be reported rather than assumed. **This needs a design decision
+before Phase 6** — see the open question below.
+
+**Verified — `padeval/tests/test_llm_determinism.py` 10 checks (7 offline, 3 live), 32 padeval tests total,
+43 pre-existing green.** Offline half pins that spoken-reply and json_mode requests are byte-identical to
+before, that overrides win when passed, that history expansion is unchanged, that paired assignments share a
+seed while keeping distinct trial keys, and that the seed responds to every design field and is
+order-independent.
+
+**Open for the next session:** with replicates buying little on low-entropy cells and bit-reproducibility
+capped at ~80% regardless, the stimulus/replicate split needs revisiting — most likely more stimuli and fewer
+replicates, since generalisation rests on `n_stimuli` anyway.
+
+---
+
 ## feat(padeval): E2 analytic Jacobian — a calibrated leakage metric, and collapse proved degenerate  *(branch `feature/pad-affect-core`)*
 
 **Goal (user):** Phase 2 of the harness, run as a PAIR — once against the deployed system with the

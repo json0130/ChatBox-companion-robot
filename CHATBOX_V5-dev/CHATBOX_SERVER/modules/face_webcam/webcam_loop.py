@@ -345,7 +345,9 @@ class LLMClient:
 
     def respond(self, system_prompt: str, user_msg: str,
                 history: list[tuple[str, str]] | None = None,
-                max_tokens: int = 140, json_mode: bool = False) -> str:
+                max_tokens: int = 140, json_mode: bool = False,
+                temperature: float | None = None,
+                seed: int | None = None) -> str:
         """
         Args:
             history: list of (user_text, assistant_text) pairs from previous turns.
@@ -357,6 +359,20 @@ class LLMClient:
                      strings. This near-eliminates the prose-wrapper / truncation
                      misfires that otherwise silently drop a whole turn's topics, and
                      makes extraction deterministic. Not used for spoken replies.
+            temperature: override the sampling temperature. None (the default) keeps
+                     the values this method has always used — 0.0 in json_mode, 0.7
+                     for a spoken reply — so no existing caller changes behaviour.
+            seed: passed straight to Ollama's OpenAI-compatible endpoint, which
+                     honours it: the same seed reproduces a reply byte for byte,
+                     different seeds sample different replies. Omitted from the
+                     request entirely when None, so a backend that does not accept
+                     the field is unaffected.
+
+        `temperature` and `seed` exist for the evaluation harness (padeval), which
+        needs a run to be reproducible without forking this method. A harness-side
+        subclass would have had to restate the stop-string list and the
+        _clean_reply handling, and would then drift out of step with the live path
+        — which would mean measuring something other than the deployed system.
         """
         if not self.available or self._client is None:
             return "[LLM not connected — run with --llm]"
@@ -382,6 +398,13 @@ class LLMClient:
                 # truncate a valid object.
                 kwargs["stop"] = ["<|im_start|>", "<|im_end|>",
                                   "\nuser", "\nUser", "\nassistant"]
+            # Applied AFTER the defaults above so an explicit override wins, and
+            # only when given — omitting the keys entirely is what keeps the
+            # request byte-identical to before for every existing caller.
+            if temperature is not None:
+                kwargs["temperature"] = temperature
+            if seed is not None:
+                kwargs["seed"] = seed
             resp = self._client.chat.completions.create(**kwargs)
             content = resp.choices[0].message.content
             # In json_mode the content is a clean JSON object — skip _clean_reply so

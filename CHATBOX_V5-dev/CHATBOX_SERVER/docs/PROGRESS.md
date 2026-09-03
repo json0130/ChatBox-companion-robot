@@ -6,6 +6,38 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## exp(padeval): 7a — identifiability characterized, not spot-checked  *(branch `feature/pad-affect-core`)*
+
+Turns E2 from "we checked four assignments" into a proof with those four as corollaries.
+
+**Two theorems.** (1) If `j` of the 3 PAD axes are frozen at baseline, the axis-space Jacobian has at most
+`3-j` nonzero rows, so `rank <= 3-j` — by the chain rule, exactly, independent of step size. This is the
+generalization of the argument that corrected `collapse_D`'s rank in 6c, and precisely why finite-difference
+rank detection failed there while the structural argument was authoritative. (2) A bijective routing gives an
+invertible scaled permutation matrix, hence full rank.
+
+**All 30 structurally distinct assignments enumerated** (27 non-collapse + 3 collapse) with rank computed two
+independent ways — a closed-form Jacobian derived from `compose_offsets`, and finite differences via the
+existing `e2_identify.jacobian`. **30/30 agree**, Jacobians matching to 3.3e-14. 24 of 30 assignments are
+rank-deficient; only the 6 bijections are not. The four originally-tested assignments are now *predicted*,
+including the corrected rank-1 `collapse_D` (an instance of Theorem 1 with j=2, no longer a special case).
+
+**Explicitly does NOT overclaim.** All 6 bijections are equally full-rank, so identifiability alone does not
+single out `identity` — a dedicated test pins this so the claim cannot drift. The argument is two-part:
+degenerate routings are ruled out by identifiability (24/30); among the identifiable bijections, `identity` is
+singled out by *dynamics* (E3 setpoint stability, 7.0 noise propagation).
+
+**A semantic subtlety found by reading the code:** `compose_offsets` assigns valence then arousal
+*sequentially*, so when both route to one axis the second **overwrites** the first — valence is discarded, not
+mixed. Those cases mean "a source is silently dropped", not "two sources share an axis". Rank arithmetic is
+unaffected; the interpretation is not. Only `collapse=True` actually averages sources.
+
+Verified — `padeval/tests/test_identifiability.py` 8/8 (new), 57 padeval tests total.
+
+Report for the draft: `docs/paper/7a_identifiability_theorem.md`.
+
+---
+
 ## exp(padeval): 7.0 — measured noise propagated, and an apparent E2/E3 tension resolved  *(branch `feature/pad-affect-core`)*
 
 Finishes 6d (previously timeboxed as stretch) with an unhurried pass. **Registered prediction NOT met as

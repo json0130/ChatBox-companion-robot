@@ -312,3 +312,40 @@ def test_session_cap_restores_the_floor_the_extractor_used_to_provide():
     assert rap > 1.0, "rapport was capped; that is a separate design decision"
     print(f"11. trust caps at {total:.2f}/session and resets per session; "
           f"rapport left uncapped ({rap:.1f} over 50 turns) ✓")
+
+
+# ── 9.0: the gold-set item file must leak nothing ──────────────────────────
+
+def test_gold_items_are_blinded_and_unsampled():
+    """The item file is what a human will read. It must carry the utterance and
+    an id, and nothing that could anchor them on the thing being validated.
+
+    Also asserts the pool was taken WHOLE. A stratified draw would have to
+    stratify on the detector's own output — the only signal available — and
+    validating a detector against a sample it helped choose is the circularity a
+    gold set exists to break.
+    """
+    import json
+    import os
+    import sqlite3
+
+    path = "runs/eval/disclosure_gold_items.jsonl"
+    if not os.path.exists(path):
+        pytest.skip("gold items not built yet (--build)")
+    items = [json.loads(l) for l in open(path)]
+
+    allowed = {"gold_id", "child_said"}
+    for it in items:
+        assert set(it) == allowed, f"item leaks fields: {set(it) - allowed}"
+
+    # Unsampled: every unique non-empty child utterance in the db is present.
+    con = sqlite3.connect("sessions.db")
+    rows = con.execute("SELECT child FROM turns WHERE child IS NOT NULL "
+                       "AND TRIM(child) <> ''").fetchall()
+    pool = {t.strip().lower() for (t,) in rows}
+    present = {it["child_said"].strip().lower() for it in items}
+    assert present == pool, (
+        f"item set is not the whole pool: {len(pool - present)} missing, "
+        f"{len(present - pool)} extra — a selection step crept in")
+    print(f"12. gold items: {len(items)} blinded to {sorted(allowed)}, "
+          f"covering the entire {len(pool)}-utterance pool with no sampling ✓")

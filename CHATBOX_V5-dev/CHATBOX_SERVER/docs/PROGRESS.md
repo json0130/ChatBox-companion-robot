@@ -6,6 +6,36 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## exp(padeval): 7b — persona admissibility as a design rule  *(branch `feature/pad-affect-core`)*
+
+Generalizes 6c's `|D_baseline| <= 1-m` from one persona to the trait design space.
+
+**Two structural simplifications.** Neuroticism has **zero weight** on D (`affect.py:41-43`), so admissibility
+over the 5-D trait cube is exactly the 4-D question in (O,C,E,A) and a persona's N cannot affect whether it
+clamps — pinned against live `to_pad`, with a test that fails if a future weights change adds an N term. And D
+is linear, so the admissible set is a slab, not a shape needing exploration.
+
+**Admissible fraction**, by Monte Carlo (400k, with CI) and near-exact convolution, agreeing at every point:
+97.6% at m=0.10, **82.7% at the deployed m=0.40**, 61.3% at m=0.60. So 17.3% of assignable personas would
+clamp as deployed. Uniform is used deliberately — this is a design-space coverage question, not a claim about
+human trait distributions, and a concentrated distribution would flatter the design.
+
+**The stated intuition is half wrong, and the missing half is the one that shipped.** "High E, low A is the
+risky combination" describes only the UPPER violation. The bound is two-sided, so the mirror (low E, high A)
+violates the lower bound equally often — 8.6% each, exactly symmetric. **CHATBOX is the mirror case**: E=-0.6,
+A=+0.6, D=-0.643, clamping for being too *deferential*, not too assertive. Checking only the intuited direction
+would have reported the intuition confirmed and missed the case actually present in the shipped system.
+
+**The rule, usable form:** at m=0.40 and A=+0.6 (the value both deployed personas share), safe E is
+[-0.68, +1.00]. CHATBOX sits at E=-0.60 — 0.08 inside the boundary, which is why a persona designed without
+this constraint landed so near it.
+
+Verified — `padeval/tests/test_persona_admissibility.py` 7/7 (new), 64 padeval tests total.
+
+Report for the draft: `docs/paper/7b_persona_admissibility.md`.
+
+---
+
 ## exp(padeval): 7a — identifiability characterized, not spot-checked  *(branch `feature/pad-affect-core`)*
 
 Turns E2 from "we checked four assignments" into a proof with those four as corollaries.

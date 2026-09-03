@@ -6,6 +6,35 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## exp(padeval): 7.0 — measured noise propagated, and an apparent E2/E3 tension resolved  *(branch `feature/pad-affect-core`)*
+
+Finishes 6d (previously timeboxed as stretch) with an unhurried pass. **Registered prediction NOT met as
+literally stated** — reported honestly rather than redefined after the fact — but the resolution is a real,
+useful finding in its own right.
+
+**Two independent routes agree exactly.** Closed-form variance propagation (through the E2 axis Jacobian's
+valence/arousal columns, scaled for the deployed 5-sample `AffectStream` window) and a 20,000-draw Monte Carlo
+simulation of the actual pipeline agree to <0.01 on every axis, for both permutations. Identity's D-std is
+exactly 0 by both methods — no noise path to D exists under correct routing, full stop.
+
+**The registered threshold failed at the deployed smoothing level**: propagated D std under the permutations
+is 0.075-0.078, below the smallest directive-rung gap (0.18). Pinned by a test specifically so this can't
+quietly become a pass later.
+
+**Chased down rather than left as a discrepancy with E3's switching result** (18-328/min, previously measured).
+The resolution: propagated std is a *marginal* statistic (how far D typically sits from its mean); switch
+*count* is a level-crossing-RATE question, which depends on the smoothing filter's autocorrelation timescale,
+not on marginal variance alone. Checked directly: if E3's switching were mostly driven by its schedule's
+scripted emotion transitions (real swings up to 1.5 units), a small marginal std would need no explanation. It
+is not — 69-83% of simulated switches occur **away from any scripted transition**, confirming genuine
+steady-state noise-driven crossing is the real mechanism, which a std-vs-gap comparison simply cannot see.
+
+Verified — `padeval/tests/test_noise_propagation.py` 5/5 (new), 49 padeval tests total.
+
+Report for the draft: `docs/paper/7_0_noise_propagation.md`.
+
+---
+
 ## exp(padeval): 6c — tier-offset magnitude sweep, and a rank correction  *(branch `feature/pad-affect-core`)*
 
 STRETCH item, timeboxed. **Registered prediction met**: across offset magnitude `m in [0.10,0.60]` (deployed

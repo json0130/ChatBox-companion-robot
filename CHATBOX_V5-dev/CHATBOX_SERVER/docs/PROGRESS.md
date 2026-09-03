@@ -1991,3 +1991,39 @@ reach `close`, so capping it is a separate design decision, not a defect fix. St
 into the live loop, per the standing decision to keep hardware off an unverified accrual
 change; both open items (the cap and the rapport question) are now resolved and reverified, so
 wiring is unblocked whenever wanted.
+
+## 9 — reachability map, disjointness lemma, gold set, pre-deploy check
+
+**Process note, recorded rather than quietly dropped:** the brief said one commit per
+subphase and this landed as one commit (`a362d0c`) covering 9.0/9a/9b/9c and the pre-deploy
+check. That was my error, caught after pushing; rewriting a pushed commit to fix it would
+cost more than it recovers, so it is noted here instead.
+
+**Tried.** Characterize the whole tier-reachability space with 7a's discipline — a closed
+form for every cell and an independent simulation confirming each one — plus a formal
+statement of the disjointness argument, a larger gold set for the disclosure detector, and a
+bit-exact style-output regression check before the rig is updated.
+
+**Worked.** The table: `visitor` in 1 turn unconditionally; `known` by two paths (6 turns of
+anything, or ~50 s of warmth) crossing over at 8.49 s/turn on CHATBOX and 7.79 on ELLEBOT;
+`close` in 3 sessions. `close` turns out to be a **corner** solution rather than a tradeoff —
+rapport is hard-clamped at 1.0, so the optimum is always `rapport = 1.0` and the constraint
+collapses to exactly `trust > 0.40`, strictly stronger than 8b's "trust must be nonzero".
+
+The derivation/confirmation pairing earned itself immediately: the `close` closed form said 2
+sessions where the simulation said 3, because `2*0.70 - 1.0` is `0.3999999999999999` and the
+exact-multiple branch never fired. The simulation was right — two capped sessions give score
+exactly 0.70, which fails `> 0.70`. Either method alone would have been believed.
+
+Pre-deploy check clean: 40 fixed PAD inputs → style wire output, `repr()`-exact, probed in a
+detached worktree at five candidate commits, all byte-identical (`4e3813100cfca45f`), with
+`git diff` over `PAD_CORE/`, `modules/` and `tools/` empty since `0eb529f`.
+
+**Didn't.** Rapport cap **not** applied — written up as an open decision with the tradeoff in
+9a's numbers, since capping it fixes no defect (rapport provably cannot reach `close` alone)
+and would make `count > 5` the sole live route to half the ladder. The gold set is built and
+handed over, **not coded here** — 71 items, the entire `sessions.db` child-utterance pool
+taken whole precisely so there is no selection step to be biased by the detector's own output.
+Two properties named and deliberately left alone: half the ladder is climbable by turn-taking
+with no warmth or disclosure, and a *neutral* face still accrues rapport (the no-rapport
+regime needs v < −0.09), the latter found by a test that assumed otherwise and failed.

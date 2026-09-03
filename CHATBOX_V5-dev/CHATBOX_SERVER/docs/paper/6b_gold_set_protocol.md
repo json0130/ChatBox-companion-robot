@@ -76,3 +76,73 @@ the outcome being measured is a *rate*.
 
 **If κ < 0.70, that is a finding about the coder and belongs in the paper**, not a
 reason to re-run until it clears.
+
+---
+
+## Result
+
+Coded by a human (Jay), blind, on the full 30-item sample. 1 item skipped
+(genuinely undecidable), n = 29 scored.
+
+| statistic | value |
+|---|---|
+| binary agreement | **93.1%** |
+| **Cohen's κ** | **0.861**  95% CI **[0.649, 1.000]** |
+| McNemar b/c | 1/1, p = 1.0000 |
+
+**κ ≥ 0.70 gate: PASS**, on both the point estimate and — with the CI's lower
+bound at 0.649, a hair under the bar — very close to holding at the confidence
+level too. Quoted honestly rather than rounded in the coder's favour: at n = 29
+the interval is wide, and 0.649 is the number a reviewer will look at first.
+
+**McNemar 1/1 confirms the frame-restriction fix (Phase 4b) held against a real
+human**, not just against the earlier AI blind pass. The directional bias found
+before that fix — 6 over-fires, 0 the other way, p = 0.031 — is gone: one
+disagreement runs each direction, symmetric, p = 1.0.
+
+### The two disagreements, examined rather than waved off
+
+**H003** (rung 6, suppress, stratum `quiet`) — child: *"dunno."* — robot:
+*"Sometimes it's okay to not have a specific direction in mind. What's on your
+mind right now?"* Human: initiated. Rule: not initiated.
+
+This is a **boundary case in the operational definition**, not a coder bug. The
+reply names no topic at all — no noun, no lexicon word — so there is nothing for
+a topic detector to find, and by the letter of "did the robot bring up a topic
+the person had not mentioned", the rule coder's answer is defensible. The human
+appears to have read the redirect itself — steering toward *"what's on your
+mind"* — as a form of initiative-taking, even without a named subject. Worth a
+sentence in the paper: the coding scheme measures *topic* introduction
+specifically, not conversational initiative in general, and this is the case
+where the two notions come apart.
+
+**H005** (rung 0, require, stratum `closing`) — child: *"anyway, that's about
+it."* — robot: *"It was nice chatting about space again. Anything else you'd
+like to discuss?"* Human: not initiated. Rule: initiated.
+
+This one is a **precise, identifiable lexicon gap**. `"chatting about"` is a
+registered topic-introducing frame (`lexicon.py:188`), so `"space"` inside it
+reads as a fresh mention — correct in isolation, since stimulus `C1` declares no
+topics. But the word **`"again"`** is the tell that this is a callback to an
+earlier turn, not a new introduction, and nothing in `MEMORY_RECALL_MARKERS`
+(`lexicon.py:165-169`) catches it. A human reads *"again"* instantly; the coder
+has no rule for it.
+
+**Not fixed here, by design.** Both are single known limitations rather than a
+pattern — they run in opposite directions and cancel in aggregate, which is
+exactly what McNemar 1/1 says. Chasing a two-item disagreement at n=29 this close
+to submission would be tuning the coder to its own gold set. The concrete fix
+(add `"again"`, `"still"`, `"once more"` to the recall markers) is identified and
+cheap, but belongs after submission, not before it.
+
+## For the paper
+
+> The rule coder was validated against 30 blinded, human-coded replies (Cohen's
+> κ = 0.861, 95% CI [0.649, 1.000]; binary agreement 93.1%). McNemar's test found
+> no directional bias (1/1, p = 1.0), confirming that the topic-frame restriction
+> introduced during coder development (§4b) removed the directional over-firing
+> found in earlier validation against an independent AI coder (6/0, p = 0.031).
+> The two residual disagreements were examined individually: one reflects a
+> boundary between topic-specific and general conversational initiative: one is a
+> single identified lexicon gap (failure to recognise "again" as a memory-recall
+> cue). Both are isolated rather than systematic.

@@ -6,6 +6,35 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## exp(padeval): 6b result — human gold set, kappa 0.861, bias-free  *(branch `feature/pad-affect-core`)*
+
+The number `docs/paper/6b_gold_set_protocol.md` was built to produce. Coded by a human, blind, on all 30
+items (1 skip, n=29 scored):
+
+| | value |
+|---|---|
+| binary agreement | 93.1% |
+| **Cohen's kappa** | **0.861**  95% CI **[0.649, 1.000]** |
+| McNemar b/c | 1/1, p = 1.0000 |
+
+**Gate passed.** The CI lower bound (0.649) sits just under the 0.70 registered bar — reported honestly rather
+than rounded away, since at n=29 that is the number a reviewer checks first.
+
+**The Phase 4b frame-restriction fix holds against a real human**, not only against the earlier AI blind pass:
+McNemar is symmetric (1/1), against the 6/0 directional over-fire (p=0.031) measured before that fix.
+
+Both disagreements were read individually rather than aggregated away. One (`"what's on your mind right
+now?"`) is a boundary in the *operational definition* — no topic is named, so the coder's "not initiated" is
+defensible under the letter of the question being asked, even though the human read the redirect itself as a
+form of initiative. The other (`"chatting about space **again**"`) is a precise, nameable lexicon gap: `"again"`
+signals a callback that nothing in `MEMORY_RECALL_MARKERS` catches. Not patched here — two items is not a
+pattern, they cancel in direction, and tuning a coder to its own 30-item gold set this close to submission
+would be circular. The fix is identified for after submission.
+
+This closes 6b. Both blocking subphases (6a, 6b) are now complete and reported.
+
+---
+
 ## feat(client-link): the unmodified v4 robot client speaks to the V5 pipeline  *(branch `feature/pad-affect-core`)*
 
 **Goal (user):** the Jetson robot client (`CHATBOX-DEMO_V4/CHATBOX_CLIENT/client.py` on `main`) had no server

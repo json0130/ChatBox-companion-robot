@@ -1933,3 +1933,32 @@ against the held-out set would turn it into a second training set and destroy th
 unbiased number in the report. Not yet wired into the live loop — the detector is built to
 be wireable (`turn_deltas` reproduces the deployed rapport rule verbatim) but hardware runs
 this branch, so the live edit is held as a separate decision.
+
+## 8b — end-to-end system trace, 4 sessions, both robots, zero LLM
+
+**Tried.** Run the deployed mechanism forward over a scripted multi-session schedule and log
+every established quantity per turn, to check whether the properties proved component-wise in
+6/7 survive composition. Four predictions registered before running.
+
+**Worked.** P2, P3, P4 all held. The mood gate fired on 3/3 session-opening turns and none
+mid-session, shown as a *difference* against a gate-disabled run of the same seed (+0.0925,
+−0.0348, +0.0531 valence) rather than asserted from a flag. Rapport and trust diverged at
+exactly the scripted disclosure turn on both robots, ending 1.0000 vs 0.2000. CHATBOX clamped
+at exactly `{unknown}` — the tier computed from 7b's bound *before* reading the trace — losing
+0.043 of commanded D, while ELLEBOT clamped nowhere. 82/82 padeval tests pass.
+
+**Didn't.** **P1 was falsified**: D steps *within* a session on both robots. `pre_turn`
+re-derives the tier every turn and neither threshold kind is session-scoped — CHATBOX shows
+the count-gated case (`count > 0 → visitor` counts turns across all sessions), ELLEBOT the
+score-gated one (rapport hit 0.96 mid-session and crossed `score > 0.45`). Reporting CHATBOX
+alone would have looked like a tidy first-contact exception; ELLEBOT is what shows the finding
+is general. The paper must say "D changes on the order of sessions", not "only at session
+boundaries".
+
+Also found by recomputing 6a's τ_D under the 8a mechanism: at the median session length τ_D
+rose 3 → 4 sessions and the 10² separation *improved*, but **6a's hard floor is gone**. That
+floor came from the extractor's ±0.2-per-session cap, which 8a removed; at the IQR upper bound
+(4 turns/session) `close` now arrives in 2 sessions. The median alone would have hidden this,
+so the test asserts the regression explicitly rather than sampling a favourable parameter. Fix
+is a one-line per-session trust cap — flagged, not applied, since it would change the accrual
+mechanism a third time.

@@ -118,6 +118,58 @@ FACT_VERBS: FrozenSet[str] = frozenset({
     "stayed", "learned", "learnt", "found", "bought", "met",
 })
 
+# ── Route 2b: identity, activity and opinion (added in 10b) ────────────────
+#
+# The gold set's largest error group was not a mis-scoped exclusion. It was
+# ABSENT COVERAGE: "i am maori", "i am hj", "i do some research on space" and
+# "i think countdowns is pretty cool" produced NO hits at all — no rule matched
+# and none was suppressed. Three whole categories of camera-invisible
+# self-report had no route:
+#
+#   identity/attribute   "i am maori"                      -> depth 2
+#   activity/habit       "i do some research on space"     -> depth 2
+#   opinion              "i think countdowns is cool"      -> depth 1
+#
+# Each needs a frame verb AND a content word after it, so "i think so", "i do"
+# and "i am sure" stay silent. The predicate stoplist below is what keeps the
+# identity route from firing on every filler that can follow a copula.
+IDENTITY_COPULAS: FrozenSet[str] = frozenset({"am", "was", "is"})
+ACTIVITY_VERBS: FrozenSet[str] = frozenset({
+    "do", "did", "study", "studied", "work", "worked", "play", "played",
+    "read", "write", "wrote", "watch", "watched", "build", "built", "run",
+    "train", "trained", "practice", "practise", "collect", "draw", "drew",
+    "fell", "ride", "rode", "swim", "dance", "sing", "cook", "bake",
+})
+OPINION_VERBS: FrozenSet[str] = frozenset({
+    "think", "thought", "believe", "reckon", "guess", "suppose", "figure",
+})
+# Predicates that follow a copula but say nothing about the speaker. Without
+# this, "i am sure" and "i am here" would read as identity claims.
+EMPTY_PREDICATES: FrozenSet[str] = frozenset({
+    "sure", "here", "there", "back", "done", "ready", "sorry", "right",
+    "wrong", "fine", "ok", "okay", "alright", "all", "just", "still", "not",
+    "no", "yes", "so", "very", "really", "too", "also", "gonna", "going",
+    "about", "the", "a", "an", "it", "that", "this", "then", "now", "up",
+    "on", "in", "at", "out", "off", "one", "some", "any", "my", "your",
+})
+# Function words that never count as the "content" a frame needs.
+FUNCTION_WORDS: FrozenSet[str] = frozenset({
+    "a", "an", "the", "of", "on", "in", "at", "to", "for", "with", "from",
+    "some", "any", "my", "your", "his", "her", "its", "our", "their", "that",
+    "this", "these", "those", "it", "so", "and", "but", "or", "is", "are",
+    "was", "were", "be", "been", "am", "do", "does", "did", "not", "no",
+    "very", "really", "quite", "pretty", "too", "also", "just", "like",
+    "about", "up", "out", "off", "then", "now", "here", "there", "all",
+    "more", "most", "much", "many", "lot", "lots", "bit", "kind", "sort",
+})
+
+
+def _has_content(window: Sequence[str]) -> bool:
+    """Does anything in this window carry content, or is it all scaffolding?"""
+    return any(w not in FUNCTION_WORDS and w not in EMPTY_PREDICATES and len(w) > 1
+               for w in window)
+
+
 # ── Route 3: internal state ─────────────────────────────────────────────────
 # States the emotion detector CANNOT read. These need no displacement marker:
 # they are disclosed or they are unknown.
@@ -361,6 +413,27 @@ def detect(text: str) -> DisclosureResult:
                     if w in PREF_VERBS:
                         depth = max(depth, 1)
                         hits.append(f"pref_verb:{w}")
+                # Route 2b — identity / activity / opinion (10b).
+                for j, w in enumerate(win):
+                    rest = win[j + 1:]
+                    if w in IDENTITY_COPULAS:
+                        head = [x for x in rest
+                                if x not in FUNCTION_WORDS
+                                and x not in EMPTY_PREDICATES]
+                        # An affect predicate is handled by route 3, which knows
+                        # about displacement; identity must not pre-empt it.
+                        head = [x for x in head
+                                if x not in FACIAL_STATES
+                                and x not in NONFACIAL_STATES]
+                        if head:
+                            depth = max(depth, 2)
+                            hits.append(f"identity:{head[0]}")
+                    elif w in ACTIVITY_VERBS and _has_content(rest):
+                        depth = max(depth, 2)
+                        hits.append(f"activity:{w}")
+                    elif w in OPINION_VERBS and _has_content(rest):
+                        depth = max(depth, 1)
+                        hits.append(f"opinion:{w}")
 
             elif tok in FIRST_PERSON_POSS:
                 for w in win:

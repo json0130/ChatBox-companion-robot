@@ -146,6 +146,17 @@ OPINION_VERBS: FrozenSet[str] = frozenset({
 # Predicates that follow a copula but say nothing about the speaker. Without
 # this, "i am sure" and "i am here" would read as identity claims.
 EMPTY_PREDICATES: FrozenSet[str] = frozenset({
+    # light verbs / progressive auxiliaries: "i am DOING good" is not an
+    # identity claim about doing, and letting it read as one re-admitted the
+    # camera-redundant affect statement 10c had just excluded.
+    "doing", "having", "getting", "being", "feeling", "going", "trying",
+    # temporal anchors belong to the displacement test, not to identity
+    "today", "tonight", "yesterday", "tomorrow", "when", "while", "since",
+    "now", "later", "earlier", "lately", "recently", "always", "sometimes",
+    "never", "often", "again", "ever",
+    # pronouns: "i am doing good you?" is a question bounced back, not an
+    # identity claim about "you". A pronoun is never what someone IS.
+    "i", "you", "we", "they", "he", "she", "me", "us", "them", "him", "her",
     "sure", "here", "there", "back", "done", "ready", "sorry", "right",
     "wrong", "fine", "ok", "okay", "alright", "all", "just", "still", "not",
     "no", "yes", "so", "very", "really", "too", "also", "gonna", "going",
@@ -184,15 +195,29 @@ NONFACIAL_STATES: FrozenSet[str] = frozenset({
     # emotion head predicts, so none of them lets valence in through the back
     # door. "i never feel included" and "i felt awful yesterday" both scored
     # zero without these.
-    "awful", "terrible", "horrible", "rubbish", "miserable", "included",
-    "welcome", "wanted", "safe", "supported", "ignored", "picked", "bullied",
+    "included", "welcome", "wanted", "safe", "supported", "ignored",
+    "picked", "bullied",
 })
+# NOTE 10c: "awful"/"terrible"/"horrible"/"rubbish"/"miserable" were here and
+# have MOVED to FACIAL_STATES. They are general-valence terms, and the FER head
+# outputs valence — so counting them as camera-invisible was inconsistent with
+# treating "sad" as camera-visible. The line that survives scrutiny is
+# general valence = the camera has it; a SPECIFIC state with no valence
+# signature ("lonely", "embarrassed", "left out", "included") is what it cannot
+# read. They still fire whenever a temporal anchor is present, which is how
+# "i felt awful yesterday" is caught.
 # States the camera IS already reading — the seven-class emotion head plus its
 # obvious synonyms. These count ONLY with a displacement marker (see below).
 FACIAL_STATES: FrozenSet[str] = frozenset({
     "happy", "sad", "angry", "mad", "cross", "scared", "afraid", "frightened",
     "surprised", "shocked", "disgusted", "upset", "unhappy", "glad",
     "excited", "cheerful", "furious", "annoyed",
+    # general-valence terms (10c) — the FER head reads valence, so a bare
+    # "i am doing good" is redundant with what the camera already reported.
+    # With a temporal anchor they count, exactly like "sad".
+    "good", "great", "well", "bad", "fine", "okay", "ok", "alright",
+    "down", "low", "better", "worse", "awful", "terrible", "horrible",
+    "rubbish", "miserable", "rough", "lovely", "amazing",
 })
 STATE_VERBS: FrozenSet[str] = frozenset({
     "cried", "cry", "crying", "panicked", "struggled", "struggling",
@@ -206,14 +231,32 @@ STATE_COPULAS: FrozenSet[str] = frozenset({
 })
 
 # A facial state counts only when one of these moves it off the visible present.
+#
+# 10c generalises this from a patch into the principle it always implied. The
+# stated rule is "information the camera does not already have", and the camera
+# sees the PRESENT INSTANT. So any affect statement anchored to another time
+# carries information the camera cannot supply, whatever the face is doing:
+# "just had a bad day", "I was scared when...", "I've been feeling...",
+# "yesterday". These count regardless of face, and need no camera dependency to
+# evaluate — they are a property of the text alone.
+#
+# Note this deliberately includes spans that CONTAIN the present, like "today"
+# and "lately". A day is not an instant; the camera saw a few seconds of it. A
+# child saying "I'm sad today" is reporting hours the robot did not observe, and
+# treating that as camera-redundant was the reason the detector missed it.
 DISPLACEMENT_MARKERS: Tuple[str, ...] = (
     "when", "because", "after", "before", "since", "while", "until",
-    "yesterday", "last night", "last week", "last time", "earlier",
-    "this morning", "the other day", "at school", "at home", "on the way",
-    "used to", "always get", "always feel", "sometimes",
+    "yesterday", "last night", "last week", "last time", "last month",
+    "earlier", "this morning", "the other day", "at school", "at home",
+    "on the way", "used to", "always get", "always feel", "sometimes",
+    # added in 10c — spans wider than the observed instant
+    "today", "tonight", "this week", "this afternoon", "this year",
+    "all day", "lately", "recently", "for a while", "the whole time",
+    "just had", "have been", "has been", "been feeling", "been having",
 )
 DISPLACEMENT_TOKENS: FrozenSet[str] = frozenset({
     "was", "were", "felt", "got", "had", "did", "cried", "used",
+    "been",          # present perfect spans time the camera did not see
 })
 
 # Clauses opening with one of these are the child ASKING, not telling.

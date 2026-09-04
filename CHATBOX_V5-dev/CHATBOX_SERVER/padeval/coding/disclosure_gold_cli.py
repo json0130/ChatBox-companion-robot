@@ -158,13 +158,17 @@ def score() -> None:
     from padeval.coding.disclosure import detect
     items = {json.loads(l)["gold_id"]: json.loads(l) for l in open(ITEMS_PATH)}
     human = [json.loads(l) for l in open(CODES_PATH)]
-    pairs = []
+    pairs, abstained = [], []
     for h in human:
         if h.get("skipped"):
             continue
         text = items[h["gold_id"]]["child_said"]
-        pairs.append((bool(h["disclosed"]), detect(text).disclosed,
-                      h["gold_id"], text))
+        r = detect(text)
+        if r.abstained:
+            abstained.append((bool(h["disclosed"]), h["gold_id"], text,
+                              r.features.get("abstain_reason", "")))
+            continue
+        pairs.append((bool(h["disclosed"]), r.disclosed, h["gold_id"], text))
     if not pairs:
         print("no non-skipped items yet.")
         return
@@ -173,7 +177,15 @@ def score() -> None:
     k, lo, hi = kappa_ci(hb, rb, labels=[False, True])
     mc = mcnemar_exact(hb, rb)
     n_skip = sum(1 for h in human if h.get("skipped"))
-    print(f"n = {len(pairs)} coded ({n_skip} skipped, excluded)")
+    n_human = len(human) - n_skip
+    coverage = len(pairs) / n_human if n_human else 0.0
+    print(f"n = {len(pairs)} scored ({n_skip} human-skipped, "
+          f"{len(abstained)} detector-abstained)")
+    print(f"COVERAGE          : {coverage:.1%} "
+          f"({len(pairs)}/{n_human} of human-coded items were called)")
+    print("  kappa on a subset means nothing without this. A detector abstaining")
+    print("  on 80% and scoring 0.9 on the rest is not better than one scoring")
+    print("  0.5 at full coverage. Both numbers or neither.")
     print(f"human base rate   : {sum(hb)}/{len(hb)} = {sum(hb)/len(hb):.1%} positive")
     print(f"binary agreement  : {percent_agreement(hb, rb):.1%}")
     print(f"Cohen's kappa     : {k:.3f}   95% CI [{lo:.3f}, {hi:.3f}]")
@@ -188,6 +200,14 @@ def score() -> None:
         print("NOTE: errors skew to FALSE POSITIVES — this is the direction 8a "
               "argued must NOT happen, since it lets trust drift up on ordinary "
               "chat and re-collapse onto rapport. Worth investigating.")
+    if abstained:
+        n_pos = sum(1 for a in abstained if a[0])
+        print(f"\nabstained on {len(abstained)} item(s) "
+              f"({n_pos} of which the human called DISCLOSED):")
+        for h_, gid, text, why in abstained:
+            print(f"  {gid}: human={'DISCLOSED' if h_ else 'not'}  [{why}]")
+            print(f"     {text[:70]!r}")
+
     dis = [p for p in pairs if p[0] != p[1]]
     if dis:
         print(f"\n{len(dis)} disagreement(s):")

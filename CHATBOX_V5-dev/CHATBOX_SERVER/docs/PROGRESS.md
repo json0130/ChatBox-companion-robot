@@ -2027,3 +2027,35 @@ taken whole precisely so there is no selection step to be biased by the detector
 Two properties named and deliberately left alone: half the ladder is climbable by turn-taking
 with no warmth or disclosure, and a *neutral* face still accrues rapport (the no-rapport
 regime needs v < −0.09), the latter found by a test that assumed otherwise and failed.
+
+## 10 — disclosure detector: gold-set failure, fixes, and an abstain outcome
+
+**Tried.** The 71-item held-out gold set (real `sessions.db` traffic, human-coded blind)
+scored κ = 0.128, 95% CI [−0.099, 0.363], failing the 0.70 gate. Diagnose the 23
+disagreements, fix what were genuine spec violations, settle the definitional group in
+writing, and add an abstain outcome so "cannot tell" stops hiding as "no".
+
+**Worked.** Post-fix κ = 0.734 [0.532, 0.894] at 92.2% coverage, McNemar 6/1 — still skewed
+to false negatives, so adding three new firing routes did **not** flip it to the unsafe
+direction. All three numbers reported together, with the pre-fix figure as the honest
+headline and the post-fix one labelled in-sample and not independently validated (the same 71
+utterances found the bugs; `sessions.db` holds no more real traffic).
+
+10a: all six false positives were questions read as declaratives, via three separate evasions
+of a guard that already worked (8a: 0/8 on question forms) — contracted `what's`, leading
+discourse markers, and one code path that ran before the clause loop and structurally could
+not consult the guard. 10b: the brief's hypothesis was **wrong** and checking it found the
+real cause — no over-broad exclusion existed, `hits=[]` everywhere; identity, activity and
+opinion had no route at all. 10c generalised temporal displacement and forced a boundary
+correction: general-valence words ("awful", "good") are camera-visible and belong with "sad",
+while specific states with no valence signature ("lonely", "left out") are what it cannot read.
+
+**Didn't.** The valence-contradiction rule is deferred — raw FER valence is genuinely not
+plumbed to the disclosure point (`turn_deltas` gets `felt_pleasure`, the robot's blended
+coordinate, 40% its own temperament), so it needs new wiring rather than a new rule. Abstain
+criterion A3 was specified and dropped: it would have relitigated the Group 3 decision. Five
+of seven residual disagreements are Group 3 — the human consistently called "I am doing well"
+a disclosure where the published definition excludes it as camera-redundant. Removing those
+gives κ = 0.914, locating the gap as definitional rather than mechanical. That divergence
+from untrained intuition is kept as a stated limitation, not corrected, because 9c's lemma
+requires the camera-redundancy line.

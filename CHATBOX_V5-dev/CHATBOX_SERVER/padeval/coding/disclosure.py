@@ -190,7 +190,31 @@ _CONTRACTIONS: Dict[str, List[str]] = {
     "i'd": ["i", "would"], "i'll": ["i", "will"],
     "we're": ["we", "are"], "we've": ["we", "have"],
     "my": ["my"],
+    # Interrogative contractions. Added in 10a: the question guard tests
+    # `tokens[0] in INTERROGATIVE_OPENERS`, which holds "what" but not "what's",
+    # so "what's my name?" was read as a declarative and fired the possessive
+    # FACT route. Five of the six false positives on the 71-item gold set were
+    # this one line. Same class of defect as the "i'm" bug in 8a: the guard was
+    # correct and the tokenizer never gave it the form it tests.
+    "what's": ["what", "is"], "whats": ["what", "is"],
+    "who's": ["who", "is"], "whos": ["who", "is"],
+    "where's": ["where", "is"], "wheres": ["where", "is"],
+    "when's": ["when", "is"], "whens": ["when", "is"],
+    "why's": ["why", "is"], "how's": ["how", "is"],
+    "hows": ["how", "is"], "there's": ["there", "is"],
 }
+
+# Discourse markers that can sit in front of a question word. The guard tests
+# position 0, so "so what's my name?" and "yo, what's my name?" slipped past it
+# with "so"/"yo" occupying the slot. Stripped before the test rather than added
+# to INTERROGATIVE_OPENERS, because they are not interrogative themselves and
+# putting them there would suppress genuine declaratives like "so i live with
+# my grandma".
+DISCOURSE_PREFIXES: FrozenSet[str] = frozenset({
+    "so", "yo", "hey", "hi", "hello", "well", "ok", "okay", "um", "uh", "erm",
+    "like", "actually", "anyway", "right", "oh", "ah", "yeah", "yes", "no",
+    "please", "just", "and", "but", "then",
+})
 
 # How far after the first-person marker a predicate still counts as attached to
 # it. 5 covers "I was really quite worried" without reaching the next clause,
@@ -243,7 +267,18 @@ def _tokens(clause: str) -> List[str]:
 
 
 def _is_question_clause(tokens: Sequence[str]) -> bool:
-    return bool(tokens) and tokens[0] in INTERROGATIVE_OPENERS
+    """Does this clause ASK rather than tell?
+
+    A question requests information; it cannot supply it. "what's my name?" is
+    the child asking the robot to recall, not the child disclosing.
+
+    Leading discourse markers are skipped before the test — see
+    DISCOURSE_PREFIXES for why they are not simply added to the opener set.
+    """
+    i = 0
+    while i < len(tokens) and tokens[i] in DISCOURSE_PREFIXES:
+        i += 1
+    return i < len(tokens) and tokens[i] in INTERROGATIVE_OPENERS
 
 
 def _window(tokens: Sequence[str], start: int) -> List[str]:
@@ -273,27 +308,30 @@ def detect(text: str) -> DisclosureResult:
     if not text:
         return DisclosureResult(False, 0, 0.0, {"empty": True})
 
-    low = text.lower()
     depth = 0
     hits: List[str] = []
-
-    # Multi-word preference phrases are matched on raw text; clause splitting
-    # would cut "i can't stand" at the apostrophe-free boundary in some inputs.
-    for phrase in PREF_PHRASES:
-        if phrase in low:
-            depth = max(depth, 1)
-            hits.append(f"pref_phrase:{phrase}")
-
-    # Multi-word non-facial states ("left out", "fed up") likewise.
-    for state in NONFACIAL_STATES:
-        if " " in state and state in low:
-            depth = max(depth, 3)
-            hits.append(f"state_multiword:{state}")
 
     for clause in _clauses(text):
         tokens = _tokens(clause)
         if not tokens or _is_question_clause(tokens):
             continue
+
+        # Multi-word phrases are matched PER CLAUSE, not on the raw text.
+        #
+        # 10a: they were matched on the whole utterance before the clause loop
+        # began, which meant they bypassed the interrogative guard entirely.
+        # "Hello chat box, what is my favorite song?" split correctly, and the
+        # question clause was correctly flagged — and then `my favorite` matched
+        # the raw string anyway and fired. The guard was never wrong; one code
+        # path simply ran before it and never consulted it.
+        for phrase in PREF_PHRASES:
+            if phrase in clause:
+                depth = max(depth, 1)
+                hits.append(f"pref_phrase:{phrase}")
+        for state in NONFACIAL_STATES:
+            if " " in state and state in clause:
+                depth = max(depth, 3)
+                hits.append(f"state_multiword:{state}")
 
         for i, tok in enumerate(tokens):
             win = _window(tokens, i)

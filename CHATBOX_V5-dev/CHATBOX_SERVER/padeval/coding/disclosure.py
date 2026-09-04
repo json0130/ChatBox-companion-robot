@@ -297,6 +297,15 @@ _CONTRACTIONS: Dict[str, List[str]] = {
     "when's": ["when", "is"], "whens": ["when", "is"],
     "why's": ["why", "is"], "how's": ["how", "is"],
     "hows": ["how", "is"], "there's": ["there", "is"],
+    # 10d needs these: the abstain fragment test asks whether a finite verb is
+    # present, and "you're funny" has one only once the contraction is opened.
+    # Left contracted, it looked like a verbless fragment and abstained on a
+    # sentence the detector should call confidently.
+    "you're": ["you", "are"], "youre": ["you", "are"],
+    "it's": ["it", "is"], "its": ["it", "is"],
+    "that's": ["that", "is"], "thats": ["that", "is"],
+    "they're": ["they", "are"], "he's": ["he", "is"], "she's": ["she", "is"],
+    "we'll": ["we", "will"], "let's": ["let", "us"],
 }
 
 # Discourse markers that can sit in front of a question word. The guard tests
@@ -341,12 +350,78 @@ DEPTH_TRUST_DELTA: Dict[int, float] = {0: 0.0, 1: 0.02, 2: 0.04, 3: 0.06}
 SESSION_TRUST_CAP: float = 0.20
 
 
+# ── 10d: abstain ────────────────────────────────────────────────────────────
+#
+# A two-way coder must call every utterance, including the ones it has no basis
+# for calling. On real traffic that is not a rare edge: the gold pool contains
+# ASR garble ("Non, il s'agit, il s'agit...") and bare fragments continuing an
+# earlier turn ("like spaceship assembly") where the disclosing subject is in a
+# sentence the detector never sees.
+#
+# Forcing those to `not_disclosed` does not make the detector cautious. It makes
+# it wrong in a direction that HIDES ITSELF: the misses land in the false-
+# negative column, kappa absorbs them, and nothing distinguishes "I looked and
+# there is nothing here" from "I cannot tell". Abstain separates the two, and is
+# reported as coverage so a high score on an easy subset cannot pass for a high
+# score.
+#
+# The confidence signal is what a RULE-BASED coder can actually justify —
+# structural facts about what fired and what was parseable. No invented
+# probability: these rules do not carry one and pretending otherwise would be
+# the same overclaim as an LLM judge's self-reported certainty.
+#
+# ABSTAIN when, and only when:
+#
+#   A1  No first-person marker anywhere, no finite verb, but content words are
+#       present. A fragment like "like spaceship assembly" may well continue a
+#       disclosure from the previous turn; the detector has no subject to
+#       attribute it to and cannot rule it either way.
+#
+#   A2  The utterance is not parseable as English at the token level — most of
+#       its alphabetic tokens are unknown to every list the detector holds AND
+#       it is long enough that this cannot be chance. This is the ASR-garble
+#       case.
+#
+#   A3  Routes conflict: an affect term was seen and SUPPRESSED as
+#       camera-redundant, while some other route fired at a lower depth. The
+#       verdict then hinges on the camera comparison the detector cannot make
+#       (see 10c's deferred valence-contradiction rule).
+#
+# Everything else is a decision. "mm", "okay" and "what's my name?" are
+# confident negatives, not abstentions — the detector looked and there is
+# genuinely nothing there.
+ABSTAIN_MIN_TOKENS = 4           # below this, unknown words are not evidence
+ABSTAIN_UNKNOWN_FRACTION = 0.75  # A2 threshold
+
+FINITE_VERB_HINTS: FrozenSet[str] = frozenset({
+    "is", "are", "was", "were", "am", "be", "been", "have", "has", "had",
+    "do", "does", "did", "can", "could", "will", "would", "should", "shall",
+    "may", "might", "must", "went", "got", "said", "think", "know",
+    "want", "feel", "felt", "see", "saw", "make", "made", "take", "took",
+    "come", "came", "give", "gave", "tell", "told", "ask", "asked", "play",
+    "played", "live", "lived", "work", "worked", "study", "read", "watch",
+})
+# NOTE: "like" is deliberately NOT in the set above. It is a discourse marker at
+# least as often as a verb in this corpus ("like spaceship assembly"), and
+# counting it as a finite verb defeated the fragment test on exactly the items
+# that test exists for. Utterances where "like" IS the verb ("i like jazz")
+# carry a first-person marker, which exempts them from the fragment test anyway.
+
+
 @dataclass(frozen=True)
 class DisclosureResult:
     disclosed: bool
     depth: int                  # 0 none | 1 preference | 2 fact | 3 internal state
     trust_delta: float
     features: Dict = field(default_factory=dict)
+    abstained: bool = False
+
+    @property
+    def outcome(self) -> str:
+        """Three-way. Never collapse abstain into not_disclosed."""
+        if self.abstained:
+            return "abstain"
+        return "disclosed" if self.disclosed else "not_disclosed"
 
 
 def _clauses(text: str) -> List[str]:
@@ -391,6 +466,78 @@ def _has_displacement(clause: str, tokens: Sequence[str], full_text: str) -> boo
     if any(m in low for m in DISPLACEMENT_MARKERS):
         return True
     return any(t in DISPLACEMENT_TOKENS for t in tokens)
+
+
+def _known_vocab() -> FrozenSet[str]:
+    """Every token any rule can act on, plus the scaffolding words."""
+    global _VOCAB_CACHE
+    if _VOCAB_CACHE is None:
+        v = set()
+        for group in (PREF_VERBS, PERSONAL_NOUNS, FACT_VERBS, NONFACIAL_STATES,
+                      FACIAL_STATES, STATE_VERBS, STATE_COPULAS,
+                      INTERROGATIVE_OPENERS, DISCOURSE_PREFIXES, FUNCTION_WORDS,
+                      EMPTY_PREDICATES, IDENTITY_COPULAS, ACTIVITY_VERBS,
+                      OPINION_VERBS, FIRST_PERSON_SUBJ, FIRST_PERSON_POSS,
+                      FIRST_PERSON_PLURAL, FINITE_VERB_HINTS):
+            v |= {w for w in group if " " not in w}
+        _VOCAB_CACHE = frozenset(v)
+    return _VOCAB_CACHE
+
+
+_VOCAB_CACHE: Optional[FrozenSet[str]] = None
+
+
+def _should_abstain(text: str, hits: Sequence[str], depth: int):
+    """A1/A2/A3 from the block above. Returns (abstain, reason)."""
+    tokens = [t for c in _clauses(text) for t in _tokens(c)]
+    if not tokens:
+        return False, ""
+
+    has_first_person = any(t in FIRST_PERSON_SUBJ or t in FIRST_PERSON_POSS
+                           or t in FIRST_PERSON_PLURAL for t in tokens)
+    has_verb = any(t in FINITE_VERB_HINTS for t in tokens)
+    vocab = _known_vocab()
+    # "Content" for the fragment test means SPECIFIC content — the kind that
+    # could be a topic continued from a previous turn. Evaluatives and
+    # scaffolding do not qualify, or "nice one" abstains alongside "like
+    # spaceship assembly", and it should not: there is genuinely nothing
+    # personal in "nice one" and the detector can say so.
+    content = [t for t in tokens
+               if t not in FUNCTION_WORDS and t not in DISCOURSE_PREFIXES
+               and t not in EMPTY_PREDICATES and t not in FACIAL_STATES
+               and len(t) > 2]
+
+    # A3 was specified and then DROPPED. It would have abstained whenever an
+    # affect term was suppressed as camera-redundant, on the grounds that the
+    # verdict really turns on a camera comparison the detector cannot make.
+    # Two reasons it is not here:
+    #
+    #   * It contradicts the published Group 3 definition (10e), which settles
+    #     present-tense affect as NOT disclosure — a decision, not a doubt.
+    #     Abstaining on it would quietly relitigate a rule already published.
+    #   * Where another route fires, the question is moot: "i am doing good but
+    #     my dad works nights" discloses either way, and abstaining threw away a
+    #     confident verdict to honour an ambiguity that changed nothing.
+    #
+    # The case is not lost: `state_facial_present_ignored` is already logged on
+    # every such utterance, so the deferred valence-contradiction work can find
+    # them exactly.
+
+    # A1 — fragment with content but no subject and no verb.
+    # Two content words, not one: a single specific noun is as likely to be a
+    # one-word answer ("space") as a continued disclosure, and answers are
+    # confident negatives.
+    if not has_first_person and not has_verb and len(content) >= 2:
+        return True, (f"fragment: {len(content)} content words, no subject, "
+                      f"no finite verb")
+
+    # A2 — token-level unparseable, only where there is enough text to judge.
+    if len(tokens) >= ABSTAIN_MIN_TOKENS and depth == 0:
+        unknown = [t for t in tokens if t not in vocab]
+        if len(unknown) / len(tokens) >= ABSTAIN_UNKNOWN_FRACTION:
+            return True, (f"unparseable: {len(unknown)}/{len(tokens)} tokens "
+                          f"unknown to every rule list")
+    return False, ""
 
 
 def detect(text: str) -> DisclosureResult:
@@ -490,6 +637,15 @@ def detect(text: str) -> DisclosureResult:
                         depth = max(depth, 2)
                         hits.append(f"fact_plural:{w}")
 
+    abstain, reason = _should_abstain(text, hits, depth)
+    if abstain:
+        # Abstain means trust does not move. Same false-negative-safe direction
+        # the detector has had since 8a, but now visible instead of silent.
+        return DisclosureResult(
+            disclosed=False, depth=0, trust_delta=0.0, abstained=True,
+            features={"hits": hits, "detector": DETECTOR_VERSION,
+                      "abstain_reason": reason},
+        )
     return DisclosureResult(
         disclosed=depth > 0,
         depth=depth,
@@ -551,5 +707,8 @@ def turn_deltas(child_text: str, felt_pleasure: float,
     rather than an assertion.
     """
     d_rapport = rapport_gain * felt_pleasure if felt_pleasure > pleasure_threshold else 0.0
+    # An abstain carries trust_delta = 0.0 by construction, so this line needs no
+    # special case — but the distinction is preserved in the result object, and
+    # `outcome` is what callers should log if they want an abstain RATE.
     d_trust = detect(child_text).trust_delta
     return d_rapport, d_trust

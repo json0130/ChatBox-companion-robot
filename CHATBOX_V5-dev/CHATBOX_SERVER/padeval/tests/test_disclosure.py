@@ -349,3 +349,71 @@ def test_gold_items_are_blinded_and_unsampled():
         f"{len(present - pool)} extra — a selection step crept in")
     print(f"12. gold items: {len(items)} blinded to {sorted(allowed)}, "
           f"covering the entire {len(pool)}-utterance pool with no sampling ✓")
+
+
+# ── 10d: abstain as a third outcome ────────────────────────────────────────
+
+def test_abstain_is_a_third_outcome_not_a_hidden_negative():
+    """`outcome` must be three-way and abstain must never read as a negative."""
+    frag = detect("like spaceship assembly")
+    assert frag.outcome == "abstain" and frag.abstained
+    assert frag.disclosed is False and frag.trust_delta == 0.0
+    assert detect("i like jazz").outcome == "disclosed"
+    assert detect("mm").outcome == "not_disclosed"
+    assert detect("mm").abstained is False, (
+        "a confident negative must not be an abstention — the detector looked "
+        "and there is genuinely nothing there")
+    print("13. outcome is three-way; abstain is distinguishable from a "
+          "confident negative ✓")
+
+
+def test_abstain_fires_only_where_the_rules_cannot_decide():
+    """A1 (subjectless fragment) and A2 (unparseable). Nothing else."""
+    for text in ("like spaceship assembly",
+                 "Non, il s'agit, il s'agit, il s'agit.",
+                 "Greeners? So, go check on the moon."):
+        assert detect(text).outcome == "abstain", text
+    # Confident calls, both directions — these must NOT abstain.
+    for text in ("mm", "okay", "cool", "nice one", "you're funny",
+                 "that's brilliant", "what's my name?", "i am doing good"):
+        assert detect(text).outcome == "not_disclosed", text
+    for text in ("i like jazz", "my dad works nights",
+                 "i felt left out at school", "i am maori"):
+        assert detect(text).outcome == "disclosed", text
+    print("14. abstain confined to subjectless fragments and unparseable "
+          "input; confident calls stay confident in both directions ✓")
+
+
+def test_abstain_stops_trust_accruing():
+    """Abstain must move trust by exactly nothing — the safe direction, visible."""
+    a = SessionAccrual()
+    dr, dt = a.turn("like spaceship assembly", 0.5, ticks=20)
+    assert dt == 0.0, "an abstention moved trust"
+    assert dr > 0.0, "rapport should be unaffected by a disclosure abstention"
+    print("15. abstain accrues no trust and leaves rapport untouched ✓")
+
+
+def test_the_group_3_definition_as_published():
+    """10e.1, settled in writing BEFORE recoding, and pinned here.
+
+    Present-tense affect is camera-redundant and does NOT disclose. The same
+    affect anchored to another time DOES, because the camera saw an instant of
+    it at most. This is a decision, not a doubt — which is why A3 was dropped
+    rather than made to abstain here.
+    """
+    redundant = ("i am doing good", "I am doing great", "i am doing well...",
+                 "i'm happy", "i'm sad", "i am doing good you?")
+    displaced = ("i am really sad today", "i had a rough day today",
+                 "I'm feeling sad today. Just had a bad day.",
+                 "i felt awful yesterday", "i've been feeling really down")
+    for t in redundant:
+        r = detect(t)
+        assert r.outcome == "not_disclosed", f"{t!r} -> {r.outcome}"
+        assert any(h.startswith("state_facial_present_ignored")
+                   for h in r.features["hits"]), (
+            f"{t!r} was excluded but not FLAGGED — the deferred "
+            f"valence-contradiction work needs to be able to find these")
+    for t in displaced:
+        assert detect(t).outcome == "disclosed", t
+    print(f"16. Group 3 as published: {len(redundant)} present-tense affect "
+          f"excluded (and flagged), {len(displaced)} displaced accepted ✓")

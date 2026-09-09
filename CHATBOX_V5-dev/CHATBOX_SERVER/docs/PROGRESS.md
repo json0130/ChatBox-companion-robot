@@ -2059,3 +2059,38 @@ a disclosure where the published definition excludes it as camera-redundant. Rem
 gives κ = 0.914, locating the gap as definitional rather than mechanical. That divergence
 from untrained intuition is kept as a stated limitation, not corrected, because 9c's lemma
 requires the camera-redundancy line.
+
+## 11 — comparative evaluation: WASABI baseline + three ablations
+
+**Tried.** Add an external published baseline (WASABI, Becker-Asano & Wachsmuth 2010) and
+three ablations of the D-sourcing mechanism, evaluated on the existing E2/E3/6a/9a metric
+suite plus one new metric, to answer the ICRA-reviewer question every prior phase's
+axis-permutation-only comparison couldn't: measured against what published method?
+
+**Worked.** WASABI's own D-sourcing rule ("MAX feels dominant whenever it is his turn... "
+non-dominant otherwise") implemented as arm A4, holding our axis assignment fixed — verified
+from the primary source that the axis assignment already agrees with ours, which is
+corroboration, not the finding. The finding is timescale: metrics 1 and 3 (both axis-level
+Jacobian machinery) are bit-identical for A1/A2/A3 by construction, regression-tested against
+the existing published numbers; metrics 2, 4 and the new metric 5 are where the actual
+mechanism shows up. A5 (no relationship at all) came out rank-deficient (2/3) on metric 1 —
+the comparability check catching exactly the arm designed to have none, not a bug. Metric 5
+(new: turn ownership alternates while the relationship is held constant) cleanly separates
+A4 (39/39 possible switches) from everything else (0), which is the domain-mismatch finding
+stated explicitly: WASABI's rule fits its own turn-based game, not continuous dialogue.
+
+The brief's own decisive gate — does A3 (no accumulation) match A1 on every metric? — was
+checked directly rather than assumed: it does not, diverging on the two metrics that involve
+time (2 and 4), which an axis-only ablation could never have distinguished. Accumulation is
+load-bearing, not merely the axis choice WASABI already shares.
+
+**Didn't.** Registered prediction 1 ("all five arms rank 3") failed as literally stated — A5
+is rank 2/3 — and was reported as a failed prediction, not reworded. Registered prediction 2
+("structural zero on frame noise") also has a real, stated exception: A3 switches 62-116/min
+under frame noise, because unlike the others it routes the face to D directly; this
+contradicts the brief's stated expectation for A3 and was confirmed rather than smoothed over.
+Caught one real bug building metric 5: calling the once-per-turn accrual function once per
+alternation epoch silently pushed A1/A2's turn-count past the count>5 threshold, producing a
+spurious switch attributable to test-harness frequency, not ownership — fixed by freezing the
+offset once per arm rather than re-stepping state at the wrong rate, pinned by a 100-epoch
+regression test.

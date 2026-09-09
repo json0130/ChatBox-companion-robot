@@ -52,9 +52,9 @@ from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
 
-from modules.affect_bridge import AffectStream, affect
+from modules.affect_bridge import AffectStream, affect, prompt
 from padeval.analysis.dsourcing import (
-    ARMS, RAMP, TICKS_PER_TURN, ArmState, instant_tier, step_d_offset,
+    ARMS, M, RAMP, TICKS_PER_TURN, ArmState, instant_tier, step_d_offset,
 )
 from padeval.analysis.e2_identify import conditioning, jacobian
 from padeval.analysis.e3_permute import directive_volatility, rung_of
@@ -358,6 +358,83 @@ def metric5_ownership_alternation(robot: str, arm: str,
                            n_epochs=n_epochs,
                            switches_per_min=switches / total_minutes,
                            epoch_seconds=epoch_seconds)
+
+
+# ── Metric 6 (NEW, added after external review): situational responsiveness ─
+#
+# THE GAP THIS CLOSES
+# --------------------
+# Mehrabian's Dominance conflates two distinct things: social standing (who
+# this person IS to me, accumulated over the relationship) and situational
+# control (who holds rhetorical authority RIGHT NOW). This phase's D routes
+# only the first; WASABI's D routes only the second. Neither is complete, and
+# metrics 1-5 above were all built to characterise OUR axis, so none of them
+# could have surfaced this — they measure whether the relationship signal is
+# stable, never whether a genuinely momentary authority need gets served.
+#
+# THE SCENARIO
+# ------------
+# The robot is mid-explanation, correcting a factual error the child stated.
+# It legitimately holds the floor for one turn, independent of how close the
+# relationship is. Translated into this pipeline's single-directive-per-turn
+# architecture: `robot_turn=True` stands for "the robot currently holds
+# rhetorical authority to assert", `robot_turn=False` stands for an ordinary
+# reply that defers to the child's lead — the same binary WASABI's own rule
+# reads, applied to the one instant that scenario describes rather than to
+# every turn indiscriminately (which is what made A4 chatter in metric 5).
+#
+# WHAT IS MEASURED
+# -----------------
+# For A1/A2/A3/A5, this flag reaches nothing: computed here as D under
+# `robot_turn=True` MINUS D under `robot_turn=False` from an otherwise
+# identical state, proven bit-identical rather than assumed similar. For A4,
+# it is the entire signal, and this is the one scenario its rule is actually
+# built for.
+#
+# `tier` fixes a representative "ordinary, moderate relationship" operating
+# point for A1/A2 (and for A3 via the matching felt-P band, `_TIER_MIDPOINT_P`)
+# so all four tier-sensitive arms sit at a comparable point rather than each
+# being evaluated at whatever happens to flatter it.
+
+_TIER_MIDPOINT_P: Dict[str, float] = {
+    # midpoints of instant_tier's own bands (0.5, 0.0, -0.5), so A3 is
+    # evaluated at the SAME qualitative "moderate relationship" point A1/A2
+    # are, translated into A3's own felt-Pleasure currency.
+    "unknown": -0.75, "visitor": -0.25, "known": 0.25, "close": 0.75,
+}
+
+
+def metric6_situational_responsiveness(robot: str, arm: str,
+                                       tier: str = "known") -> Dict:
+    baseline = affect.to_pad(affect.ROBOTS[robot]["ocean"])
+
+    def raw_d(robot_turn: bool) -> float:
+        if arm in ("A1_full", "A2_no_trust"):
+            return baseline["D"] + affect.TIER_OFFSETS[tier][2]
+        if arm == "A3_no_accumulation":
+            felt_p = _TIER_MIDPOINT_P[tier]
+            band = instant_tier(felt_p)
+            return baseline["D"] + affect.TIER_OFFSETS[band][2]
+        if arm == "A4_wasabi":
+            return baseline["D"] + (M if robot_turn else -M)
+        if arm == "A5_no_relationship":
+            return baseline["D"]
+        raise ValueError(arm)
+
+    d_ordinary = max(-1.0, min(1.0, raw_d(False)))
+    d_correcting = max(-1.0, min(1.0, raw_d(True)))
+    rung_ordinary, rung_correcting = rung_of(d_ordinary), rung_of(d_correcting)
+    return {
+        "robot": robot, "arm": arm, "tier": tier,
+        "D_ordinary": d_ordinary, "D_correcting": d_correcting,
+        "rung_ordinary": rung_ordinary, "rung_correcting": rung_correcting,
+        # POSITIVE means the correcting moment commanded a MORE assertive rung
+        # (rung 0 is most assertive, so a larger index -> smaller index is a
+        # gain). Zero means the arm could not distinguish the two moments.
+        "assertiveness_gain": rung_ordinary - rung_correcting,
+        "directive_ordinary": prompt.manner_directive(d_ordinary),
+        "directive_correcting": prompt.manner_directive(d_correcting),
+    }
 
 
 def full_table(robots: Sequence[str] = ROBOTS, arms: Sequence[str] = ARMS

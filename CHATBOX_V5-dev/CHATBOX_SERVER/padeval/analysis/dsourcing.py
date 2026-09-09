@@ -61,6 +61,19 @@ ARMS: Tuple[str, ...] = (
     "A5_no_relationship",
 )
 
+# A6 is deliberately NOT in ARMS. It is a proposed extension (11f), analysed
+# separately, not one of the five arms the original comparison registered
+# predictions against — adding it to ARMS retroactively would silently expand
+# what 11a-11e's already-committed predictions were checked against.
+ARM_A6 = "A6_hybrid"
+
+# The magnitude A6's fast/situational term is bounded to. Not a single fixed
+# design choice: 11f sweeps this and reports the tradeoff between metric 5
+# (does ordinary turn-taking chatter?) and metric 6 (does a genuine momentary
+# assertion get through?) as a function of it, rather than presenting one
+# value as if it were obviously correct.
+HYBRID_FAST_BOUND_DEFAULT = 0.20
+
 M = affect.TIER_OFFSETS["close"][2]
 assert abs(M - 0.40) < 1e-9, "the deployed tier magnitude moved; re-derive M"
 
@@ -127,13 +140,16 @@ class ArmState:
 def step_d_offset(arm: str, state: ArmState, felt_p: float, child_text: str,
                   ticks: int = TICKS_PER_TURN,
                   robot_turn: Optional[bool] = None,
+                  fast_bound: float = HYBRID_FAST_BOUND_DEFAULT,
+                  legitimate_assertion: Optional[bool] = None,
                   ) -> Tuple[float, float, float]:
     """Advance `state` by one turn (mutated in place) and return this turn's
     (dP, dAr, dD) offset triple, ready for `compose_offsets`.
 
-    `child_text` is coded for disclosure by A1 only. `robot_turn` is consulted
-    by A4 only and ignored elsewhere — passing it for A1/A2/A3/A5 is harmless
-    and lets one call site drive every arm from the same script.
+    `child_text` is coded for disclosure by A1 (and A6) only. `robot_turn` is
+    consulted by A4 and A6 and ignored elsewhere — passing it for A1/A2/A3/A5
+    is harmless and lets one call site drive every arm from the same script.
+    `fast_bound` is consulted by A6 only.
     """
     if arm == "A1_full":
         d_rapport, d_trust = state.accrual.turn(child_text, felt_p, ticks=ticks)
@@ -172,5 +188,42 @@ def step_d_offset(arm: str, state: ArmState, felt_p: float, child_text: str,
 
     if arm == "A5_no_relationship":
         return (0.0, 0.0, 0.0)
+
+    if arm == ARM_A6:
+        # Slow component: bit-identical to A1's accrual — same state, same
+        # accrual formula, same call. This is what lets 11f cite A1's
+        # timescale result for the slow term rather than re-deriving it.
+        d_rapport, d_trust = state.accrual.turn(child_text, felt_p, ticks=ticks)
+        state.rapport = min(RAPPORT_CEILING, state.rapport + d_rapport)
+        state.trust = min(1.0, state.trust + d_trust)
+        state.count += 1
+        tier = _tier_from_scores(state.rapport, state.trust, state.count)
+        dP, dAr, dD_slow = affect.TIER_OFFSETS[tier]
+
+        # Fast component. Two triggers, kept deliberately distinct rather than
+        # merged into one flag (11f found they behave very differently):
+        #
+        #   `legitimate_assertion`, if given, wins. It stands for "the robot
+        #   is CURRENTLY exercising a specific, content-level authority (e.g.
+        #   correcting a fact)" — a signal ordinary turn-taking never raises.
+        #
+        #   `robot_turn` is WASABI's own raw signal — bare floor-holding, with
+        #   no concept of why. 11f measured this exact substitution and found
+        #   it all-or-nothing: any bound large enough to cross a rung boundary
+        #   for a genuine correction (metric 6) crosses that SAME boundary on
+        #   every ordinary turn-taking flip (metric 5), because both scenarios
+        #   present the identical signal at the identical magnitude — boundedness
+        #   controls the SIZE of the swing, not whether it happens to straddle a
+        #   discrete rung edge. `legitimate_assertion` is the fix: it fires only
+        #   when there is content-level reason to, so ordinary back-and-forth
+        #   never trips it.
+        if legitimate_assertion is not None:
+            dD_fast = fast_bound if legitimate_assertion else 0.0
+        elif robot_turn is not None:
+            dD_fast = fast_bound if robot_turn else -fast_bound
+        else:
+            raise ValueError(f"{ARM_A6} requires robot_turn or "
+                             f"legitimate_assertion")
+        return (dP, dAr, dD_slow + dD_fast)
 
     raise ValueError(f"unknown arm {arm!r}")

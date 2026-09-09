@@ -2094,3 +2094,40 @@ alternation epoch silently pushed A1/A2's turn-count past the count>5 threshold,
 spurious switch attributable to test-harness frequency, not ownership — fixed by freezing the
 offset once per arm rather than re-stepping state at the wrong rate, pinned by a 100-epoch
 regression test.
+
+## 11e/11f — a scenario WASABI wins, and the hybrid it motivates
+
+**Tried (11e).** External review pointed out Mehrabian's Dominance conflates social standing
+(accumulated) and situational control (momentary authority) — this phase's D routes only the
+first, WASABI's only the second. Scripted the scenario where the second genuinely matters: the
+robot mid-explanation, correcting a factual error, legitimately holding the floor for one turn.
+
+**Worked (11e).** Checked at all 4 tiers on both robots: A1/A2/A3/A5 give a bit-identical
+directive whether or not the robot is correcting anything (proven down to the literal
+`manner_directive()` string, not assumed similar) — none of their D formulas read who currently
+holds the floor. A4 shifts to a strictly more assertive rung every time (constant +3-rung gain
+across every tier). Quoted for the paper: CHATBOX @ known stays at "follow their topic" under
+A1 regardless of correcting; A4 moves from "answer only what they ask" to "either of you may
+open a topic". Framed as the flip side of metric 5, not a contradiction of it — same mechanism,
+a moment where its bluntness happens to be the right call.
+
+**Tried (11f).** The stronger, "if there's appetite" ask: A6, D = slow relationship term + a
+bounded fast situational term, tested analytically (rank, frame noise, timescale, metrics 5/6)
+against the registered prediction that boundedness buys A4's responsiveness at low cost.
+
+**Worked (11f).** Slow component is bit-identical to A1 on every metric that can see it
+(metrics 1/3), and its floor to `close` matches A1's exactly (4 sessions, both robots) at every
+bound tested. The content-aware refinement (`legitimate_assertion`, firing only on a genuine
+correction rather than raw turn-ownership) delivers the registered prediction cleanly: zero
+metric-5 cost at every bound swept, positive metric-6 gain (+1 rung, both robots) at bound=0.40,
+with the ordinary-condition D proven equal to A1's constant relationship-only value.
+
+**Didn't.** The FIRST, most literal reading of the prediction — reuse WASABI's own raw
+`robot_turn` signal at reduced magnitude — fails, and precisely rather than approximately: a
+ten-point bound sweep proves the outcome is all-or-nothing (metric 5's switch count is only
+ever exactly 0 or exactly the A4 maximum, never partial), because bounding controls the SIZE of
+the swing, not whether it crosses a discrete rung boundary, and metric 5's alternation presents
+the identical signal at the identical magnitude as metric 6's correction. Reported as the
+reason the working design needed a different KIND of signal (content-level, not just
+turn-timing), not merely a smaller amount of the same one — stating only the fix would have
+made the obvious idea look like it worked on the first try, when it didn't.

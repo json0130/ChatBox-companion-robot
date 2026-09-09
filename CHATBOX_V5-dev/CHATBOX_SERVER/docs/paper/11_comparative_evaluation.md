@@ -110,6 +110,52 @@ on ownership changes that carry no relational meaning; this shows the same mecha
 serving a moment that does. Reported together: each rule captures a different sense of
 Dominance, with evidence for both.
 
+## 11f — A6: relationship baseline + bounded situational offset
+
+The design the evidence above recommends: `D = slow(accumulated rapport+trust) +
+fast(bounded, situational)`. **Registered prediction:** "A6 preserves A1's timescale separation
+on the slow component while recovering A4's responsiveness on the fast one — because they're
+bounded, additive, and operate at different rates."
+
+**Confirmed: the slow component.** A6's floor to `close` is **4 sessions on both robots at
+every bound tested** — bit-identical to A1, and metrics 1/3 (which only see the ramp into D)
+are bit-identical to A1 too. The fast term does not corrupt tier derivation.
+
+**Not confirmed as stated: the fast component, in its most literal form.** The first, most
+direct reading of "bounded, additive" reuses WASABI's own raw signal (`robot_turn`) at reduced
+magnitude. **This does not work, and the reason is precise rather than approximate.** Bounding
+controls the *size* of the swing, not whether that size happens to cross a discrete rung
+boundary. Because metric 5's alternation and metric 6's correction present the **identical**
+signal at the **identical** magnitude, a fine sweep over ten bound values shows the outcome is
+**provably all-or-nothing**: metric 5's switch count is *either exactly 0 or exactly the
+maximum* (39/39, matching A4) — never partial. **Every bound that gives metric 6 a positive
+gain pays the full A4 chatter cost on metric 5.** There is no magnitude that buys situational
+responsiveness cheaply if the trigger is bare floor-holding.
+
+**The fix, tested and confirmed:** key the fast term to a *content-level* signal — is the robot
+currently exercising a specific, legitimate authority (a correction), not merely "is it
+technically my turn" — one-sided rather than symmetric (0 when not asserting, `+bound` when
+asserting; there is no "legitimate submission" event to mirror the boost against). At
+bound = 0.40:
+
+| | Design 1 (`robot_turn`, symmetric) | Design 2 (`legitimate_assertion`, one-sided) |
+|---|---|---|
+| Metric 5 (ordinary turn-taking) | **5.85/min — the full A4 rate** | **0.00/min, at every bound swept** |
+| Metric 6 (genuine correction) | +3 rungs (CHATBOX & ELLEBOT) | **+1 rung (both robots)**, positive at zero cost |
+
+Design 2's ordinary-condition D is verified equal to A1's constant relationship-only value —
+it contributes exactly nothing when nothing legitimate is happening, so ordinary conversation is
+byte-for-byte what A1 already produces.
+
+**The registered prediction holds — for Design 2, not for the naive substitution of WASABI's
+raw signal.** This is the design recommendation the method itself produces: neither existing
+option is complete, and the composition that satisfies both requires the fast term to carry
+*content*, not just *timing*.
+
+**This is analytic evaluation only,** exactly as scoped — A6 is not deployed, `affect.py` is
+untouched, and the recommendation is stated as a proposed extension for future work, not as a
+change made to the shipped system.
+
 ## Metric 5 as the paper's figure candidate
 
 No plotting library is added to this project (established convention: CSV/LaTeX only). The
@@ -143,11 +189,22 @@ this one does not.
   from WASABI's.** It cannot — both share the axis assignment, and metric 2 tests the axis
   assignment. The separating measurement is metric 5, and the report says so rather than
   implying the zero itself is the win.
+- **Not "our system captures situational authority too, once you add A6."** A6 is a proposed
+  extension, evaluated analytically, not deployed. And even the working design (Design 2)
+  recovers only +1 rung of responsiveness against A4's +3 — real, at zero measured cost, but
+  weaker in degree. Reported as what the evidence shows, not rounded up.
+- **Not that "bounded and additive" was sufficient on its own.** The first, most literal
+  reading of the registered prediction — reusing WASABI's own signal at reduced magnitude —
+  was tested and found to fail in a precise, provable way (11f). The working design needed a
+  different *kind* of signal, not just a smaller *amount* of the same one. That distinction is
+  the actual finding, and stating only the fix without the failure would make it look like the
+  obvious idea worked on the first try.
 
 ## Verified
 
 `padeval/tests/test_dsourcing.py` (8), `test_dsourcing_metrics.py` (13),
-`test_dsourcing_predictions.py` (6) — 27 new tests, 125/125 padeval tests total.
+`test_dsourcing_predictions.py` (6), `test_dsourcing_metric6.py` (4),
+`test_dsourcing_hybrid.py` (7) — 38 new tests across 11a-11f, 136/136 padeval tests total.
 `affect.py`, `WEIGHTS`, `TIER_OFFSETS` and the existing E2/E3 code paths are unmodified; every
 arm is passed to the existing machinery as an explicit `ramp` argument, the same seam E2's
 leak/no-leak pair and 7a's enumeration already use. Zero LLM calls throughout.

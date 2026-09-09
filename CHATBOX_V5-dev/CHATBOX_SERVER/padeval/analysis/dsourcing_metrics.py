@@ -48,30 +48,40 @@ numpy only; every metric here is analytic or simulation, no LLM calls.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
 from modules.affect_bridge import AffectStream, affect, prompt
 from padeval.analysis.dsourcing import (
-    ARMS, M, RAMP, TICKS_PER_TURN, ArmState, instant_tier, step_d_offset,
+    ARM_A6, ARMS, HYBRID_FAST_BOUND_DEFAULT, M, RAMP, TICKS_PER_TURN,
+    ArmState, instant_tier, step_d_offset,
 )
 from padeval.analysis.e2_identify import conditioning, jacobian
 from padeval.analysis.e3_permute import directive_volatility, rung_of
 from padeval.analysis.noise_propagation import SIGMA_A, SIGMA_V, WINDOW
 from padeval.analysis.tier_reachability import simulate as reachability_simulate
+from modules.graph_relationship.kg_bridge import _tier_from_scores as _tier_from_scores_local
 from padeval.axes import AXES, IDENTITY
 from padeval.traces import synth_trace
 
 ROBOTS: Tuple[str, ...] = ("CHATBOX", "ELLEBOT")
+
+def _ramp_for(arm: str) -> Tuple[float, float, float]:
+    """RAMP plus A6, whose axis-level ramp is IDENTICAL to A1's — the fast
+    term is a fixed-magnitude additive constant, not part of the scalar this
+    ramp mechanism scales, so metrics 1 and 3 exercise A6's slow component
+    only. Stated once here rather than repeated at each call site."""
+    return RAMP[arm] if arm in RAMP else affect.TIER_OFFSETS["close"]
 
 
 # ── Metric 1: axis-level Jacobian rank / conditioning ───────────────────────
 
 def metric1_rank(robot: str, arm: str) -> Dict:
     """Reuses e2_identify.jacobian/conditioning UNCHANGED, varying only the
-    `ramp` argument per arm (RAMP, dsourcing.py). No new numerics."""
-    J = jacobian(IDENTITY, robot, ramp=RAMP[arm], space="axis")
+    `ramp` argument per arm (RAMP, dsourcing.py; `_ramp_for` for A6). No new
+    numerics."""
+    J = jacobian(IDENTITY, robot, ramp=_ramp_for(arm), space="axis")
     c = conditioning(J)
     return {"robot": robot, "arm": arm, "rank": c["rank"], "sv": c["sv"],
            "cond": c["cond"]}
@@ -106,11 +116,16 @@ def metric2_frame_switching(robot: str, arm: str, sigma_v: float = SIGMA_V,
     if trace is None or abs(trace.duration_s - duration_s) > 1e-9:
         trace = synth_trace(sigma=sigma_v, seed=seed)
 
-    if arm in ("A1_full", "A2_no_trust"):
+    if arm in ("A1_full", "A2_no_trust", ARM_A6):
         v = directive_volatility(IDENTITY, robot, "known", trace)
+        note = ("axis-level (shared)" if arm != ARM_A6 else
+               "axis-level, SLOW component only — this machinery has no "
+               "ownership concept, so A6's fast term is not exercised here; "
+               "it is not driven by camera signal either, so this is not a "
+               "gap, just a scope note")
         return {"robot": robot, "arm": arm, "switches": v.rung_switches,
                "switches_per_min": v.switches_per_min,
-               "distinct_rungs": v.distinct_rungs, "method": "axis-level (shared)"}
+               "distinct_rungs": v.distinct_rungs, "method": note}
 
     if arm == "A3_no_accumulation":
         baseline = affect.to_pad(affect.ROBOTS[robot]["ocean"])
@@ -172,7 +187,7 @@ def metric3_noise_propagation(robot: str, arm: str) -> Dict:
     for any arm, because none of the five puts a face-driven term in the axis
     routing to D.
     """
-    std = _closed_form_std_ramp(robot, RAMP[arm])
+    std = _closed_form_std_ramp(robot, _ramp_for(arm))
     return {"robot": robot, "arm": arm, "std_D": std["D"], "std_P": std["P"],
            "std_Ar": std["Ar"]}
 
@@ -253,7 +268,45 @@ def metric4_timescale(robot: str, arm: str) -> Dict:
         return {"robot": robot, "arm": arm, "unit": None, "tau_D": None,
                "note": "undefined: D is constant, there is nothing to time"}
 
+    if arm == ARM_A6:
+        sessions = _sessions_to_close_A6(robot)
+        return {"robot": robot, "arm": arm, "unit": "sessions",
+               "tau_D": sessions,
+               "note": ("slow component only: robot_turn held at False "
+                        "throughout so the fast term cannot help or hurt "
+                        "this measurement, isolating whether the bounded "
+                        "fast term corrupts the slow floor. Expected equal "
+                        "to A1's floor, confirmed rather than assumed since "
+                        "the fast term still perturbs D on every turn even "
+                        "when held constant, and clamping could in "
+                        "principle interact with the tier lookup.")}
+
     raise ValueError(arm)
+
+
+def _sessions_to_close_A6(robot: str, depth: int = 3, turns_per_session: int = 2,
+                          max_sessions: int = 60,
+                          fast_bound: float = HYBRID_FAST_BOUND_DEFAULT
+                          ) -> Optional[int]:
+    """Sessions for A6's SLOW component to reach `close`, robot_turn held
+    fixed at False throughout (an "ordinary" conversation, never a scripted
+    correction) so the fast term cannot help the slow term along. If this
+    differs from A1's floor, the fast term is interfering with tier
+    derivation and that would be a real defect in the hybrid design."""
+    baseline = affect.to_pad(affect.ROBOTS[robot]["ocean"])
+    state = ArmState()
+    text = {1: "i like jazz", 2: "my dad works nights",
+           3: "i felt left out at school"}[depth]
+    for s_idx in range(max_sessions):
+        state.new_session(trust_cap=0.20)
+        for _ in range(turns_per_session):
+            felt_p = affect.feel(baseline, 1.0, 0.0)["P"]
+            step_d_offset(ARM_A6, state, felt_p, text, ticks=TICKS_PER_TURN,
+                          robot_turn=False, fast_bound=fast_bound)
+        tier = _tier_from_scores_local(state.rapport, state.trust, state.count)
+        if tier == "close":
+            return s_idx + 1
+    return None
 
 
 def _settling_time_A3(robot: str, window: int = WINDOW,
@@ -303,7 +356,10 @@ class OwnershipResult:
 
 def metric5_ownership_alternation(robot: str, arm: str,
                                   epoch_seconds: float = TICKS_PER_TURN / 2.0,
-                                  n_epochs: int = 40) -> OwnershipResult:
+                                  n_epochs: int = 40,
+                                  fast_bound: float = HYBRID_FAST_BOUND_DEFAULT,
+                                  a6_trigger: str = "robot_turn",
+                                  ) -> OwnershipResult:
     """Turn ownership alternates every `epoch_seconds` (default: half a
     conversational turn, i.e. the natural child-speaks / robot-replies rhythm)
     while the RELATIONSHIP ITSELF IS HELD CONSTANT throughout — this isolates
@@ -323,6 +379,35 @@ def metric5_ownership_alternation(robot: str, arm: str,
     nothing to do with the relationship, and A4 cannot tell the difference.
     """
     baseline = affect.to_pad(affect.ROBOTS[robot]["ocean"])
+
+    if arm == ARM_A6:
+        # Slow term frozen exactly as for A1/A2/A3/A5 (see the comment below
+        # for why re-stepping state at sub-turn frequency is wrong).
+        _, _, both = step_d_offset(arm, ArmState(), felt_p=0.0, child_text="",
+                                   ticks=0, robot_turn=False,
+                                   fast_bound=fast_bound)
+        d_slow = both + fast_bound            # undo the one-off fast term
+        rungs = []
+        for i in range(n_epochs):
+            if a6_trigger == "robot_turn":
+                # WASABI's raw signal: fires every alternation, same as A4.
+                robot_turn = (i % 2 == 1)
+                dD = d_slow + (fast_bound if robot_turn else -fast_bound)
+            else:
+                # Content-aware trigger: ordinary rapid back-and-forth NEVER
+                # raises "I am asserting a specific correction", by the
+                # premise of this scenario (nothing legitimate is happening,
+                # it is just mechanical turn alternation) — so it stays off
+                # for all n_epochs, at any bound.
+                dD = d_slow          # legitimate_assertion=False, every epoch
+            rungs.append(rung_of(max(-1.0, min(1.0, baseline["D"] + dD))))
+        arr = np.asarray(rungs, dtype=int)
+        switches = int(np.count_nonzero(np.diff(arr)))
+        total_minutes = (n_epochs * epoch_seconds) / 60.0
+        return OwnershipResult(robot=robot, arm=arm, switches=switches,
+                               n_epochs=n_epochs,
+                               switches_per_min=switches / total_minutes,
+                               epoch_seconds=epoch_seconds)
 
     if arm == "A4_wasabi":
         # The only arm whose D genuinely depends on the per-epoch ownership
@@ -405,7 +490,10 @@ _TIER_MIDPOINT_P: Dict[str, float] = {
 
 
 def metric6_situational_responsiveness(robot: str, arm: str,
-                                       tier: str = "known") -> Dict:
+                                       tier: str = "known",
+                                       fast_bound: float = HYBRID_FAST_BOUND_DEFAULT,
+                                       a6_trigger: str = "robot_turn",
+                                       ) -> Dict:
     baseline = affect.to_pad(affect.ROBOTS[robot]["ocean"])
 
     def raw_d(robot_turn: bool) -> float:
@@ -419,6 +507,19 @@ def metric6_situational_responsiveness(robot: str, arm: str,
             return baseline["D"] + (M if robot_turn else -M)
         if arm == "A5_no_relationship":
             return baseline["D"]
+        if arm == ARM_A6:
+            slow = baseline["D"] + affect.TIER_OFFSETS[tier][2]
+            if a6_trigger == "robot_turn":
+                # Design 1: mirrors WASABI's binary exactly — every turn is
+                # EITHER dominant OR submissive, so "ordinary" gets an active
+                # submissive push, matching metric 5's use of the same design.
+                return slow + (fast_bound if robot_turn else -fast_bound)
+            # Design 2 (legitimate_assertion): there is no "legitimate
+            # submission" event to mirror the boost against — "ordinary" is
+            # simply the unmarked default, so it gets NO fast-term
+            # contribution at all, only the relationship term. Matches
+            # metric 5's dD_fast=0 "off" state exactly.
+            return slow + (fast_bound if robot_turn else 0.0)
         raise ValueError(arm)
 
     d_ordinary = max(-1.0, min(1.0, raw_d(False)))

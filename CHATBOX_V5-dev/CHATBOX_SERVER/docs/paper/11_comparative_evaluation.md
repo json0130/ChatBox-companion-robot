@@ -81,6 +81,35 @@ every metric? **It does not.** A3 diverges from A1 on metrics 2 and 4 — the tw
 involve time, which an axis-only ablation could never have distinguished. **Accumulation is
 load-bearing; the contribution is not merely the axis choice WASABI already shares.**
 
+## 11e — Metric 6: the scenario where WASABI's rule should win
+
+Mehrabian's Dominance conflates two distinct things: **social standing** (who this person is to
+me, accumulated over the relationship) and **situational control** (who holds rhetorical
+authority right now). This phase's D routes only the first; WASABI's routes only the second.
+Neither is complete, and metrics 1–5 were all built to characterise *our* axis, so none of them
+could have surfaced this.
+
+**Scenario:** the robot is mid-explanation, correcting a factual error the child stated. It
+legitimately holds the floor for one turn, independent of how close the relationship is.
+`robot_turn=True` stands for holding that authority for the one turn the scenario describes
+(not for every turn indiscriminately, which is what made A4 chatter in metric 5).
+
+| | A1/A2/A3/A5 gain | A4 gain |
+|---|---|---|
+| At every tier, both robots | **0** (bit-identical D and directive text) | **+3** (constant across tier) |
+
+Quoted, tier=`known`:
+
+> **CHATBOX A1** — ordinary: *"follow their topic, and you may add one follow-up question about
+> it."* Correcting: **the identical sentence.**
+> **CHATBOX A4** — ordinary: *"answer only what they ask, and do not introduce a topic of your
+> own."* Correcting: *"either of you may open a topic — introduce one only if things go quiet."*
+
+**This is the flip side of metric 5, not a contradiction of it.** Metric 5 showed A4 chattering
+on ownership changes that carry no relational meaning; this shows the same mechanism correctly
+serving a moment that does. Reported together: each rule captures a different sense of
+Dominance, with evidence for both.
+
 ## Metric 5 as the paper's figure candidate
 
 No plotting library is added to this project (established convention: CSV/LaTeX only). The

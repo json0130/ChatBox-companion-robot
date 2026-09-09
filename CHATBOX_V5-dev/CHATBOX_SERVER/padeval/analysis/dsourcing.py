@@ -51,7 +51,7 @@ from typing import Dict, Optional, Tuple
 
 from modules.affect_bridge import affect
 from modules.graph_relationship.kg_bridge import _tier_from_scores
-from padeval.coding.disclosure import SessionAccrual, detect
+from padeval.coding.disclosure import SessionAccrual
 from padeval.analysis.tier_reachability import (
     PLEASURE_FLOOR, RAPPORT_CEILING, RAPPORT_GAIN,
 )

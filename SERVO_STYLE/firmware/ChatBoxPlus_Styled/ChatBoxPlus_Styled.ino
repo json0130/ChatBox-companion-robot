@@ -12,6 +12,10 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
+// Affective styling. The header carries the tuning constants and the prototypes,
+// so every .ino sees them regardless of the order the IDE concatenates them in.
+#include "StyleControl.h"
+
 // ==================== WiFi / TCP Config ==================== //
 // Uncomment ONE of the two blocks below depending on your network.
 
@@ -227,6 +231,17 @@ void loop() {
       serialInput = tcpClient.readStringUntil('\n');
       serialInput.trim();
       Serial.println("DEBUG: Received [" + serialInput + "] Length:" + String(serialInput.length()));
+
+      // A style update is not a gesture: it changes how later gestures are
+      // performed and nothing moves now. Handled before the validity check so
+      // "STYLE ..." is never rejected as an unknown expression, and we drop
+      // straight back to IDLE rather than entering EXECUTE with nothing to play.
+      if (handleStyleCommand(serialInput)) {
+        tcpClient.println("OK:" + serialInput);
+        currentState = IDLE;
+        sleepTimer = millis();
+        break;
+      }
 
       if (checkValidity(serialInput) || checkSequenceValidity(serialInput)) {
         tcpClient.println("OK:" + serialInput);

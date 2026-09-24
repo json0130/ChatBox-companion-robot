@@ -2,6 +2,8 @@
 import argparse
 import sys
 import re
+import threading
+import time
 import logging
 from enum import Enum
 from typing import Optional
@@ -11,6 +13,7 @@ from client import BasicClient
 from InputModules.voice_input import VoiceInputModule
 from InputModules.camera_input import CameraInputModule
 from OutputModules.console_output import ConsoleOutputModule
+from OutputModules.face_tracking_output import FaceTrackingOutputModule
 from OutputModules.edge_tts_output import EdgeTTSOutputModule
 from OutputModules.arduino_output import ArduinoOutputModule
 
@@ -91,7 +94,7 @@ class SimpleConcurrentClient(BasicClient):
         self._register_custom_event_handlers()
 
     # ── Arduino helpers ───────────────────────────────────────────────────────
-
+    
     def _on_arduino_connected(self):
         logger.info("[Arduino] Connected")
 
@@ -204,13 +207,94 @@ class SimpleConcurrentClient(BasicClient):
         if not sentences:
             return
 
-        # First sentence carries the emotion callback — fires when audio starts
-        start_cb = (lambda e: lambda: self.on_emotion_detected(e))(emotion) if emotion else None
-        tts.process_output_synced(sentences[0], start_callback=start_cb)
+        # A response arrived: start turning toward the person straight away, but
+        # keep tracking while TTS synthesises. Freezing here instead would leave
+        # the head locked and silent for however long synthesis takes — about two
+        # seconds on gTTS's network round trip — which reads as a crash rather
+        # than as a robot about to speak.
+        tracker = self.output_modules.get("face_tracking_output")
+        if tracker:
+            tracker.request_center()
 
-        # Remaining sentences queued individually — TTS plays them back-to-back
-        for sentence in sentences[1:]:
-            tts.process_output(sentence)
+        # Set once the hold has actually been taken, so the finally below cannot
+        # release a hold this call never acquired — the callback runs on the TTS
+        # worker thread and may never fire if synthesis fails outright.
+        hold_taken = threading.Event()
+
+        def _on_audio_start():
+            """Runs on the TTS worker thread immediately before playback starts.
+
+            Every TTS path (gTTS, piper warm, piper one-shot) invokes this right
+            before handing the file to aplay, so blocking here holds back the
+            audio itself: nothing is spoken until the subject is centred and the
+            head is frozen. Centring that fails or times out does not gag the
+            robot — talking slightly off-centre beats not talking at all.
+            """
+            if tracker:
+                if not tracker.wait_until_centered():
+                    logger.info("[FaceTracking] not centred — speaking anyway")
+                tracker.request_hold()
+                hold_taken.set()
+                if not tracker.wait_until_held(timeout=2.0):
+                    logger.warning("[FaceTracking] hold not confirmed — speaking anyway")
+                self._settle_before_speaking(tracker)
+            if emotion:
+                self.on_emotion_detected(emotion)
+
+        try:
+            # First sentence carries the callback — it gates audio on centring and
+            # fires the gesture at the moment the robot actually starts talking.
+            tts.process_output_synced(sentences[0], start_callback=_on_audio_start)
+
+            # Remaining sentences queued individually — TTS plays them back-to-back
+            for sentence in sentences[1:]:
+                tts.process_output(sentence)
+
+            self._wait_for_speech_end()
+        finally:
+            if tracker and hold_taken.is_set():
+                tracker.release_hold()
+
+    @staticmethod
+    def _settle_before_speaking(tracker) -> None:
+        """Hold a beat between finishing the turn and opening its mouth.
+
+        Measured from when centring completed rather than added after it, so a
+        slow synthesiser absorbs the pause instead of stacking with it: gTTS
+        already spends ~2s making the audio, and nobody wants that to become
+        three. The head is already frozen by the time we get here, so the pause
+        looks like the robot regarding you before it speaks.
+        """
+        delay = getattr(tracker, "speak_delay", 0.0)
+        if delay <= 0:
+            return
+        centered_at = getattr(tracker, "centered_at", None)
+        remaining = delay - (time.time() - centered_at) if centered_at else delay
+        if remaining > 0:
+            time.sleep(remaining)
+
+    def _wait_for_speech_end(self, settle: float = 0.8, timeout: float = 120.0) -> bool:
+        """Block until TTS has been quiet for `settle` seconds.
+
+        is_speaking clears briefly *between* queued sentences, so a plain
+        'not set' check would resume tracking mid-reply — hence the settle
+        window. Returns False if `timeout` was hit first.
+        """
+        if not hasattr(self, "is_speaking"):
+            return True
+        self.is_speaking.wait(timeout=3.0)      # let the first audio start
+        deadline = time.time() + timeout
+        quiet_since = None
+        while time.time() < deadline:
+            if self.is_speaking.is_set():
+                quiet_since = None
+            elif quiet_since is None:
+                quiet_since = time.time()
+            elif time.time() - quiet_since >= settle:
+                return True
+            time.sleep(0.05)
+        logger.warning("[FaceTracking] speech wait timed out — resuming tracking")
+        return False
 
     def on_speech_response(self, data: dict):
         transcription = data.get("transcription", "")
@@ -249,9 +333,33 @@ class SimpleConcurrentClient(BasicClient):
             if active:
                 logger.info(f"[Persona] Active capabilities: {', '.join(active)}")
 
+        # The announcement is speech too, so it gets the same treatment as a
+        # reply: centre while it synthesises, freeze the instant audio starts,
+        # resume when it finishes. Otherwise the head would pan mid-sentence.
         tts = self.output_modules.get("edge_tts_output")
         if tts:
-            tts.process_output(f"Persona updated to {persona_name}.")
+            tracker = self.output_modules.get("face_tracking_output")
+            if tracker:
+                tracker.request_center()
+
+            hold_taken = threading.Event()
+
+            def _on_audio_start():
+                if tracker:
+                    tracker.wait_until_centered()
+                    tracker.request_hold()
+                    hold_taken.set()
+                    tracker.wait_until_held(timeout=2.0)
+                    self._settle_before_speaking(tracker)
+
+            try:
+                tts.process_output_synced(f"Persona updated to {persona_name}.",
+                                          start_callback=_on_audio_start)
+                if tracker:
+                    self._wait_for_speech_end()
+            finally:
+                if tracker and hold_taken.is_set():
+                    tracker.release_hold()
 
         if "console_output" in self.output_modules:
             self.output_modules["console_output"].process_output(
@@ -305,6 +413,16 @@ class SimpleConcurrentClient(BasicClient):
             edge.start()
         else:
             logger.warning("[Setup] Edge TTS failed — check gtts/ffmpeg")
+
+        # ── OUTPUT: Face tracking (state machine, ticked by the main loop) ────
+        if self.config.get("features", {}).get("face_tracking", False):
+            logger.info("[Setup] Face tracking...")
+            ft_cfg = self.config.get("face_tracking_config", {})
+            tracker = FaceTrackingOutputModule("face_tracking_output", ft_cfg)
+            if self.register_output_module(tracker):
+                tracker.start()
+            else:
+                logger.warning("[Setup] Face tracking failed — check camera/serial")
 
         # ── OUTPUT: Arduino (TCP) ─────────────────────────────────────────────
         if self.config.get("features", {}).get("arduino_integration", True):

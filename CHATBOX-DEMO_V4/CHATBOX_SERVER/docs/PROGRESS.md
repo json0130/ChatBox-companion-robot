@@ -5,6 +5,22 @@ and what **didn't work / was fixed**, for the referenced commit.
 
 ---
 
+## 381a4cf — merge: face-tracking into main
+**Date:** 2026-09-24
+**Area:** repo structure (branch cleanup)
+
+### What was tried
+Restructure branches so `main` = V4 demo + `chatboxv1-3/` + face tracking, with
+`sign-language-demo`, `KG-knowledge-extraction` and `feature/pad-affect-core` hanging off it.
+First step: merge the `face-tracking` branch (16 commits) into `main`.
+
+- **Worked:** clean merge, no conflicts. Adds `AFFECT_LAB/`, `SERVO_STYLE/`, V4 face-tracking
+  OutputModules + ESP32 pan-servo changes; `robot.py` auto-merged and compiles.
+- **Didn't work / open:** nothing tested on hardware yet; the other branches still need `main`
+  merged into them.
+
+---
+
 ## f02ca18 — fix(server): stop LLM emotion tags collapsing to one tag
 **Date:** 2026-08-18
 **Area:** `Modules/llm_processor.py` (emotion tag selection for the Ollama/`qwen:4b` reply path)

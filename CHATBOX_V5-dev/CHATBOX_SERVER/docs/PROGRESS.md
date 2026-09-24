@@ -6,6 +6,18 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## chore: untrack 118 MB of binaries in utils/  *(branch `feature/pad-affect-core`)*
+**Date:** 2026-09-24
+
+- **Tried:** trimming `utils/` (121 MB tracked) as part of the repo cleanup.
+- **Worked:** `git rm --cached` on `yolov8m.pt`, `yolov8m-face.pt` (52 MB each) and the Jetson torchvision
+  wheel (14 MB); files stay on disk, `*.pt` / `*.whl` now gitignored, `utils/README.md` says where each comes
+  from. Nothing outside `utils/` references them. Training scripts + confusion-matrix figures kept.
+- **Didn't / open:** `.git` stays ~162 MB — the blobs are still in history; shrinking needs a history
+  rewrite (`git filter-repo`) + force-push, not done.
+
+---
+
 ## exp(padeval): 7b — persona admissibility as a design rule  *(branch `feature/pad-affect-core`)*
 
 Generalizes 6c's `|D_baseline| <= 1-m` from one persona to the trait design space.

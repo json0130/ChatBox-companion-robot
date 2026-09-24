@@ -28,3 +28,7 @@ runs/
 
 # graphify
 graphify-out/
+
+# Model weights / wheels — kept on disk, not in git (see utils/README.md)
+*.pt
+*.whl

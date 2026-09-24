@@ -6,111 +6,118 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
-## merge: KG-knowledge-extraction (now on main) into first-impression  *(branch `first-impression`)*
+## merge: main into KG-knowledge-extraction  *(branch `KG-knowledge-extraction`)*
 **Date:** 2026-09-24
 
 ### What was tried
-Branch restructure: `main` = V4 demo + chatboxv1-3 + face tracking; `KG-knowledge-extraction` hangs off
-`main`, and this branch hangs off KG. Merged the updated KG in with `-X no-renames`, because this branch
-renamed `CHATBOX-DEMO_V4` → `CHATBOX_V5-dev` and rename detection would have pushed main's demo changes
-into the research tree.
+Branch restructure: `KG-knowledge-extraction` now hangs off `main` (V4 demo + chatboxv1-3 + face
+tracking). Merged `main` in; 6 real conflicts (the rest were stale `__pycache__`/RAG-index files that
+`main` untracked — dropped).
 
-- **CHATBOX-DEMO_V4:** restored, identical to KG's — V4 is the demo, V5-dev is research; both kept.
-- **CHATBOX_V5-dev:** untouched by the merge (identical to before). Git's directory-rename detection still
-  mapped 4 of main's V4 files into V5-dev (`WIFI_DEBUG.md`, face-tracking ESP32 sketch/servo test,
-  `face_tracking_output.py`); dropped — they live in V4.
-- **New from main:** `AFFECT_LAB/`, `SERVO_STYLE/`, graphify setup; `.gitignore` unioned.
-- **Not verified:** not run end to end.
-
----
-
-## feat: first-impression — build the person over time (extract + consolidate + connect to ChatBox)  *(branch `first-impression`)*
-
-**Goal (user):** now that a stranger starts as fast-nodes-only, let the profile GROW — extract typed topic
-nodes/edges from the conversation history, consolidate them, and connect to ChatBox's capabilities where they
-match. This is the "construction of the unknown person over time" the branch is for.
-**Changes (`webcam_loop.py`):**
-- Re-enabled end-of-session + `X`-hotkey `_extract_session()` in first-impression mode (was skipped for
-  fast-node-only). The live fast nodes (emotion/current topic/mood) are now distilled into typed topics at
-  session end.
-- Fixed the extraction truncation latent on this branch: `LLMClient.respond` hardcoded `max_tokens=140`, so
-  the topic/closeness JSON truncated mid-object and topics were silently lost. Added a `max_tokens` param;
-  `_extract_session` runs the JSON calls at 900.
-- `_auto_consolidate` now also runs `relink_capability_topics(store, robot, matcher=self._matcher)` — connects
-  the person's topics to ChatBox's capabilities by the embedding matcher (floor 0.62), so shared interests
-  become common ground.
-**Connection mechanism:** exact-label matches connect automatically via the shared TopicNode (person 'jazz'
-resolves to the SAME `topic:jazz` the robot's `knows jazz` capability points to); fuzzy matches connect via
-the matcher (their 'math' ~ ChatBox 'good at math').
-**Verified (real LLM + embeddings):** guest talks jazz + math + astronomy → extraction adds
-`jazz[music], math[other], astronomy[science]` (no truncation); capability link `ChatBox 'good at math' ~
-'math'`; `shared_topics(guest, chatbox) = ['jazz','math']`; astronomy correctly NOT shared (robot knows
-'space', floor keeps them distinct — no spurious link).
-**Known edge case (not hit in the normal flow):** if topics are extracted (via `X`) BEFORE the guest gives
-their name, the `interest:guest_N:*` nodes aren't moved by `rename_person` (it re-keys person/interaction/
-conversation only). The usual flow learns the name during the chat, so end-of-session extraction attaches to
-the real name — safe. Fix deferred (rename would need to also re-key interest ids).
+- **robot.py / ESP32 sketch / interactive_test.py / llm_processor.py:** this branch never changed them
+  (inherited from `sign-language-demo`), so they take the same resolution as the sign-language-demo
+  merge, except pepeha stays **off unless `--pepeha`** (main's behaviour; the demo branch defaults it on).
+- **emotion_processor.py:** kept this branch's explicit `device=` argument, and fall back to main's
+  `_pick_device()` CUDA probe instead of a bare `cuda.is_available()` check.
+- **PROGRESS.md:** both sides had created this file; merged main's entries (tagged `branch main`) above
+  this branch's.
+- **Worked:** touched Python compiles. **Not verified:** not run end to end.
 
 ---
 
-## fix+refine: first-impression — restore ChatBox identity (robot-only seed) + sync stale modules  *(branch `first-impression`)*
+## 381a4cf — merge: face-tracking into main  *(branch `main`)*
+**Date:** 2026-09-24
+**Area:** repo structure (branch cleanup)
 
-**Bugs (running `--first-impression --enable-emotion`):** the branch's `webcam_loop.py` was the newer
-integration version but two support modules were stale reverts, so the detection worker crashed every frame:
-1. `FaceIdentifier` had no `identify_all` → `AttributeError` (no bounding box / label). Ported the multi-face
-   path (`_mtcnn_all` keep_all=True MTCNN + `identify_all` returning (person_id, sim, box), Haar fallback).
-2. `emotion_detector.detect()` returned 2 values but the worker unpacks 4 → `not enough values to unpack`.
-   The file even used the pre-rename `from Modules.emotion_processor` import. Restored the VA version
-   (label, conf, valence, arousal via `_VA_TABLE`) + lowercase import. (Both latent in integration too —
-   emotion was off by default there; FI mode forces it on.)
-**Refine (user request):** keep ChatBox's persona/role/capabilities the same as before, but no person
-profile (first-impression builds the unknown person up over time). Previously FI turned seeding fully OFF and
-used an inline "warm" placeholder persona.
-- `seed.seed_all(store, spec_dir, robots_only=False)` — new `robots_only` seeds ONLY robot specs
-  (persona/role/capabilities), skipping human specs (`_spec_is_robot` peek).
-- webcam loop: FI mode now seeds `robots_only=True` (was seed=off); `--seed-fi` re-enables the FULL seed
-  incl. the human spec. New `seed_robots_only` param on `WebcamKGLoop`.
-**Verified:** robots_only seeds `chatbox` + persona "introverted, shy" + role "companion" + all capabilities,
-and ZERO person nodes (full seed also brings `jay`). Prompt for a guest shows the real identity + "invite
-them to introduce themselves", no culture. Detection-worker emotion path runs end-to-end (fake face → real
-detect, 4 values). All webcam modules compile; no stale `Modules.` imports remain.
+### What was tried
+Restructure branches so `main` = V4 demo + `chatboxv1-3/` + face tracking, with
+`sign-language-demo`, `KG-knowledge-extraction` and `feature/pad-affect-core` hanging off it.
+First step: merge the `face-tracking` branch (16 commits) into `main`.
+
+- **Worked:** clean merge, no conflicts. Adds `AFFECT_LAB/`, `SERVO_STYLE/`, V4 face-tracking
+  OutputModules + ESP32 pan-servo changes; `robot.py` auto-merged and compiles.
+- **Didn't work / open:** nothing tested on hardware yet; the other branches still need `main`
+  merged into them.
 
 ---
 
-## feat: first-impression mode — auto-enrol + learn names, fast-node-only KG  *(branch `first-impression`, from `feature/integration`)*
+## f02ca18 — fix(server): stop LLM emotion tags collapsing to one tag  *(branch `main`)*
+**Date:** 2026-08-18
+**Area:** `Modules/llm_processor.py` (emotion tag selection for the Ollama/`qwen:4b` reply path)
 
-**Goal:** a lightweight "meet a stranger" demo — recognise faces, save an unknown face after the first
-interaction, attach the person's real name if they say it, and show ONLY fast-updating data in the graph
-(emotion / current topic / mood) as a single node with edges from the person and the robot — no topic/interest
-knowledge-graph.
+### Problem observed
+Live logs showed the server emitting `[DEFAULT]` on **every** reply, across both English
+and Korean STT input, despite the client registering
+`['[DEFAULT]', '[WAVE]', '[HAPPY]', '[SAD]', '[CONFUSED]', '[GREETING]']`.
+Replies whose content was plainly sad, confused, or a self-introduction were all tagged
+`[DEFAULT]`.
 
-**Tried / built:**
-- `--first-impression` mode on the webcam loop. On the first chat turn with an unknown face in view it
-  auto-enrols that face under a provisional `guest_N` id (`_auto_enroll` → `FaceIdentifier.enroll` on the live
-  frame) and saves `faces.npz`, so it's recognised from then on.
-- Name learning: `_extract_name` regex-matches self-introductions ("my name is …", "I'm …", "call me …",
-  "this is …") with a small stoplist to reject "I'm fine/tired". On a hit, `_learn_name` re-keys `guest_N` →
-  name across **four** stores: face DB (`FaceIdentifier.rename`, merges/averages if the name already exists),
-  the graph (`graph_relationship/rename.py::rename_person` — rewrites person + `interaction:` + `conversation:`
-  node ids and re-points every incident edge, preserving rapport/trust/mood/topics), the SQLite transcripts
-  (`SessionStore.rename_person`), and this run's in-memory maps (`_run_sessions`, `_last_mood`,
-  `_chat_history`, `_kg_state`).
-- Fast-node-only graph: seeding is off by default in this mode (`--seed-fi` to re-enable) and end-of-session
-  topic extraction is skipped, so no `TopicNode`/`InterestNode` is ever created. The only per-person node is
-  the existing `ConversationNode` (rolling current-topic keyword + mood valence + emotion), linked
-  `person --has_conversation--> Conversation <--has_conversation-- robot`. Emotion is forced on so the node
-  shows live mood.
+### What was tried
 
-**Worked:** logic smoke test passes — name extraction (8 cases incl. hyphen/apostrophe + rejections), graph
-`rename_person` (old ids gone, new ids present, edge count unchanged, no dangling `guest_*` refs, rapport /
-topics preserved), and `FaceIdentifier.rename` (merge / move / missing-key). All four changed files byte-compile;
-`--first-impression`/`--seed-fi` show in `--help`.
+**Attempt 1 — fix the prompt's few-shot examples.**
+Root cause found: `_get_allowed_tags_info()` returned `config_tags[0]` as `example_tag`, and
+`[DEFAULT]` is first in every client config. All three "PERFECT RESPONSE" examples therefore
+rendered as `[DEFAULT] ...`. Two of them demonstrated `[DEFAULT]` on exactly the sentences
+`[CONFUSED]` and `[SAD]` exist for. Separately, the hard-coded negative example read
+`[HAPPY] I feel great! (Error: Tag is not in the allowed list)` — but `[HAPPY]` *was* in the
+allowed list, explicitly telling the model to avoid one of its own valid tags.
 
-**Didn't work → worked around:** a *second Claude Code instance* sharing this working dir did a `git checkout`
-that committed my tree mid-edit (`b66f028`) and reverted the uncommitted half of the webcam-loop integration
-points. Recovered by moving the work into an isolated git worktree (`../ChatBox-first-impression-wt`, branch
-`first-impression-wt`) and re-applying the lost edits there. To land: `git branch -f first-impression
-first-impression-wt` once the main dir isn't on that branch.
+Changes: added a per-tag "when to use this" menu (`TAG_MEANINGS` / `_build_tag_menu`),
+varied examples generated from the client's actual tags (`_build_examples`), and a
+dynamically-chosen genuinely-forbidden tag for the negative example
+(`_pick_forbidden_example`). Also stopped storing the tag in conversation history, since
+7 turns of `[DEFAULT] ...` were priming the model to repeat it.
+
+- **Worked:** the contradiction is gone; examples now demonstrate 4–5 distinct tags.
+- **Didn't work:** output stayed `[DEFAULT]`-only in the next log sample. Likely the server
+  had not been restarted (module is loaded at process start), but not confirmed.
+
+**Attempt 2 — remove `[DEFAULT]` from the model's choices entirely.**
+`_expressive_tags()` stripped `[DEFAULT]` from the prompt, and a model-emitted `[DEFAULT]`
+was treated as "no choice made" and re-inferred from the reply text via keyword cues.
+
+- **Worked:** replayed against real logged replies, produced `[GREETING]`, `[SAD]`,
+  `[CONFUSED]`, `[HAPPY]`, `[WAVE]` correctly.
+- **Reverted:** by request — `[HAPPY]` removed instead, `[DEFAULT]` restored as a valid
+  selectable tag and as the final inference fallback. `[HAPPY]` is now excluded server-side
+  via `EXCLUDED_TAGS` rather than editing the Jetson's `client_config.json`.
+
+**Attempt 3 — fix the resulting `[WAVE]` lock-in.**
+After restart, every reply came back `[WAVE]`. Two independent causes:
+1. The `WAVE` keyword cue was `\b(hi|hey|hello|bye|...)\b` with **no anchor**, matching
+   anywhere in the reply — and nearly every ChatBox reply contains "Hi" or "hello".
+   `GREETING` was checked first but its pattern covered `"hello there"` and not `"Hi there"`,
+   so replies fell through to `WAVE`.
+2. Nothing prevented the robot greeting on *every* turn — `[WAVE]`/`[GREETING]` were
+   permanently on the menu, so turn 12 could open with "Hi again!".
+
+Changes: greeting cues anchored to the start of the reply (`^\W*`); `[WAVE]`/`[GREETING]`
+gated behind `allow_greeting`, true only on the opening turn or when the child's own message
+contains a greeting (EN + KO: `안녕`, `반가`, `잘가`), evaluated with the RAG context block
+stripped so retrieved past "hello"s don't re-open the gate every turn. The gate applies to
+the prompt as well as the sanitizer, so the model stops *writing* "Hi again!" rather than
+just having its tag overridden.
+
+- **Worked:** replaying the logged conversation gives `[WAVE]` → `[DEFAULT]` → `[WAVE]`
+  (turn 3 correct: the child said "good afternoon"), with follow-ups reaching `[SAD]` and
+  `[CONFUSED]`.
+
+### Diagnostics added
+The debug line printed the *sanitized* output, so a model-chosen tag and a server-inferred
+tag were indistinguishable — this is why the first two attempts were hard to evaluate. It now
+prints `tag=... from=model|server (model said X) greeting_allowed=...`.
+
+### Open / not addressed
+- **`qwen:4b` is small for reliable tag adherence.** The prompt no longer fights the model,
+  but if `from=server` appears on most lines after restart, model size is the remaining
+  constraint, not the prompt.
+- **RAG context is prepended into the *user* message** (`chatbox_server.py:281`), so the model
+  sees a wall of retrieved context before the actual sentence, biasing toward flat summarising
+  replies. Moving it into the system prompt would likely sharpen the emotional read. Untested.
+- **Keyword inference is a backstop, not the mechanism.** If it fires on most turns the tag
+  distribution will look artificially narrow.
+- The older duplicate at `chatboxv1-3/version3(chatbox_ai_agent)/v4.2.0/Modules/llm_processor.py`
+  still has the original prompt bugs and no sanitizer at all. Left untouched.
 
 ---
 

@@ -1,3 +1,4 @@
+# Secrets / large model weights
 *.env
 *.pth
 
@@ -8,3 +9,13 @@ __pycache__/
 
 # Local backups / snapshots
 *.bak
+*.py[cod]
+*$py.class
+# Runtime data (per-user RAG indexes, transcript DB, KG snapshots)
+rag_indexes/
+*.faiss
+sessions.db
+kg_state.json
+kg_state*.bak
+# graphify
+graphify-out/

@@ -6,6 +6,16 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## chore: move AUDIT_REPORT*.md into docs/ + merge main's repo tidy  *(branch `feature/pad-affect-core`)*
+**Date:** 2026-09-24
+
+- Moved `AUDIT_REPORT.md` / `AUDIT_REPORT_2.md` from the repo root to `CHATBOX_V5-dev/CHATBOX_SERVER/docs/`
+  (next to this log, which cites them by name). Contents unchanged.
+- Merged `main`'s tidy: loose `faiss_index.bin` / `wordcloud_latest.png` and the dead `ChatBox` submodule
+  (`.gitmodules`) removed.
+
+---
+
 ## chore: untrack 118 MB of binaries in utils/  *(branch `feature/pad-affect-core`)*
 **Date:** 2026-09-24
 

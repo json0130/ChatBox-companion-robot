@@ -13,3 +13,6 @@ rag_indexes/
 sessions.db
 kg_state.json
 kg_state*.bak
+
+# graphify
+graphify-out/

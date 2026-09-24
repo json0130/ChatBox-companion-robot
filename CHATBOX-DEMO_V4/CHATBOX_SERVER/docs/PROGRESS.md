@@ -5,6 +5,18 @@ and what **didn't work / was fixed**, for the referenced commit.
 
 ---
 
+## chore: repo tidy — untrack utils/ binaries, drop loose root files + dead submodule
+**Date:** 2026-09-24
+**Area:** repo structure (cleanup)
+
+- **Tried / worked:** untracked `yolov8m.pt`, `yolov8m-face.pt` (52 MB each) and the Jetson torchvision
+  wheel (14 MB) — `*.pt` / `*.whl` now gitignored, `utils/README.md` says where each comes from (same change
+  as 39fc418 on `feature/pad-affect-core`). Deleted `faiss_index.bin` + `wordcloud_latest.png` (2025 leftovers
+  from #3, nothing references them) and `.gitmodules` (pointed at a `ChatBox` submodule with no gitlink).
+- **Didn't / open:** `.git` stays ~162 MB (blobs still in history) — history rewrite deliberately not done.
+
+---
+
 ## 381a4cf — merge: face-tracking into main
 **Date:** 2026-09-24
 **Area:** repo structure (branch cleanup)

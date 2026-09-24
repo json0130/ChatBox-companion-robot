@@ -5,8 +5,17 @@
     "modules": [
         "gpt",
         "speech",
-        "rag"
+        "rag",
+        "emotion"
     ],
+    "camera_config": {
+        "camera_index": 0,
+        "width": 640,
+        "height": 480,
+        "fps": 30,
+        "send_fps": 5,
+        "jpeg_quality": 85
+    },
     "robot_role": "You are a friendly and helpful robot assistant. You speak warmly, answer questions clearly, and always try to make the person feel comfortable. Keep responses concise and natural.",
     "allowed_tags": [
         "[POSE]",
@@ -42,10 +51,46 @@
             "timeout": 1.0
         }
     },
+    "features": {
+        "face_tracking": true,
+        "arduino_integration": true
+    },
+    "face_tracking_config": {
+        "use_realsense": true,
+        "camera_index": 0,
+        "serial_port": null,
+        "baud": 115200,
+        "width": 640,
+        "height": 480,
+        "deadband": 45,
+        "send_interval": 0.05,
+        "keepalive_interval": 1.0,
+        "center_tolerance": 45,
+        "pan_kp": 0.015,
+        "pan_max_step": 2.0,
+        "center_settle": 0.3,
+        "center_timeout": 3.0,
+        "center_lost_grace": 1.5,
+        "speak_delay": 1.0,
+        "model_path": "yolov8n-pose.pt",
+        "head_conf": 0.35,
+        "require_head": true,
+        "error_smoothing": 0.4,
+        "yolo_imgsz": 320,
+        "yolo_half": false,
+        "verbose_commands": false,
+        "show_preview": false,
+        "show_meter": true,
+        "meter_interval": 0.15,
+        "show_stream": true,
+        "stream_port": 8080,
+        "stream_fps": 10,
+        "stream_quality": 70
+    },
     "capabilities": {
         "navigation": false,
         "face_recognition": false,
-        "emotion_understanding": false
+        "emotion_understanding": true
     },
     "personality": {
         "A": 0.9,

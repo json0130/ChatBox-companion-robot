@@ -12,7 +12,7 @@ import glob
 import socket
 import sys
 import time
-from typing import Optional, Tuple
+from typing import Optional, Tuple  # for X|None on Python <3.10
 
 # ── All expressions the firmware accepts ─────────────────────────────────────
 VALID_EXPRESSIONS = [

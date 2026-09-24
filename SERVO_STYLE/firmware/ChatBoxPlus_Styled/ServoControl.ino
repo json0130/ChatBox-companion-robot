@@ -10,6 +10,12 @@
  * - F, B, R, L, and _ are used to indicate front, back, right, left, and center positions respectively (only for neck). 
 */
 
+// Affective styling: droop/posture weights, clamps, and prototypes. Included
+// rather than relied on from StyleControl.ino because the IDE concatenates .ino
+// files alphabetically, which puts this file first — the macros would not yet
+// exist at the call sites below.
+#include "StyleControl.h"
+
 // ==================== Constants and Definitions ==================== //
 #define SIZE_OF_SET 5
 #define D 0  // down
@@ -73,7 +79,12 @@
 // Cap on one serial line. Must clear the longest expression name
 // ("hands_wave_both" / "hands_only_wave", 15 chars) or Serial Monitor commands
 // would be silently truncated into invalid ones.
-#define PAN_MAX_INPUT_LEN 24
+// Raised from 24 for the styled build. A style line —
+//   "STYLE 0.82 0.89 +0.22 +0.35 0.44"
+// is 33 characters, so the original limit truncated it mid-number and the parse
+// silently saw four values instead of five. Anything shorter than the longest
+// line we now accept will be quietly mangled, so this has to lead the format.
+#define PAN_MAX_INPUT_LEN 48
 
 // NUM_VALID_EXPRESSIONS now defined in main file
 
@@ -137,10 +148,10 @@ struct moveSet wave = {
 };
 
 struct moveSet point = {
-  { U, U, U, U, U }, { U }, { M },  // R brow raised, L neutral (focused look)
-  { U, U, U, U, U }, { U, U, U, U, U }, { M, R, R, R, M }, // neck turns slightly right
-  { U, U, U, U, D }, { D, D, D, D, D },   // R shoulder lifts then drops back; L stays down
-  { U, U, U, U, M }, { M, M, M, M, M }    // R hand extends forward (up) then returns
+  { U, U, U, U, U }, { U }, { U },
+  { U, U, D, U, U }, { U, U, D, U, U }, { M, M, M, M, M },
+  { D, M, M, M, M }, { D, D, D, D, D },
+  { M, M, M, M, M }, { M, M, M, M, M }
 };
 
 // struct moveSet confused = {
@@ -218,11 +229,10 @@ struct moveSet defaultMode = {  // Fixed: was "defaultt"
 };
 
 struct moveSet pose = {
-  { U, U, U, U, U }, { M }, { M },            // ears up, brows neutral
-  { U, U, D, D, U }, { U, U, U, U, U },       // R eye blinks mid-sequence, L open
-  { M, L, L, L, L },                           // neck turns to look at raised arm
-  { D, M, U, U, D }, { D, D, D, D, D },       // RShoulder sweeps D→M→U→U→D; L stays down
-  { D, M, U, U, D }, { M, M, M, M, M }        // RHand rises with shoulder D→M→U→U→D
+  { U, U, U, U, U }, { M }, { M },
+  { U, U, D, D, U }, { U, U, U, U, U }, { M, L, L, L, L },
+  { U, U, U, U, U }, { D, D, D, D, D },
+  { M, U, U, U, M }, { M, M, M, M, M }
 };
 
 // A more subtle idle_natural gesture with only ears and eyes moving.
@@ -484,6 +494,10 @@ void updatePanTracking() {
         if (isIntegerLine(panInput)) {
           error = panInput.toInt();
           haveError = true;
+        } else if (handleStyleCommand(panInput)) {
+          // A style update, consumed. Checked before the expression branch so
+          // "STYLE ..." is never mistaken for the name of a gesture — and so the
+          // style can be set from the USB Serial Monitor with no Jetson attached.
         } else if (pendingCommand.length() == 0) {
           // Keep the first command until loop() consumes it, so a burst of
           // typing cannot overwrite one that is already queued.
@@ -555,10 +569,12 @@ void setHand(char side, uint8_t value) {
     default: Serial.println("Error: Invalid Hand value. Use D, M, U"); break;
   }
 
+  // Styled. Hands get zero droop and zero posture on purpose: a drooping hand
+  // reads as a failed servo rather than as a mood.
   if (side == 'R') {
-    RHandDest = 90 + handOffset;
+    RHandDest = styleAngle(90 + handOffset, 90, 50, 150, 0, 0);
   } else {
-    LHandDest = 90 + handOffset;
+    LHandDest = styleAngle(90 + handOffset, 90, 30, 130, 0, 0);
   }
 }
 
@@ -578,22 +594,36 @@ void setShoulder(char side, uint8_t value) {
     default: Serial.println("Error: Invalid shoulder value. Use U, M, D"); break;
   }
 
+  // Styled. Left takes the negated weights: both sides sit at 90 +/- an offset,
+  // so a mood has to move them oppositely or the robot ends up lopsided.
   if (side == 'R') {
-    RShoulderDest = 90 + shoulderOffset;
+    RShoulderDest = styleAngle(90 + shoulderOffset, 140, 50, 170,
+                               DROOP_SHOULDER, POSTURE_SHOULDER);
   } else {
-    LShoulderDest = 90 + shoulderOffset;
+    LShoulderDest = styleAngle(90 + shoulderOffset, 40, 10, 130,
+                               -DROOP_SHOULDER, -POSTURE_SHOULDER);
   }
 }
 
 // ========================================== setNeck ========================================== //
 void setNeck(uint8_t Orientation) {
+  // Pick the unstyled target first, exactly as before, then style both sides.
+  // Written this way rather than styling inside each case so the pose table
+  // stays readable and there is only one place the styling can go wrong.
+  int rTarget = 82, lTarget = 103;
   switch (Orientation) {
-    case (D): RNeckDest = 70; LNeckDest = 110; break;
-    case (U): RNeckDest = 100; LNeckDest = 80; break;
-    case (R): RNeckDest = 75; LNeckDest = 85; break;
-    case (L): RNeckDest = 100; LNeckDest = 120; break;
-    case (M): RNeckDest = 82; LNeckDest = 103; break;
+    case (D): rTarget = 70;  lTarget = 110; break;
+    case (U): rTarget = 100; lTarget = 80;  break;
+    case (R): rTarget = 75;  lTarget = 85;  break;
+    case (L): rTarget = 100; lTarget = 120; break;
+    case (M): rTarget = 82;  lTarget = 103; break;
   }
+  // On a home pose the head comes back level: droop and posture together eat 12
+  // of the neck's 30 degrees, so it would park off-centre and stay there.
+  int dNeck = styleHomePose ? 0 : DROOP_NECK;
+  int pNeck = styleHomePose ? 0 : POSTURE_NECK;
+  RNeckDest = styleAngle(rTarget, 82, 70, 100, dNeck, pNeck);
+  LNeckDest = styleAngle(lTarget, 103, 80, 120, -dNeck, -pNeck);
 }
 
 // ========================================== setEyes ========================================== //
@@ -606,20 +636,27 @@ void setEyes(char side, uint8_t Position) {
   }
 
   if (side == 'R') {
-    RELidDest = 90 + eyeOffSet;
+    RELidDest = styleAngle(90 + eyeOffSet, 110, 90, 130,
+                           DROOP_EYELID, 0);
   } else {
-    LELidDest = 90 + eyeOffSet;
+    LELidDest = styleAngle(90 + eyeOffSet, 70, 50, 90,
+                           -DROOP_EYELID, 0);
   }
 }
 
 // ======================================== setEars ========================================//
 void setEars(uint8_t Position) {
+  // Ears carry the largest droop weight — on this build they are the
+  // highest-impact expressive channel, so a mood shows here first.
+  int target = EARS_MIDDLE;
   switch (Position) {
-    case (U): EarsDest = EARS_UP; break;
-    case (M): EarsDest = EARS_MIDDLE; break;
-    case (D): EarsDest = EARS_DOWN; break;
-    default: EarsDest = EARS_MIDDLE;
+    case (U): target = EARS_UP; break;
+    case (M): target = EARS_MIDDLE; break;
+    case (D): target = EARS_DOWN; break;
+    default:  target = EARS_MIDDLE;
   }
+  EarsDest = styleAngle(target, EARS_MIDDLE, EARS_DOWN, EARS_UP,
+                        DROOP_EARS, 0);
 }
 
 // ======================================== setBrows ========================================//
@@ -632,9 +669,9 @@ void setBrows(char side, uint8_t position) {
   }
 
   if (side == 'R') {
-    RBrowDest = 90 + BrowOffSet;
+    RBrowDest = styleAngle(90 + BrowOffSet, 120, 90, 150, DROOP_BROW, 0);
   } else {
-    LBrowDest = 90 + BrowOffSet;
+    LBrowDest = styleAngle(90 + BrowOffSet, 60, 30, 90, -DROOP_BROW, 0);
   }
 }
 
@@ -682,7 +719,16 @@ bool executeExpression(String expression) {
   int moveSetIndex = getIndex(expression);
   if (moveSetIndex == -1) return false;
 
-  if (millis() - timer > 900 || count == -1) {
+  // Home poses ('default', 'sleep') reach their position in full — amplitude
+  // would otherwise drag them back toward rest and half-undo them. Set every
+  // call rather than once, because this function is called repeatedly in a while
+  // loop and the return-to-default arrives through the same path.
+  styleBeginGesture(expression);
+
+  // Tempo divides the step interval — timing only, never an angle. Keeping that
+  // separation means a tempo bug can make the robot sluggish but can never make
+  // it reach somewhere new.
+  if (millis() - timer > styleStepMs(900) || count == -1) {
     count++;
     timer = millis();
     if (CommandToInstruction(moveSetIndex, count)) {

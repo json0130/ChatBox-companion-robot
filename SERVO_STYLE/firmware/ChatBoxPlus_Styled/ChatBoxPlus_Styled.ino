@@ -12,6 +12,10 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
+// Affective styling. The header carries the tuning constants and the prototypes,
+// so every .ino sees them regardless of the order the IDE concatenates them in.
+#include "StyleControl.h"
+
 // ==================== WiFi / TCP Config ==================== //
 // Uncomment ONE of the two blocks below depending on your network.
 
@@ -32,11 +36,7 @@
 
 #define TCP_PORT      8888
 
-// Static IP removed — DHCP reservation on Jetson (dnsmasq) guarantees
-// MAC bc:dd:c2:cc:a6:34 always gets 10.42.0.100. DHCP is more reliable
-// because it keeps ARP active; static IP on ESP32 causes ARP to go silent.
-
-WiFiServer tcpServer(TCP_PORT);
+WiFiServer server(TCP_PORT);
 WiFiClient tcpClient;
 
 // ==================== Constants ==================== //
@@ -99,18 +99,6 @@ enum RobotState { IDLE, LISTEN, EXECUTE, SLEEP };
 RobotState currentState = IDLE;
 String serialInput = "";
 unsigned long sleepTimer = 0;
-bool commandFromSerial = false;  // true when command arrived over USB serial, false for TCP
-
-// ==================== Response Helper ==================== //
-// Routes OK/ERR/DONE responses back to whichever transport sent the command.
-// Debug prints always go to Serial regardless.
-void sendResponse(String msg) {
-  if (commandFromSerial) {
-    Serial.println(msg);
-  } else if (tcpClient && tcpClient.connected()) {
-    tcpClient.println(msg);
-  }
-}
 
 // An expression name typed into the USB Serial Monitor, picked up by loop().
 // Set by updatePanTracking(), which routes non-numeric serial lines here so the
@@ -121,10 +109,14 @@ String pendingCommand = "";
 // ==================== Setup ==================== //
 void setup() {
   Serial.begin(115200);
-  delay(10);
+  Serial.println("ESP32 ChatBox System Starting...");
+  Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
 
-  panServoInit();  // face-tracking pan servo (D19)
+  setCpuFrequencyMhz(80);
+  servoInit();
+  panServoInit();
 
+  // ── WiFi ──────────────────────────────────────────────────
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   // Modem sleep is on by default and makes the ESP32 miss ARP requests between
@@ -133,47 +125,57 @@ void setup() {
   // is nothing to gain from sleeping.
   WiFi.setSleep(false);
 
-  Serial.printf("[+] Connecting to %s", WIFI_SSID);
+#ifdef USE_WPA2_ENTERPRISE
+  // WPA2-Enterprise (eduroam) — uses WiFi.begin() enterprise overload in ESP32 core 3.x
+  // No extra headers needed; WPA2_AUTH_PEAP is built into WiFi.h
+  WiFi.begin(WIFI_SSID, WPA2_AUTH_PEAP, EAP_IDENTITY, EAP_IDENTITY, EAP_PASSWORD);
+  Serial.print("[WiFi] Connecting (WPA2-Enterprise)");
+#else
+  // Normal WPA2-Personal
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("[WiFi] Connecting");
+#endif
 
   unsigned long wifiStart = millis();
   while (WiFi.status() != WL_CONNECTED) {
     if (millis() - wifiStart > 30000) {
-      Serial.println("\n[-] WiFi timeout — restarting in 5s");
-      delay(5000);
-      ESP.restart();
+      Serial.println("\n[WiFi] Timeout — check credentials or network");
+      break;
     }
     delay(500);
     Serial.print(".");
   }
-  Serial.println("\n[+] WiFi Connected: " + WiFi.localIP().toString());
+  if (WiFi.status() == WL_CONNECTED)
+    Serial.println("\n[WiFi] Connected: " + WiFi.localIP().toString());
+  else
+    Serial.println("[WiFi] Not connected — continuing without WiFi");
 
-  tcpServer.begin();
-  Serial.printf("[+] TCP Server started on port %d\n", TCP_PORT);
+  // ── mDNS — advertise as chatbox.local ────────────────────
+  if (MDNS.begin("chatbox"))
+    Serial.println("[mDNS] chatbox.local ready");
+  else
+    Serial.println("[mDNS] failed to start");
 
-  servoInit();
-  sleepTimer = millis();  // start sleep countdown from now, not from boot
+  // ── TCP server ────────────────────────────────────────────
+  server.begin();
+  Serial.println("[TCP] Listening on port " + String(TCP_PORT));
+
+  Serial.println("\nValid expressions:");
+  for (int i = 0; i < NUM_VALID_EXPRESSIONS; i++) {
+    Serial.print(validExpressions[i]);
+    if (i < NUM_VALID_EXPRESSIONS - 1) Serial.print(", ");
+  }
+
+  Serial.println("\nValid sequences:");
+  for (int i = 0; i < NUM_SEQUENCES; i++) {
+    Serial.print(sequenceNames[i]);
+    if (i < NUM_SEQUENCES - 1) Serial.print(", ");
+  }
+  Serial.println();
 }
 
 // ==================== Main Loop ==================== //
 void loop() {
-  // ── WiFi watchdog — reconnect if hotspot drops ──────────────────────────
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[WiFi] Lost — reconnecting...");
-    WiFi.reconnect();
-    unsigned long t = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - t < 15000) {
-      delay(500);
-      Serial.print(".");
-    }
-    if (WiFi.status() != WL_CONNECTED) {
-      Serial.println("\n[WiFi] Still down — restarting");
-      ESP.restart();
-    }
-    Serial.println("\n[WiFi] Reconnected: " + WiFi.localIP().toString());
-    tcpServer.begin();  // re-arm TCP server after reconnect
-  }
-
   // Face tracking runs every loop EXCEPT during EXECUTE (a gesture is playing).
   // EXECUTE blocks inside the switch below, so control only reaches here between
   // commands — panning is naturally paused while a gesture runs.
@@ -181,10 +183,9 @@ void loop() {
 
   // Accept a new TCP client whenever the previous one drops
   if (!tcpClient || !tcpClient.connected()) {
-    WiFiClient c = tcpServer.available();
+    WiFiClient c = server.available();
     if (c) {
       tcpClient = c;
-      sleepTimer = millis();  // reset sleep countdown when Jetson connects
       Serial.println("[TCP] Client connected from " + tcpClient.remoteIP().toString());
     }
   }
@@ -209,28 +210,16 @@ void loop() {
 
     case SLEEP:
       if (tcpClient && tcpClient.available()) {
-        commandFromSerial = false;
         currentState = LISTEN;
-        Serial.println("ChatBox: Waking up (TCP) -> LISTEN");
-      } else if (Serial.available()) {
-        commandFromSerial = true;
-        currentState = LISTEN;
-        Serial.println("ChatBox: Waking up (Serial) -> LISTEN");
+        Serial.println("ChatBox: Waking up -> LISTEN");
       }
       break;
 
     case IDLE:
       if (tcpClient && tcpClient.available()) {
-        commandFromSerial = false;
         currentState = LISTEN;
-        Serial.println("ChatBox: IDLE -> LISTEN (TCP)");
-      } else if (Serial.available()) {
-        commandFromSerial = true;
-        sleepTimer = millis();  // serial activity counts as "connected" for sleep timer
-        currentState = LISTEN;
-        Serial.println("ChatBox: IDLE -> LISTEN (Serial)");
-      } else if (!tcpClient.connected() && millis() - sleepTimer > 30000) {
-        // Only sleep when Jetson is not connected via either transport
+        Serial.println("ChatBox: IDLE -> LISTEN");
+      } else if (millis() - sleepTimer > 30000) {
         currentState = SLEEP;
         Serial.println("ChatBox: Going to sleep...");
         while (executeExpression("sleep"));
@@ -239,20 +228,27 @@ void loop() {
       break;
 
     case LISTEN:
-      if (commandFromSerial) {
-        serialInput = Serial.readStringUntil('\n');
-      } else {
-        serialInput = tcpClient.readStringUntil('\n');
-      }
+      serialInput = tcpClient.readStringUntil('\n');
       serialInput.trim();
-      Serial.println("DEBUG: Received [" + serialInput + "] via " + (commandFromSerial ? "Serial" : "TCP"));
+      Serial.println("DEBUG: Received [" + serialInput + "] Length:" + String(serialInput.length()));
+
+      // A style update is not a gesture: it changes how later gestures are
+      // performed and nothing moves now. Handled before the validity check so
+      // "STYLE ..." is never rejected as an unknown expression, and we drop
+      // straight back to IDLE rather than entering EXECUTE with nothing to play.
+      if (handleStyleCommand(serialInput)) {
+        tcpClient.println("OK:" + serialInput);
+        currentState = IDLE;
+        sleepTimer = millis();
+        break;
+      }
 
       if (checkValidity(serialInput) || checkSequenceValidity(serialInput)) {
-        sendResponse("OK:" + serialInput);
+        tcpClient.println("OK:" + serialInput);
         currentState = EXECUTE;
         Serial.println("ChatBox: Valid command -> EXECUTE");
       } else {
-        sendResponse("ERR:" + serialInput);
+        tcpClient.println("ERR:" + serialInput);
         Serial.println("ChatBox: Invalid command!");
         currentState = IDLE;
         sleepTimer = millis();
@@ -274,7 +270,7 @@ void loop() {
         while (executeExpression(serialInput));
       }
 
-      sendResponse("DONE:" + serialInput);
+      tcpClient.println("DONE:" + serialInput);
       Serial.printf("Free heap after: %d bytes\n", ESP.getFreeHeap());
       sleepTimer = millis();
       currentState = IDLE;

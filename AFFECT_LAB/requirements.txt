@@ -1,0 +1,6 @@
+opencv-python
+numpy
+# 8 emotion classes plus continuous valence/arousal (AffectNet-trained,
+# EfficientNet-B0). Pulls onnxruntime; weights download on first run.
+hsemotion-onnx
+onnxruntime

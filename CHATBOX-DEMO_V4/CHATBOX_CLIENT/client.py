@@ -266,7 +266,12 @@ class BasicClient:
         self.server_connection.register_handler("chat_response",   self._default_chat_handler)
         self.server_connection.register_handler("speech_response", self._default_speech_handler)
         self.server_connection.register_handler("emotion_update",  self._default_emotion_handler)
+        self.server_connection.register_handler("frame_result",    self._default_frame_result_handler)
         self.server_connection.register_handler("demo_step",       self._on_demo_step)
+
+        # Last (emotion, confidence) printed — frame_result arrives at send_fps,
+        # so only log when it actually changes to keep the terminal readable.
+        self._last_emotion_print = None
 
         self.input_modules:  Dict[str, InputModule]  = {}
         self.output_modules: Dict[str, OutputModule] = {}
@@ -290,6 +295,32 @@ class BasicClient:
 
     def _default_emotion_handler(self, data: dict):
         pass
+
+    def _default_frame_result_handler(self, data: dict):
+        """Print the server's emotion-recognition result for each camera frame.
+
+        Payload: {'result': {'emotion', 'confidence', 'status', 'distribution'}}.
+        Only logged when the emotion or confidence actually changes, since frames
+        arrive continuously at `send_fps`.
+        """
+        result = (data or {}).get("result", {})
+        if not result:
+            return
+
+        emotion = result.get("emotion", "unknown")
+        conf    = result.get("confidence", 0.0) or 0.0
+        status  = result.get("status", "")
+
+        # 'no_faces' means nobody is in frame — say so once, don't repeat.
+        key = (emotion, round(float(conf)), status == "no_faces")
+        if key == self._last_emotion_print:
+            return
+        self._last_emotion_print = key
+
+        if status == "no_faces":
+            logger.info("[Emotion] no face in frame")
+        else:
+            logger.info(f"[Emotion] {emotion} ({float(conf):.1f}%)")
 
     def _on_demo_step(self, data: dict):
         step_id  = data.get("step_id", "")
@@ -489,8 +520,25 @@ class BasicClient:
             if not self.start():
                 return
             logger.info("[Client] Running — press Ctrl+C to stop")
+
+            # Modules exposing tick() run as state machines driven from here
+            # (rather than their own threads), so they can be gated cleanly
+            # against speech/gestures. Idle at 1 Hz when there are none.
+            tickables = [m for m in list(self.input_modules.values()) +
+                         list(self.output_modules.values())
+                         if callable(getattr(m, "tick", None))]
+            interval = 0.03 if tickables else 1.0
+            if tickables:
+                logger.info(f"[Client] Ticking {len(tickables)} module(s) "
+                            f"at ~{1/interval:.0f} Hz")
+
             while self.running:
-                time.sleep(1)
+                for module in tickables:
+                    try:
+                        module.tick()
+                    except Exception as e:
+                        logger.error(f"[Modules] tick '{module.name}' error: {e}")
+                time.sleep(interval)
         except KeyboardInterrupt:
             logger.info("[Client] Ctrl+C received")
         except Exception as e:

@@ -67,11 +67,19 @@ class ChatBoxServer:
 
     def _find_model_path(self) -> str:
         """Find the emotion recognition model file"""
+        model_file = 'efficientnet_HQRAF_improved_withCon.pth'
+        # Prefer the local ``model/`` folder next to this script, then fall back
+        # to the older ``models/`` locations for compatibility.
+        here = os.path.dirname(os.path.abspath(__file__))
         possible_paths = [
-            '../models/efficientnet_HQRAF_improved_withCon.pth',
-            './models/efficientnet_HQRAF_improved_withCon.pth',
-            '../../models/efficientnet_HQRAF_improved_withCon.pth',
-            'models/efficientnet_HQRAF_improved_withCon.pth',
+            os.path.join(here, 'model', model_file),
+            os.path.join('model', model_file),
+            os.path.join('.', 'model', model_file),
+            os.path.join('..', 'model', model_file),
+            os.path.join('models', model_file),
+            os.path.join('..', 'models', model_file),
+            os.path.join('.', 'models', model_file),
+            os.path.join('..', '..', 'models', model_file),
         ]
         
         for path in possible_paths:
@@ -383,11 +391,21 @@ class ChatBoxServer:
             
             # Process emotion detection
             emotion, confidence, status = self.emotion_processor.process_emotion_detection_realtime(frame)
-            
+
             # Update state
             self.latest_emotion = emotion
             self.latest_confidence = confidence
             self.last_update_time = time.time()
+
+            # Frame heartbeat — the detector itself is silent when no face is
+            # found, so without this you can't tell "no frames arriving" from
+            # "frames arriving but nobody in view". First frame, then every 5s.
+            self._frame_count = getattr(self, '_frame_count', 0) + 1
+            if self._frame_count == 1 or (self.last_update_time -
+                                          getattr(self, '_last_frame_log', 0)) >= 5.0:
+                self._last_frame_log = self.last_update_time
+                print(f"📷 Frames received: {self._frame_count} | "
+                      f"status={status} | emotion={emotion} ({confidence:.1f}%)")
             
             result = {
                 'emotion': emotion,

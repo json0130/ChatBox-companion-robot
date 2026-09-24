@@ -1,3 +1,4 @@
+# Secrets / large model weights
 *.env
 *.pth
 
@@ -8,6 +9,8 @@ __pycache__/
 
 # Local backups / snapshots
 *.bak
+*.py[cod]
+*$py.class
 
 # Runtime data (per-user RAG indexes, transcript DB, KG snapshots)
 rag_indexes/
@@ -20,3 +23,6 @@ faces.npz
 # Culture selector runtime sidecars (written by the loop/viz, not source)
 active_state.json
 culture_override.json
+kg_state*.bak
+# graphify
+graphify-out/

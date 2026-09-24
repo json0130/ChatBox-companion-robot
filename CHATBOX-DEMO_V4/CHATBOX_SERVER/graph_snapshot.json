@@ -1,0 +1,170 @@
+{
+  "nodes": [
+    {
+      "id": "alice",
+      "display_name": null,
+      "created_at": "2026-06-19T00:02:47.103695Z",
+      "node_type": "person"
+    },
+    {
+      "id": "chatbox",
+      "name": "chatbox",
+      "embodiment": "CAT",
+      "persona_traits": {},
+      "capabilities": [],
+      "node_type": "robot"
+    },
+    {
+      "id": "bob",
+      "display_name": null,
+      "created_at": "2026-06-19T00:02:47.103917Z",
+      "node_type": "person"
+    },
+    {
+      "id": "casey",
+      "display_name": null,
+      "created_at": "2026-06-19T00:02:47.104040Z",
+      "node_type": "person"
+    }
+  ],
+  "edges": [
+    {
+      "id": "154baab6-9c33-457b-ad0a-f07cc9532c66",
+      "source_id": "alice",
+      "target_id": "alice",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-06-19T00:02:47.103988Z",
+        "confidence": 1.0
+      },
+      "edge_type": "mood",
+      "value": 0.7049711582922635,
+      "timescale": "FAST"
+    },
+    {
+      "id": "200c8ec3-c44b-4017-aae4-b7f6c689a217",
+      "source_id": "alice",
+      "target_id": "alice",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-06-19T00:02:47.103988Z",
+        "confidence": 1.0
+      },
+      "edge_type": "attention",
+      "value": 0.7184344429582266,
+      "timescale": "FAST"
+    },
+    {
+      "id": "ac7752b3-af59-4ce3-a995-fe9d3f82ee1e",
+      "source_id": "chatbox",
+      "target_id": "alice",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-06-19T00:02:47.103988Z",
+        "confidence": 1.0
+      },
+      "edge_type": "interaction_count",
+      "count": 7
+    },
+    {
+      "id": "9f369f65-7956-439f-8060-b374e1d5005b",
+      "source_id": "bob",
+      "target_id": "bob",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-06-19T00:02:47.104015Z",
+        "confidence": 1.0
+      },
+      "edge_type": "mood",
+      "value": 0.706605417559714,
+      "timescale": "FAST"
+    },
+    {
+      "id": "c36c80ee-f6b9-4e45-8fed-0e96738fcb07",
+      "source_id": "bob",
+      "target_id": "bob",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-06-19T00:02:47.104015Z",
+        "confidence": 1.0
+      },
+      "edge_type": "attention",
+      "value": 0.7154292765144926,
+      "timescale": "FAST"
+    },
+    {
+      "id": "6bc8a581-8f16-4ce7-9f51-6af0cd3edab3",
+      "source_id": "chatbox",
+      "target_id": "bob",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-06-19T00:02:47.104015Z",
+        "confidence": 1.0
+      },
+      "edge_type": "interaction_count",
+      "count": 3
+    },
+    {
+      "id": "06b71dc9-5dcf-44d9-b2fa-0c46f2bd7b48",
+      "source_id": "chatbox",
+      "target_id": "alice",
+      "provenance": {
+        "source": "harness:seed",
+        "timestamp": "2026-06-19T00:02:47.103965Z",
+        "confidence": 1.0
+      },
+      "edge_type": "rapport",
+      "weight": 0.75
+    },
+    {
+      "id": "c57425b6-7314-4570-8545-9c822e5f334e",
+      "source_id": "chatbox",
+      "target_id": "alice",
+      "provenance": {
+        "source": "harness:seed",
+        "timestamp": "2026-06-19T00:02:47.103965Z",
+        "confidence": 1.0
+      },
+      "edge_type": "trust",
+      "weight": 0.75
+    },
+    {
+      "id": "a15c8791-3d32-4831-8e01-0b1e3d7d71ca",
+      "source_id": "casey",
+      "target_id": "casey",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-06-19T00:02:47.104041Z",
+        "confidence": 1.0
+      },
+      "edge_type": "mood",
+      "value": 0.7088636286158708,
+      "timescale": "FAST"
+    },
+    {
+      "id": "55acd665-87ef-4009-8abc-68fb42f1b975",
+      "source_id": "casey",
+      "target_id": "casey",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-06-19T00:02:47.104041Z",
+        "confidence": 1.0
+      },
+      "edge_type": "attention",
+      "value": 0.7128748850373188,
+      "timescale": "FAST"
+    },
+    {
+      "id": "c7314dfa-8d33-481d-9152-3414f4a12aa9",
+      "source_id": "chatbox",
+      "target_id": "casey",
+      "provenance": {
+        "source": "chatbox",
+        "timestamp": "2026-06-19T00:02:47.104041Z",
+        "confidence": 1.0
+      },
+      "edge_type": "interaction_count",
+      "count": 1
+    }
+  ]
+}

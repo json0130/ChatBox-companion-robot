@@ -1,0 +1,499 @@
+# Progress Log
+
+Running record of what was **tried**, what **worked**, and what **didn't work / was fixed** — one entry
+per commit, newest first. Companion to `RND_KG_Companion_System.md` (the design report). Kept so the
+research write-up can reference which approaches were attempted and why.
+
+---
+
+## merge: main into KG-knowledge-extraction  *(branch `KG-knowledge-extraction`)*
+**Date:** 2026-09-24
+
+### What was tried
+Branch restructure: `KG-knowledge-extraction` now hangs off `main` (V4 demo + chatboxv1-3 + face
+tracking). Merged `main` in; 6 real conflicts (the rest were stale `__pycache__`/RAG-index files that
+`main` untracked — dropped).
+
+- **robot.py / ESP32 sketch / interactive_test.py / llm_processor.py:** this branch never changed them
+  (inherited from `sign-language-demo`), so they take the same resolution as the sign-language-demo
+  merge, except pepeha stays **off unless `--pepeha`** (main's behaviour; the demo branch defaults it on).
+- **emotion_processor.py:** kept this branch's explicit `device=` argument, and fall back to main's
+  `_pick_device()` CUDA probe instead of a bare `cuda.is_available()` check.
+- **PROGRESS.md:** both sides had created this file; merged main's entries (tagged `branch main`) above
+  this branch's.
+- **Worked:** touched Python compiles. **Not verified:** not run end to end.
+
+---
+
+## 381a4cf — merge: face-tracking into main  *(branch `main`)*
+**Date:** 2026-09-24
+**Area:** repo structure (branch cleanup)
+
+### What was tried
+Restructure branches so `main` = V4 demo + `chatboxv1-3/` + face tracking, with
+`sign-language-demo`, `KG-knowledge-extraction` and `feature/pad-affect-core` hanging off it.
+First step: merge the `face-tracking` branch (16 commits) into `main`.
+
+- **Worked:** clean merge, no conflicts. Adds `AFFECT_LAB/`, `SERVO_STYLE/`, V4 face-tracking
+  OutputModules + ESP32 pan-servo changes; `robot.py` auto-merged and compiles.
+- **Didn't work / open:** nothing tested on hardware yet; the other branches still need `main`
+  merged into them.
+
+---
+
+## f02ca18 — fix(server): stop LLM emotion tags collapsing to one tag  *(branch `main`)*
+**Date:** 2026-08-18
+**Area:** `Modules/llm_processor.py` (emotion tag selection for the Ollama/`qwen:4b` reply path)
+
+### Problem observed
+Live logs showed the server emitting `[DEFAULT]` on **every** reply, across both English
+and Korean STT input, despite the client registering
+`['[DEFAULT]', '[WAVE]', '[HAPPY]', '[SAD]', '[CONFUSED]', '[GREETING]']`.
+Replies whose content was plainly sad, confused, or a self-introduction were all tagged
+`[DEFAULT]`.
+
+### What was tried
+
+**Attempt 1 — fix the prompt's few-shot examples.**
+Root cause found: `_get_allowed_tags_info()` returned `config_tags[0]` as `example_tag`, and
+`[DEFAULT]` is first in every client config. All three "PERFECT RESPONSE" examples therefore
+rendered as `[DEFAULT] ...`. Two of them demonstrated `[DEFAULT]` on exactly the sentences
+`[CONFUSED]` and `[SAD]` exist for. Separately, the hard-coded negative example read
+`[HAPPY] I feel great! (Error: Tag is not in the allowed list)` — but `[HAPPY]` *was* in the
+allowed list, explicitly telling the model to avoid one of its own valid tags.
+
+Changes: added a per-tag "when to use this" menu (`TAG_MEANINGS` / `_build_tag_menu`),
+varied examples generated from the client's actual tags (`_build_examples`), and a
+dynamically-chosen genuinely-forbidden tag for the negative example
+(`_pick_forbidden_example`). Also stopped storing the tag in conversation history, since
+7 turns of `[DEFAULT] ...` were priming the model to repeat it.
+
+- **Worked:** the contradiction is gone; examples now demonstrate 4–5 distinct tags.
+- **Didn't work:** output stayed `[DEFAULT]`-only in the next log sample. Likely the server
+  had not been restarted (module is loaded at process start), but not confirmed.
+
+**Attempt 2 — remove `[DEFAULT]` from the model's choices entirely.**
+`_expressive_tags()` stripped `[DEFAULT]` from the prompt, and a model-emitted `[DEFAULT]`
+was treated as "no choice made" and re-inferred from the reply text via keyword cues.
+
+- **Worked:** replayed against real logged replies, produced `[GREETING]`, `[SAD]`,
+  `[CONFUSED]`, `[HAPPY]`, `[WAVE]` correctly.
+- **Reverted:** by request — `[HAPPY]` removed instead, `[DEFAULT]` restored as a valid
+  selectable tag and as the final inference fallback. `[HAPPY]` is now excluded server-side
+  via `EXCLUDED_TAGS` rather than editing the Jetson's `client_config.json`.
+
+**Attempt 3 — fix the resulting `[WAVE]` lock-in.**
+After restart, every reply came back `[WAVE]`. Two independent causes:
+1. The `WAVE` keyword cue was `\b(hi|hey|hello|bye|...)\b` with **no anchor**, matching
+   anywhere in the reply — and nearly every ChatBox reply contains "Hi" or "hello".
+   `GREETING` was checked first but its pattern covered `"hello there"` and not `"Hi there"`,
+   so replies fell through to `WAVE`.
+2. Nothing prevented the robot greeting on *every* turn — `[WAVE]`/`[GREETING]` were
+   permanently on the menu, so turn 12 could open with "Hi again!".
+
+Changes: greeting cues anchored to the start of the reply (`^\W*`); `[WAVE]`/`[GREETING]`
+gated behind `allow_greeting`, true only on the opening turn or when the child's own message
+contains a greeting (EN + KO: `안녕`, `반가`, `잘가`), evaluated with the RAG context block
+stripped so retrieved past "hello"s don't re-open the gate every turn. The gate applies to
+the prompt as well as the sanitizer, so the model stops *writing* "Hi again!" rather than
+just having its tag overridden.
+
+- **Worked:** replaying the logged conversation gives `[WAVE]` → `[DEFAULT]` → `[WAVE]`
+  (turn 3 correct: the child said "good afternoon"), with follow-ups reaching `[SAD]` and
+  `[CONFUSED]`.
+
+### Diagnostics added
+The debug line printed the *sanitized* output, so a model-chosen tag and a server-inferred
+tag were indistinguishable — this is why the first two attempts were hard to evaluate. It now
+prints `tag=... from=model|server (model said X) greeting_allowed=...`.
+
+### Open / not addressed
+- **`qwen:4b` is small for reliable tag adherence.** The prompt no longer fights the model,
+  but if `from=server` appears on most lines after restart, model size is the remaining
+  constraint, not the prompt.
+- **RAG context is prepended into the *user* message** (`chatbox_server.py:281`), so the model
+  sees a wall of retrieved context before the actual sentence, biasing toward flat summarising
+  replies. Moving it into the system prompt would likely sharpen the emotional read. Untested.
+- **Keyword inference is a backstop, not the mechanism.** If it fires on most turns the tag
+  distribution will look artificially narrow.
+- The older duplicate at `chatboxv1-3/version3(chatbox_ai_agent)/v4.2.0/Modules/llm_processor.py`
+  still has the original prompt bugs and no sanitizer at all. Left untouched.
+
+---
+
+## refactor: prune dead code + share consolidation core (compact/modular)  *(branch `KG-knowledge-extraction`)*
+
+**Goal:** review the branch and remove unnecessary/redundant code. Net −109 lines, no behaviour change.
+**Removed (dead):**
+- `_mood_phrase`, `_MOOD_WEIGHT`, and the `mood`/`emotion` params of `_build_system_prompt` (+ the
+  `cur_mood`/`cur_emotion` locals) — dead since mood was dropped from the prompt.
+- `CurrentTopicEdge` (schema class + union member + store classification + viz timescale map + comments) —
+  superseded by `ConversationNode`; 0 such edges in any persisted graph, so removal is backward-compatible.
+- `SessionStore.person_turns` (never called); an unused `_dump_kg` import.
+**Refactored (modular):** the three consolidation functions (`consolidate_topics`, `consolidate_interests`,
+`link_related_topics`) shared ~120 lines of near-identical embed + pairwise-cosine + union-find loops. Pulled
+out `_embed`, `_pairs`, `_merge_by_similarity`, `_same_category` helpers; the public functions are now thin
+wrappers (kg_extraction.py −143 lines).
+**Verified:** all modules compile; real `kg_state.json` loads (40 nodes / 44 edges, incl. related_topic);
+merge/related behaviour identical on a controlled synthetic case (near-dups merge, related link, unrelated
+skip); prompt has no mood line but keeps common-ground + related interests; real-LLM reply still recalls
+memory ("R&B and jazz … SZA and Kendrick Lamar").
+
+---
+
+## feat: use topic↔topic relations in retrieval + common ground (2c points 1&2)  *(branch `KG-knowledge-extraction`)*
+
+**Goal:** actually *use* the `related_topic` edges (they were structure-only). Wired points 1 (retrieval /
+recall) and 2 (common ground); left 3–5 (recommendations / transitions / cold-start) for later.
+**Implemented (pure helpers in topics.py):**
+- `topic_related(topic_id)` — one-hop related topics.
+- `related_common_ground(person, robot)` → `{direct, bridges}`: a bridge = a person topic `related_topic`-
+  linked to a robot capability topic (indirect common ground, e.g. their *multiplication* ~ your *math
+  problems*).
+- `person_related_pairs(person)` — related pairs among the person's own topics (rap ~ hiphop).
+**Prompt (`_person_memory`):**
+- Point 2: "Common ground" now adds bridges — "You can also connect via related topics: their multiplication
+  ~ your math problems".
+- Point 1: note-gathering expands one hop across `related_topic`, so related memories surface; plus a
+  "Related interests: hiphop ~ rap" line so the robot can bridge/recall across them.
+**Verified (real LLM):** "do we have anything in common?" → "We both enjoy jazz and math problems…" (the
+math-problems bridge now surfaces); "i love rap, can we talk about it?" → engages naturally. Pure modules
+stay LLM-free.
+**Deferred:** 2c points 3–5 (recommendations, smoother transitions, cold-start generalization); rapport/trust.
+
+---
+
+## feat: topic↔topic relations (Feature-2c) — link related-but-distinct topics  *(branch `KG-knowledge-extraction`)*
+
+**User observation:** "rap" and "hiphop" didn't merge. **Finding:** cos(rap,hiphop)=0.678 — below the 0.86
+merge floor, and there's NO safe merge threshold (tennis/basketball=0.654, dogs/cats=0.639 sit right below
+rap/hiphop). **User's call:** don't merge them — **link** them instead (they're distinct but related).
+**Implemented Feature-2c:**
+- schema: `RelatedTopicEdge` (topic↔topic, SLOW, `weight`=similarity; conceptually undirected, stored with
+  sorted endpoints).
+- pure `topics.link_related_topic(a, b, weight)` — idempotent, only between topic nodes.
+- app `kg_extraction.link_related_topics(store, embed_fn, related_floor=0.60, merge_floor=0.86,
+  same_category_only=True)` — links same-category pairs whose cosine is in the "related" band
+  [0.60, 0.86) (related but not near-duplicate). Embedding-only (no LLM), non-destructive.
+- runs in `_auto_consolidate` (every extraction) and `--mode consolidate`; viz maps `related_topic` → SLOW.
+- **merge stays for ≥0.86 only** (near-identical labels); the earlier gray-zone LLM-merge idea was dropped
+  in favour of links.
+**Verified + applied on real data:** links `hiphop ~ rap (0.678)` and `multiplication ~ math problems
+(0.642)` — 2 clean links, no noise; new edge round-trips save/load.
+**Note:** related links are non-destructive (both nodes kept), so a looser band is safe; lower
+`related_floor` if you want more relations (e.g. jazz~r&b at 0.55).
+
+---
+
+## fix: consolidate every extraction + stop qwen Chinese/ChatML leak  *(branch `KG-knowledge-extraction`)*
+
+**Two requests from a live run:**
+1. Run consolidation **every extraction session** (was every 3 conversations).
+2. A reply came out in **Chinese** and leaked ChatML tokens + a fake user turn
+   (`…你在想什么新专辑？[CURIOUS]\n<|im_start|><|im_start|>user\nI don't really like it…`).
+**Fixes:**
+- `_maybe_auto_consolidate` (every-3 gate) → `_auto_consolidate`: runs topic + interest consolidation after
+  **every** `_extract_session`. Dropped `_CONSOLIDATE_EVERY`.
+- `LLMClient.respond`: added `stop=["<|im_start|>","<|im_end|>","\nuser",…]`, temperature 0.8→0.7, and a
+  `_clean_reply()` that truncates at any leaked ChatML / next-turn marker. Prompt: "Reply in ENGLISH … output
+  ONLY your single reply — never write the user's next turn."
+**Verified:** `_clean_reply` cuts the exact leaked fake-turn; real-LLM replies now English + no leak, and
+still use memory ("SZA's 'Open Arms'", previous-album preference).
+**Note:** the qwen mid-sentence language switch is a model quirk — the stop tokens + English instruction +
+lower temp make it far less likely, and the trailing fake-turn leak is always trimmed.
+
+---
+
+## feat: consolidation also merges near-duplicate INTERESTS  *(branch `KG-knowledge-extraction`)*
+
+**User report:** two nodes "sports" and "sport" never merged despite auto-consolidate running every 3
+conversations.
+**Root cause:** they're **Interest** nodes, not Topics — `interest:jay:sports` (old LLM-chosen label) vs
+`interest:jay:sport` (new: topics wire under an interest named after their category, and the enum value is
+"sport"). Consolidation only merged *topics*, so the interest-level dup was never touched.
+**Fix:** extend consolidation to interests.
+- Pure `topics.merge_interests(canonical, duplicate)`: redirect has_interest (person→) and about (→topic)
+  edges onto the canonical, delete the duplicate.
+- App `kg_extraction.consolidate_interests(store, embed_fn, floor, dry_run)`: per person, embed interest
+  labels, merge cosine ≥ floor groups (canonical = highest degree → shortest → lexicographic).
+- webcam runs BOTH topic + interest consolidation everywhere (auto every 3 convos, `C` preview,
+  `--mode consolidate`).
+**Verified:** "sports"↔"sport" cosine **0.957 ≥ 0.86**; applied on real data → one "sport" interest holding
+both tennis + football_player; unit test of merge_interests redirects edges and deletes the dup.
+**Known limitation (deferred):** interests whose *labels* differ but mean the same (old "math" interest vs
+the new "science" interest that now holds math topics) won't merge by label similarity — that's the old
+LLM-label vs category-name scheme mismatch, a separate normalization task.
+
+---
+
+## fix: thread-safe session DB + drop mood from the prompt entirely  *(branch `KG-knowledge-extraction`)*
+
+**Two issues from a live run:**
+1. **Viz `/history` crashed** — `ThreadingHTTPServer` touched the one `sqlite3` connection from multiple
+   threads ("SQLite objects created in a thread can only be used in that same thread").
+2. **Replies were unnatural** — even down-weighted, the mood made the robot say two contradictory things in
+   one reply (e.g. "Messi is amazing! [CONCERNED] It's okay to feel sad sometimes."). User asked to stop
+   injecting mood/emotion into the prompt for now.
+**Fixes:**
+- `SessionStore`: open with `check_same_thread=False` + guard every DB op with a `threading.RLock` — verified
+  6 threads × concurrent reads, no errors.
+- Prompt: **remove the mood line and the per-turn emotion tag** from the LLM prompt entirely. Mood/emotion is
+  still written to the graph/conversation node (viz unaffected). HOW-TO-REPLY simplified to "reply to what
+  they said; don't comment on feelings or offer support unless they raise it." `_mood_phrase`/`_MOOD_WEIGHT`
+  kept (unused) for easy re-enable later.
+**Verified (real LLM):** "fav football player" → "Lionel Messi"; "what do you think about him?" → a natural
+football answer — no emotional-support bolt-ons, no contradictions.
+**Deferred:** improving the emotion model / re-introducing mood with better weighting; 2c; rapport/trust.
+
+---
+
+## fix: down-weight mood/emotion by a quarter (content over emotional support)  *(branch `KG-knowledge-extraction`)*
+
+**Problem (user report):** even after the last fix the robot still led with emotional support and deflected
+questions ("who is my fav sports player" → "I noticed you're feeling down…"), because the emotion detector
+kept reading the user as sad and the prompt over-weighted it.
+**Fix (reduce mood/emotion weight ~25%, per request):**
+- `_MOOD_WEIGHT = 0.75`: the mood valence used in the prompt is damped ×0.75, so mild negatives fall under
+  the ±0.15 threshold and read as "neutral".
+- Mood line reframed from a directive ("Right now they seem low 🙁") to a weak, explicitly-unreliable
+  background hint; the per-turn emotion tag likewise softened to "(weak camera hint: …)".
+- HOW TO REPLY: "CONTENT FIRST — reply to what they said; mood is a faint hint, usually IGNORE it; don't
+  open with or redirect to feelings, and don't offer emotional support unless they raise their feelings."
+**Verified (real LLM, negative mood + Sadness):** "fav colour?" → honest "I don't remember" (on-topic);
+"you should answer my questions" → "Of course, what's on your mind?"; "do you like jazz?" → jazz answer;
+"fav sports player" → answers "Lionel Messi" (brief mood aside remains — expected at a quarter reduction,
+no longer a deflection).
+**Didn't / deferred:** fixing the upstream emotion detector reading neutral faces as sad; 2c; rapport/trust.
+
+---
+
+## fix: memory actually gets used in replies (retrieval + prompt tuning)  *(branch `KG-knowledge-extraction`)*
+
+**Problem (user report):** the robot didn't use past info — asked "who's my favourite tennis player?" it
+said "I'm fuzzy"; and it deflected every message into "you seem sad, let's listen to music". Data was all
+present (69 embedded turns; notes with "Rafael Nadal", "SZA 'Open Arms'").
+**Root causes found (by rebuilding the real prompt):** (a) the mood rule *"if they seem low, be gentle and
+reassuring"* + a stuck-negative mood made the robot **console instead of answer**; (b) the notes cap (3, one
+per topic, recency-sorted) **hid the specific facts** behind generic notes; (c) RAG on a meta-question
+("do you remember X") retrieved other **questions**, and the block showed the robot's past replies (which
+included "I don't have the name") — reinforcing forgetting.
+**Fixes:**
+- Prompt HOW-TO-REPLY: answer the actual question directly from memory and **state the name**; if it's NOT
+  in memory, say so — **never invent a name**; only *note* mood, don't dwell/redirect.
+- `_person_memory`: surface **specific** notes first (proper nouns / quoted titles score higher), then
+  recency; caps raised to 8 notes / 2-per-topic. So "Rafael Nadal" and "SZA 'Open Arms'" lead.
+- RAG block shows only **the person's own words** (not the robot's past replies), top_k 3→5.
+**Verified with the REAL LLM + data:** "favourite tennis player?" → *Rafael Nadal*; "favourite r&b artist?"
+→ *SZA*; "favourite colour?" (unknown) → *"I don't remember"* (no hallucination, no deflection).
+
+---
+
+## feat: RAG over transcripts + topic-click history (Phase 2)  *(branch `KG-knowledge-extraction`)*
+
+**Tried:** use the SQLite transcripts for (a) RAG retrieval into the live prompt and (b) a viz "click a topic
+→ see the conversation history", per the approved plan.
+**Worked:**
+- `modules/session_rag.py` (`SessionRAG`): embeds each turn once (cached in the store's `embedding` column),
+  searches with FAISS `IndexFlatIP` (numpy fallback), blends similarity with **recency** and returns hits in
+  **timeline order**. Lazy `reindex()`; embedding failures skipped/retried. embed_fn injected — no Ollama
+  import inside the module beyond numpy/faiss.
+- SessionStore gained `turns_needing_embedding / set_embedding / embedded_turns`.
+- webcam: builds `SessionRAG` when embeddings are on, `reindex()`es at startup, and injects the top-3
+  relevant past turns for the current message into a new prompt block "Relevant things they've said before"
+  (timeline-dated).
+- viz server: `HistoryProvider` + `/history?topic=&person=` endpoint (RAG when an embed model is reachable,
+  else keyword `turns_for_topic`); `--sessions-db` / `--embed-model` args. Frontend: clicking a Topic node
+  fetches `/history` and renders the conversation turns (child/robot bubbles + timeline).
+**Verified (headless, fake embeddings):** RAG search returns the right turns; prompt gains the RAG block;
+keyword history works; FAISS present (1.13.2); HTML well-formed; graph_relationship pure modules import no
+session/LLM code.
+**Note:** the 62 migrated turns have no embeddings/topic-tags yet, so topic-click history needs one RAG run
+with Ollama up (webcam startup reindex, or the viz server with `--embed-model`) before it populates.
+**Didn't / deferred:** 2c topic↔topic relations; rapport/trust; removing the now-unused "Session" legend row.
+
+---
+
+## feat: externalize session transcripts to SQLite (Phase 1)  *(branch `KG-knowledge-extraction`)*
+
+**Tried:** move conversation transcripts OUT of the knowledge graph into a dedicated SQLite store so the KG
+focuses on relationships/topics/interests and the viz is no longer cluttered with per-session nodes
+(user approved: SQLite backend; sessions removed from graph; topic-click history via RAG comes in Phase 2).
+**Worked:**
+- New app-layer `modules/session_store.py` (pure stdlib sqlite3, no graph/LLM/PAD imports): one row per turn
+  (session_id, person, robot, turn_idx, ts, emotion, child, reply, topics, embedding-reserved, extracted);
+  `append_turn / unextracted_turns / mark_extracted / person_turn_count / session_count / turns_for_topic`.
+- Pure `interactions.set_interaction_count()` so the Interaction node's count comes from the transcript DB
+  instead of graph SessionNodes.
+- webcam rewired: chat turns write to SQLite (not the graph); no more SessionNode/`start_session`/graph
+  `append_turn`; `_extract_session` reads un-extracted turns from SQLite and `mark_extracted`s them; auto-
+  consolidate cadence counts `session_store.session_count()`. `_ensure_interaction` + a per-run uuid session id
+  replace the old `_ensure_session`.
+- `--mode migrate-sessions`: moved the real graph's **17 sessions / 62 turns** into `sessions.db` and removed
+  all SessionNodes; graph node types now: person/robot/interaction/topic/interest/conversation/persona/role/
+  capability. Migrated turns are marked extracted; interaction_count preserved.
+**Verified (headless, fake LLM):** store ops; extraction reads SQLite + adds typed topic + Δrapport; zero
+session nodes created in the graph; re-extract idempotent; tier unaffected; migration moves turns + strips
+nodes + preserves counts.
+**Didn't / deferred (Phase 2):** FAISS RAG retrieval into the prompt; topic-node click → conversation history
+in the viz; removing the now-unused "Session" legend row. Rapport/trust still parked.
+
+---
+
+## fix(kg): category enum coercion + viz spread-out force defaults  *(branch `KG-knowledge-extraction`)*
+
+**Tried:** (1) retype the 15 pre-existing `other` topics; (2) make the graph self-spread so no manual
+dragging is needed.
+**Worked:**
+- **Bug found + fixed:** `resolve_topic`/`merge_topics` upgraded category via `model_copy(update=...)`, which
+  in Pydantic v2 does NOT re-validate — so the category was left as a plain `str` in memory (only fixed itself
+  after a save/load). Now coerced to `TopicCategory(...)` explicitly. Verified in-memory type is the enum.
+- Retyped all 15 existing topics (data op on `kg_state.json`, backup `.pre-retype.bak`): science
+  (math/space/mars), music (jazz/r&b/hiphop/favorite songs), sport (tennis), food (baking/pasta),
+  activity (hiking/camping), place (landscapes), animals (dogs). None left `other`.
+- Viz force defaults tuned to spread out: charge −320→−700 (distanceMax 600), link length 90→130, link
+  force 0.4→0.35, collide 28→34, centre-gravity 0→0.04. Sliders + FORCE_DEFAULTS updated to match.
+**Didn't / deferred:** LLM-based retyping (used a deterministic map for the known set); 2c; rapport/trust.
+
+---
+
+## feat: auto-consolidate every 3 conversations + Feature-2d category colours  *(branch `KG-knowledge-extraction`)*
+
+**Tried:** (1) auto-run topic consolidation every 3 conversations at end-of-session; (2) Feature-2d — colour
+topic nodes in the viz by their category.
+**Worked:**
+- `_maybe_auto_consolidate()` runs inside `_extract_session` after extraction: counts total SessionNodes in
+  the graph (persists across runs) and, when `count % 3 == 0`, applies `consolidate_topics` (merges). Verified
+  it fires only at 3, 6, … and is a no-op without embeddings. **Design change (user-approved):** consolidation
+  is no longer strictly manual — it auto-applies every 3rd conversation; the standalone `--mode consolidate`
+  and `C` preview still exist.
+- 2d: viz server now emits `category` on topic nodes; `index.html` tints each Topic diamond by a 10-colour
+  category palette (`CATEGORY_COLOR`) and adds a "Topic category → fill" legend. Live-updates when a topic's
+  category changes. HTML well-formed; transform emits category (existing topics show `other` until re-typed).
+**Note:** old topics created before Feature-1 are all `category=other` (grey) until a new extraction types
+them — expected.
+**Didn't / deferred:** 2c topic↔topic relations; rapport/trust (still parked).
+
+---
+
+## feat(kg): Feature-2 semantic topic consolidation (2a + 2b)  *(branch `KG-knowledge-extraction`)*
+
+**Tried:** merge near-duplicate topics that exact-label reuse can't catch ("hiphop"/"hip hop",
+"football"/"soccer"). **2a (pure, graph_relationship):** `merge_topics(canonical, duplicate)` — redirect all
+incident edges onto the canonical, union notes (+ `merged_from` marker), upgrade category only if canonical
+was `other`, delete the duplicate; plus `topic_degree()` and a new pure `store.delete_node()`.
+**2b (app layer, kg_extraction):** `consolidate_topics(store, embed_fn, floor=0.86, same_category_only=True,
+dry_run=False)` — embed each label, pair by cosine ≥ floor, union-find groups, canonical = highest degree
+(tie → shortest, then lexicographic), call the pure merge. Triggers: standalone `--mode consolidate`
+(+`--dry-run`, `--merge-floor`) and an in-window `C` hotkey (dry-run preview only). **Approved scope: 2a+2b
+only** — topic↔topic relations (2c) and category viz grouping (2d) deferred.
+**Worked (verified, fake embed_fn):** dry-run proposes merges and writes nothing; apply merges the two
+near-dup pairs, keeps distinct "jazz", 5→3 topics; canonical picks the shorter label; notes unioned with
+`merged_from`; **idempotent** re-run (no further merges); **cross-category never merges** even at high
+similarity; save/load round-trips; `graph_relationship/` stays free of LLM/PAD/app imports.
+**Decisions:** hard-merge (redirect + delete) not alias; consolidation is **manual/reviewable**, never
+auto-run during live extraction; merge floor 0.86 (stricter than the 0.62 capability floor); `C` is
+preview-only (apply via `--mode consolidate`).
+**Didn't / deferred:** topic↔topic relations, clustering, category-based viz grouping (revisit after this),
+and any change to rapport/trust (still deferred).
+
+---
+
+## feat(kg): fine-grained topic typing + graph-aware extraction  *(branch `KG-knowledge-extraction`)*
+
+**Tried:** two improvements to LLM knowledge extraction. **Step 1** — `TopicNode` gains a `category` from a
+CLOSED taxonomy (`TopicCategory`: music/science/animals/food/activity/place/person/media/sport/other).
+**Step 2** — condition the extraction prompt on the person's *existing* topics so the LLM reuses established
+nodes; output splits into `existing_topics_discussed` vs `new_topics`. Kept decoupling: all LLM/prompt/guard
+logic in the new APP module `modules/kg_extraction.py`; `graph_relationship/` gained only pure helpers.
+**Worked (all verification points):**
+- category enum defined once; **TopicNode id stays label-only** (category is an attribute, not identity —
+  two extractions disagreeing on category resolve to the SAME node).
+- backward-compat: old `kg_state.json` untyped topics load and default to `other` (real file: 14 topics).
+- graph-aware reuse: with "jazz" known, a transcript saying "jazz music" lands in
+  `existing_topics_discussed` and creates **no** second node (before==after counts).
+- new topic ("dinosaurs") → one typed `TopicNode(animals)` wired via the Interest layer (category→interest).
+- guards write **nothing** on: malformed JSON (whole extraction discarded), invalid category (dropped),
+  hallucinated "existing" not in the provided list (dropped), confidence < 0.6 (dropped).
+- idempotent: re-running identical extraction gives identical node/edge counts.
+- category round-trips through save→load→save; `graph_relationship/` has **zero** LLM/PAD imports.
+**Decisions / deviations (flagged):**
+- Invalid category → **drop** the item (not coerce), so "nothing written" holds for bad output.
+- Closeness (rapport/trust) kept working by reusing the existing pure `extract()` for **deltas only** +
+  the untouched `adjust_closeness` (its interest logic is not used). Closeness logic itself untouched.
+- New/existing topics wire under an Interest named after the **category** (`person→Interest(category)→Topic`).
+- `resolve_topic(category)` only fills a category when the node is still `other` (first non-other wins;
+  TopicNode has no provenance field, so a conflict is not persisted — kept, not merged).
+- Capability↔topic auto-linking (old embedding matcher path) is **not** run in the new topic extraction —
+  embeddings/merge are explicitly out of scope for this step.
+**Didn't / deferred:** embeddings, fuzzy/semantic merge, topic↔topic relations, clustering (Feature-2).
+
+---
+
+## docs: R&D system report + progress log
+
+**Tried:** wrote a detailed R&D report (`RND_KG_Companion_System.md`) covering face-reco, emotion, the
+FAST/SLOW/RELATIONSHIP graph, extraction, prompt structure, and pipeline; started this progress log.
+**Worked:** report captures the current baseline (PAD disabled, emotion→mood only) accurately.
+**Didn't / open:** no evaluation numbers yet; references + abstract still to add.
+**Next:** improve the knowledge-extraction method (see report §7).
+
+---
+
+## `a31f30a` feat(viz): colour edges per person; chatbox edges blue
+
+**Tried:** colour each person's edges with a distinct hue, shaded by timescale (FAST lighter / SLOW
+darker), and force all robot (chatbox) edges to a single blue. Edge ownership inferred from the source
+node id (`person` / `interest:` / `conversation:` / `interaction:` / `*:capability` / robot).
+**Worked:** verified on the live graph — jay's 31 edges → jay hue, HJ's 10 → HJ hue, chatbox's 8 → blue,
+0 unowned. Legend lists each person's colour dynamically.
+**Didn't / watch:** blue is reserved for the robot and excluded from the person palette; if many people
+are added the 8-colour palette will wrap (acceptable for now).
+
+---
+
+## `d093e00` feat(viz): Obsidian-style force sliders
+
+**Tried:** top-right panel with live sliders — Repel (charge), Link length (distance), Link force
+(strength), Center gravity (forceX/Y) — plus reset.
+**Worked:** sliders drive the d3 sim live; centre-gravity re-centres on window resize; HTML well-formed.
+**Didn't:** —
+
+---
+
+## `8eedb5f` feat: live conversation-status node + emotion/mood-aware prompt
+
+**Tried:** (a) live "current topic" tracking; (b) emotion → FAST mood; (c) restructured, retrieval-augmented
+prompt with affect.
+**Worked:**
+- Dedicated `ConversationNode` (rolling last-3 topic keywords + mood + emotion, linked to person **and**
+  robot) — updates in place, verified via unit check.
+- Prompt rebuilt into 3 blocks (IDENTITY / HOW TO REPLY / WHO YOU'RE TALKING TO); **dual affect signal**
+  (mood valence in context + emotion label tagged on the current user turn); memory capped (top-4
+  interests, ≤3 topics each, 3 recent notes one-per-topic).
+- Raised embedding matcher floor 0.50 → 0.62.
+**Didn't work → fixed (found during live testing):**
+- *Save spam* returned once emotion was on — the raw detector valence jitters and kept tripping the
+  0.04 dirty-gate. Fixed by widening the gate (save only on emotion-label change or ≥0.15 valence shift).
+- *Spurious capability link* `tennis ↔ "good at math"`: the first design reused shared `TopicNode`s for
+  the current topic, so the extraction embedding matcher attached bogus `about` edges. Root-caused and
+  replaced with the dedicated `ConversationNode` (structurally cannot receive capability edges).
+- *Accumulated artifacts*: one-time cleanup script purged old `current_topic` edges, orphaned
+  current-topic topics, and non-keyword capability→topic links from `kg_state.json` (backup kept).
+**Note:** `CurrentTopicEdge`/`set_current_topic` are now dead (kept in schema, unused).
+
+---
+
+## `aaa402d` feat: integrate webcam face-reco with the KG conversation pipeline
+
+**Tried:** wire `webcam_loop` into the `graph_relationship` KG — recognize → retrieve into the prompt →
+record turns → end-of-session extraction → update graph. PAD + emotion disabled by default; embedding
+matcher default on.
+**Worked:** full loop verified with a headless fake-LLM smoke test (seed → session → turns → extract →
+graph update); seeds robot/human subgraphs from `specs/` on startup; retrieves interests / shared topics /
+notes into the system prompt; records real turns onto `SessionNode.turns`.
+**Didn't work → fixed:**
+- *Crash on quit* `'Event' object is not callable`: `_DetectionWorker` stored its stop flag as
+  `self._stop`, shadowing `threading.Thread._stop` (called by `join()`); surfaced once emotion was
+  disabled and the worker finished fast. Renamed to `_stop_evt`.
+- *Save spam* (identical snapshots each tick): added dirty-gating so KG-only ticks don't rewrite
+  unchanged graphs.

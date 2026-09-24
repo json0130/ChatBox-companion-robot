@@ -6,6 +6,24 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## merge: KG-knowledge-extraction (now on main) into feature/cultural-awareness  *(branch `feature/cultural-awareness`)*
+**Date:** 2026-09-24
+
+### What was tried
+Branch restructure: `main` = V4 demo + chatboxv1-3 + face tracking; `KG-knowledge-extraction` hangs off
+`main`, and this branch hangs off KG. Merged the updated KG in with `-X no-renames`, because this branch
+renamed `CHATBOX-DEMO_V4` → `CHATBOX_V5-dev` and rename detection would have pushed main's demo changes
+into the research tree.
+
+- **CHATBOX-DEMO_V4:** restored, identical to KG's — V4 is the demo, V5-dev is research; both kept.
+- **CHATBOX_V5-dev:** untouched by the merge (identical to before). Git's directory-rename detection still
+  mapped 4 of main's V4 files into V5-dev (`WIFI_DEBUG.md`, face-tracking ESP32 sketch/servo test,
+  `face_tracking_output.py`); dropped — they live in V4.
+- **New from main:** `AFFECT_LAB/`, `SERVO_STYLE/`, graphify setup; `.gitignore` unioned.
+- **Not verified:** not run end to end.
+
+---
+
 ## feat: first-impression integration — auto-enrol strangers into the culture pipeline  *(branch `feature/cultural-awareness`)*
 
 **Goal (user):** port the `first-impression` branch's "meet a stranger" pipeline into the culture branch, but

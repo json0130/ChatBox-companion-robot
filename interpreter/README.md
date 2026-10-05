@@ -11,4 +11,4 @@ The robot is changing from a companion into an interpreter between a Turi Māori
 
 Interpret, never reply; PAD carries the speaker's emotion, not the robot's persona.
 
-Status: Step 0 (contracts) in progress.
+Status: Step 0 (contracts v0.1) added; awaiting sign-off. Sign plan fields are a proposal for the sign-generation owner.

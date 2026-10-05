@@ -7,7 +7,8 @@
   "emotion": {
     "label": "excited",
     "valence": 0.8,
-    "arousal": 0.7
+    "arousal": 0.7,
+    "confidence": 0.8
   },
   "nuance": [
     {

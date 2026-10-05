@@ -1,0 +1,22 @@
+{
+  "frame_id": "f-009",
+  "direction": "speech_to_sign",
+  "speaker_id": "person:visitor_02",
+  "addressee_id": "person:staff_01",
+  "text_en": "Sorry, are we running late? I think we've missed the start.",
+  "emotion": {
+    "label": "anxious",
+    "valence": -0.4,
+    "arousal": 0.6
+  },
+  "nuance": [
+    {
+      "kind": "apology"
+    },
+    {
+      "kind": "question"
+    }
+  ],
+  "concepts": [],
+  "input_confidence": 0.9
+}

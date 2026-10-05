@@ -1,0 +1,24 @@
+{
+  "frame_id": "f-004",
+  "direction": "sign_to_speech",
+  "speaker_id": "person:visitor_02",
+  "addressee_id": "person:staff_01",
+  "gloss": "ME ASK INTERPRETER NOBODY COME",
+  "text_en": "I asked for an interpreter and nobody came.",
+  "emotion": {
+    "label": "angry",
+    "valence": -0.6,
+    "arousal": 0.7
+  },
+  "nuance": [
+    {
+      "kind": "statement"
+    },
+    {
+      "kind": "emphasis",
+      "target": "nobody"
+    }
+  ],
+  "concepts": [],
+  "input_confidence": 0.79
+}

@@ -1,0 +1,27 @@
+{
+  "frame_id": "f-010",
+  "direction": "speech_to_sign",
+  "speaker_id": "person:visitor_01",
+  "addressee_id": "person:aroha",
+  "text_en": "We're over the moon, the whanau all said yes!",
+  "emotion": {
+    "label": "excited",
+    "valence": 0.8,
+    "arousal": 0.7
+  },
+  "nuance": [
+    {
+      "kind": "idiom",
+      "target": "over the moon",
+      "meaning": "very happy"
+    }
+  ],
+  "concepts": [
+    {
+      "slug": "ck:whanau",
+      "english": "family",
+      "te_reo": "whānau"
+    }
+  ],
+  "input_confidence": 0.91
+}

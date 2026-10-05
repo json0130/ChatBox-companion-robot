@@ -1,0 +1,36 @@
+{
+  "frame_id": "f-006",
+  "direction": "speech_to_sign",
+  "speaker_id": "person:visitor_01",
+  "addressee_id": "person:aroha",
+  "text_en": "Ah sorry, we'll have to push the meeting back a week, the room's double-booked.",
+  "emotion": {
+    "label": "apologetic",
+    "valence": -0.3,
+    "arousal": 0.2,
+    "confidence": 0.71
+  },
+  "nuance": [
+    {
+      "kind": "apology"
+    },
+    {
+      "kind": "idiom",
+      "target": "push the meeting back",
+      "meaning": "postpone the meeting"
+    },
+    {
+      "kind": "idiom",
+      "target": "double-booked",
+      "meaning": "already booked for something else"
+    }
+  ],
+  "concepts": [
+    {
+      "slug": "ck:hui",
+      "english": "meeting",
+      "te_reo": "hui"
+    }
+  ],
+  "input_confidence": 0.93
+}

@@ -1,0 +1,37 @@
+{
+  "frame_id": "f-001",
+  "direction": "sign_to_speech",
+  "speaker_id": "person:aroha",
+  "addressee_id": "person:visitor_01",
+  "gloss": "TOMORROW HUI MY WHANAU COME",
+  "text_en": "My family is coming to the meeting tomorrow.",
+  "emotion": {
+    "label": "excited",
+    "valence": 0.7,
+    "arousal": 0.6,
+    "confidence": 0.82
+  },
+  "nuance": [
+    {
+      "kind": "statement"
+    },
+    {
+      "kind": "emphasis",
+      "target": "family"
+    }
+  ],
+  "concepts": [
+    {
+      "slug": "ck:whanau",
+      "english": "family",
+      "te_reo": "whānau"
+    },
+    {
+      "slug": "ck:hui",
+      "english": "meeting",
+      "te_reo": "hui"
+    }
+  ],
+  "input_confidence": 0.88,
+  "setting": "lab_open_day"
+}

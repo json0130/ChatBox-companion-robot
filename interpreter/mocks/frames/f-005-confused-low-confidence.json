@@ -1,0 +1,20 @@
+{
+  "frame_id": "f-005",
+  "direction": "sign_to_speech",
+  "speaker_id": "person:visitor_01",
+  "addressee_id": "person:staff_01",
+  "gloss": "WHERE ROOM SORRY WHICH ROOM",
+  "text_en": "Where is the, sorry, which room is it?",
+  "emotion": {
+    "label": "confused",
+    "valence": -0.2,
+    "arousal": 0.3
+  },
+  "nuance": [
+    {
+      "kind": "question"
+    }
+  ],
+  "concepts": [],
+  "input_confidence": 0.35
+}

@@ -1,0 +1,26 @@
+{
+  "frame_id": "f-008",
+  "direction": "speech_to_sign",
+  "speaker_id": "person:staff_01",
+  "addressee_id": "person:aroha",
+  "text_en": "Kia ora, we're here for the hui this morning.",
+  "emotion": {
+    "label": "calm",
+    "valence": 0.2,
+    "arousal": -0.3
+  },
+  "nuance": [
+    {
+      "kind": "greeting"
+    }
+  ],
+  "concepts": [
+    {
+      "slug": "ck:hui",
+      "english": "meeting",
+      "te_reo": "hui"
+    }
+  ],
+  "input_confidence": 0.9,
+  "setting": "marae"
+}

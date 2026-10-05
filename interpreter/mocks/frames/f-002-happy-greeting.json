@@ -1,0 +1,20 @@
+{
+  "frame_id": "f-002",
+  "direction": "sign_to_speech",
+  "speaker_id": "person:visitor_02",
+  "addressee_id": "person:staff_01",
+  "gloss": "HELLO NICE MEET YOU",
+  "text_en": "Hello, nice to meet you.",
+  "emotion": {
+    "label": "happy",
+    "valence": 0.6,
+    "arousal": 0.3
+  },
+  "nuance": [
+    {
+      "kind": "greeting"
+    }
+  ],
+  "concepts": [],
+  "input_confidence": 0.93
+}

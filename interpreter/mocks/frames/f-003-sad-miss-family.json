@@ -1,0 +1,26 @@
+{
+  "frame_id": "f-003",
+  "direction": "sign_to_speech",
+  "speaker_id": "person:aroha",
+  "addressee_id": "person:staff_01",
+  "gloss": "ME MISS MY WHANAU HOME",
+  "text_en": "I miss my family back home.",
+  "emotion": {
+    "label": "sad",
+    "valence": -0.6,
+    "arousal": -0.3
+  },
+  "nuance": [
+    {
+      "kind": "statement"
+    }
+  ],
+  "concepts": [
+    {
+      "slug": "ck:whanau",
+      "english": "family",
+      "te_reo": "whānau"
+    }
+  ],
+  "input_confidence": 0.84
+}

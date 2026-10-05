@@ -1,0 +1,23 @@
+{
+  "frame_id": "f-007",
+  "direction": "speech_to_sign",
+  "speaker_id": "person:visitor_01",
+  "addressee_id": "person:staff_01",
+  "text_en": "Thanks so much, that was really helpful!",
+  "emotion": {
+    "label": "happy",
+    "valence": 0.7,
+    "arousal": 0.4
+  },
+  "nuance": [
+    {
+      "kind": "thanks"
+    },
+    {
+      "kind": "emphasis",
+      "target": "really"
+    }
+  ],
+  "concepts": [],
+  "input_confidence": 0.95
+}

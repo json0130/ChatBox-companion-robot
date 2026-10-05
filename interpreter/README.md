@@ -11,4 +11,4 @@ The robot is changing from a companion into an interpreter between a Turi Māori
 
 Interpret, never reply; PAD carries the speaker's emotion, not the robot's persona.
 
-Status: Step 1 (mocks + baseline pipeline) added; awaiting sign-off. Tasks 1 and 2 are pass-through baselines.
+Status: Step 2a (Task 1 rule-based planner) added; awaiting sign-off. Colour palette and pronunciation respellings are placeholders. Step 2b (NAOqi vs external TTS adapters) is next.

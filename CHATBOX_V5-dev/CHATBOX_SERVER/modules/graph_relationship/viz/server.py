@@ -200,7 +200,8 @@ def transform(raw: dict) -> dict:
         elif node_type == "culture":
             obj["styleHint"] = n.get("style_hint", "") or ""  # static manner hint
         elif node_type == "role_topic":
-            obj["facts"] = n.get("facts", []) or []         # what the role knows
+            obj["kind"] = n.get("kind", "knowledge")        # goal/manner/do/avoid/phrase/knowledge
+            obj["facts"] = n.get("items", []) or []         # its lines (shown in the panel)
         nodes.append(obj)
 
     edges = []
@@ -328,14 +329,19 @@ class GraphState:
         raw = self._raw()
         nodes = {n.get("id"): n for n in raw.get("nodes", [])}
         robots = sorted(i for i, n in nodes.items() if n.get("node_type") == "robot")
-        roles = sorted(({"id": i, "label": n.get("descriptor", i),
-                         "brief": n.get("brief", ""), "style": n.get("style_hint", "")}
-                        for i, n in nodes.items()
-                        if n.get("node_type") == "role" and str(i).startswith("role:")),
-                       key=lambda r: r["id"])
+        roles = {i: {"id": i, "label": n.get("descriptor", i),
+                     "brief": n.get("brief", ""), "parts": {}}
+                 for i, n in nodes.items()
+                 if n.get("node_type") == "role" and str(i).startswith("role:")}
         current = {r: {} for r in robots}
         for e in raw.get("edges", []):
             src, tgt = e.get("source_id"), e.get("target_id")
+            if e.get("edge_type") == "role_knows" and src in roles and tgt in nodes:
+                part = nodes[tgt]                     # role subnode → summary
+                roles[src]["parts"].setdefault(part.get("kind", "knowledge"), []).extend(
+                    part.get("items", []) if part.get("kind") != "knowledge"
+                    else [part.get("label", "")])
+                continue
             if src not in current or tgt not in nodes:
                 continue
             if e.get("edge_type") == "has_role":
@@ -344,7 +350,8 @@ class GraphState:
             elif e.get("edge_type") == "has_persona":
                 current[src]["persona"] = nodes[tgt].get("descriptor", "")
                 current[src]["ocean"] = nodes[tgt].get("ocean")
-        return {"robots": robots, "roles": roles, "current": current}
+        return {"robots": robots, "roles": sorted(roles.values(), key=lambda r: r["id"]),
+                "current": current}
 
     def set_persona(self, robot: str, role: str, ocean: dict) -> dict:
         from datetime import datetime, timezone

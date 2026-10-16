@@ -1,8 +1,9 @@
 """
 Role + persona layer — what the robot is FOR, how it talks, and what it knows for it.
 
-  robot --has_role-----> Role("tutor", brief, style_hint)       (attached role)
-  Role  --role_knows---> RoleTopic("fractions", facts)          (role knowledge)
+  robot --has_role-----> Role("tutor", brief)                   (attached role)
+  Role  --role_knows---> RoleTopic(kind, items)                  (how to talk in it)
+                           kind: goal | manner | do | avoid | phrase | knowledge
   robot --has_persona--> Persona(descriptor, ocean)              (assigned persona)
 
 Library roles (`role:<slug>`) all live in the graph; a robot PLAYS the one its
@@ -24,7 +25,7 @@ from typing import Dict, List, Optional, Tuple
 
 from .schema import (
     HasPersonaEdge, HasRoleEdge, PersonaNode, Provenance, RoleKnowsEdge, RoleNode,
-    RoleTopicNode,
+    RolePart, RoleTopicNode,
 )
 from .store import GraphStore
 from .topics import normalize_label
@@ -53,20 +54,23 @@ def persona_id(robot_id: str) -> str:
 
 # ── library (seeded) ──────────────────────────────────────────────────────────
 
-def ensure_role(store: GraphStore, label: str, brief: str = "",
-                style_hint: str = "") -> RoleNode:
-    """Upsert a library role. Re-seeding refreshes brief/style_hint."""
+def ensure_role(store: GraphStore, label: str, brief: str = "") -> RoleNode:
+    """Upsert a library role. Re-seeding refreshes the brief."""
     node = RoleNode(id=role_id(label), descriptor=str(label).strip(),
-                    brief=brief.strip(), style_hint=style_hint.strip())
+                    brief=brief.strip())
     store.upsert_node(node)
     return node
 
 
-def ensure_role_topic(store: GraphStore, rid: str, label: str,
-                      facts: Optional[List[str]] = None) -> RoleTopicNode:
-    """Upsert a knowledge topic under a role and link it (role_knows)."""
-    node = RoleTopicNode(id=role_topic_id(rid, label), label=str(label).strip(),
-                         facts=[str(f).strip() for f in (facts or []) if str(f).strip()])
+def ensure_role_part(store: GraphStore, rid: str, kind: str, items: List[str],
+                     label: Optional[str] = None) -> RoleTopicNode:
+    """Upsert one part of a role's subgraph and link it (role_knows). Speaking
+    parts (goal/manner/do/avoid/phrase) are one node each, labelled by kind; a
+    KNOWLEDGE part is one node per topic, labelled by the topic."""
+    kind = RolePart(kind)
+    label = str(label or kind.value).strip()
+    node = RoleTopicNode(id=role_topic_id(rid, label), label=label, kind=kind,
+                         items=[str(i).strip() for i in items if str(i).strip()])
     store.upsert_node(node)
     store.upsert_edge(RoleKnowsEdge(source_id=rid, target_id=node.id,
                                     provenance=_prov("role-seed")))
@@ -79,11 +83,20 @@ def library_roles(store: GraphStore) -> List[RoleNode]:
                   key=lambda n: n.id)
 
 
-def role_knowledge(store: GraphStore, rid: str) -> List[Tuple[str, List[str]]]:
-    """[(topic label, facts), ...] for one role, sorted by label."""
-    return sorted(((n.label, list(n.facts))
-                   for _e, n in store.query_neighbors(rid, "role_knows")
-                   if n.node_type == "role_topic"), key=lambda x: x[0])
+def role_parts(store: GraphStore, rid: str) -> Dict[str, List[Tuple[str, List[str]]]]:
+    """{kind: [(label, items), ...]} for one role, labels sorted within a kind."""
+    out: Dict[str, List[Tuple[str, List[str]]]] = {}
+    for _e, n in store.query_neighbors(rid, "role_knows"):
+        if n.node_type == "role_topic":
+            out.setdefault(n.kind.value, []).append((n.label, list(n.items)))
+    for v in out.values():
+        v.sort(key=lambda x: x[0])
+    return out
+
+
+def role_lines(store: GraphStore, rid: str, kind: str) -> List[str]:
+    """All items of one speaking part, flattened (e.g. every 'avoid' rule)."""
+    return [i for _l, items in role_parts(store, rid).get(kind, []) for i in items]
 
 
 # ── attach / detach ───────────────────────────────────────────────────────────

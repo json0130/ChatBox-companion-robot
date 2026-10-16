@@ -183,14 +183,13 @@ class RoleNode(BaseModel):
     """A role the robot can play, e.g. 'companion' or 'tutor'.
 
     Spec roles are anchor-scoped (`chatbox:role:companion`); library roles
-    (roles.py) are shared, `role:<slug>`, and own a knowledge subgraph of
-    RoleTopicNodes. A robot plays the role its has_role edge points at — attach /
-    detach is moving that edge. `brief` = what the role is for; `style_hint` = how
-    to talk in it. Both default "" so old graphs load unchanged."""
+    (roles.py) are shared, `role:<slug>`, and own a subgraph of RoleTopicNodes that
+    say how to talk in the role. A robot plays the role its has_role edge points at
+    — attach / detach is moving that edge. `brief` = what the role is for; default
+    "" so old graphs load unchanged."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     descriptor: str
     brief: str = ""
-    style_hint: str = ""
     node_type: Literal["role"] = "role"
 
 
@@ -275,13 +274,25 @@ class CultureTopicNode(BaseModel):
     node_type: Literal["culture_topic"] = "culture_topic"
 
 
+class RolePart(str, Enum):
+    """What a role subnode says about speaking in that role."""
+    GOAL      = "goal"        # what a conversation in this role is for
+    MANNER    = "manner"      # tone, sentence length, vocabulary
+    DO        = "do"          # behaviours to show
+    AVOID     = "avoid"       # behaviours to avoid
+    PHRASE    = "phrase"      # example lines in the role's voice
+    KNOWLEDGE = "knowledge"   # one topic + facts the role can share
+
+
 class RoleTopicNode(BaseModel):
-    """Knowledge a ROLE carries, e.g. 'fractions' under tutor. Like
-    CultureTopicNode: the robot's own node (id `rk:<role-slug>:<topic-slug>`),
-    separate from shared person TopicNodes, so it never couples people."""
+    """One part of a ROLE's subgraph (see RolePart): `items` are the lines for that
+    part — rules, example phrases, or a topic's facts. The robot's own node (id
+    `rk:<role-slug>:<part or topic-slug>`), separate from shared person TopicNodes,
+    so it never couples people."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     label: str
-    facts: List[str] = Field(default_factory=list)
+    kind: RolePart = RolePart.KNOWLEDGE
+    items: List[str] = Field(default_factory=list)
     node_type: Literal["role_topic"] = "role_topic"
 
 

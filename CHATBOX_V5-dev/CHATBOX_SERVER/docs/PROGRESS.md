@@ -6,6 +6,33 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## feat: role speaking subnodes, profile cards, apply confirmation  *(branch `feature/persona-roles`)*
+**Date:** 2026-10-16
+
+### What was tried
+Make each role say HOW the robot talks, robot-side only (nothing about who it is talking to).
+- `RoleTopicNode` now carries `kind` (goal / manner / do / avoid / phrase / knowledge) and `items`; every library
+  role in `role_seed.py` has one subnode per speaking part plus its knowledge topics. `RoleNode.style_hint` is gone
+  (the manner/do subnodes replace it).
+- Prompt: new `HOW YOU TALK AS A <ROLE>` block (goal; style = OCEAN rules + manner + do; avoid; example lines,
+  "never repeat word for word") and `WHAT YOU KNOW AS A <ROLE>`, both from `_role_persona_blocks()`, which reads
+  only the robot's attached role + persona. The loop prints these blocks when an assignment lands.
+- Viz: 8 profile cards (role + OCEAN after animated characters, rough guesses) that load into the form; the role
+  summary (goal / talks / avoids / knows); role subnodes coloured by kind; Apply now waits until the LOOP has written
+  the role + OCEAN into the graph before saying "✓ applied", else warns after ~6 s that the loop isn't running.
+
+### What worked
+- Live, real `webcam_loop --no-window` + viz on a copy of the KG: Ms. Frizzle card → apply → the loop logged
+  "role → tutor; persona → curious, outgoing, warm, calm" and the full HOW YOU TALK block within ~1 s; the panel
+  turned "✓ applied". 64 unit tests + all root test scripts pass.
+
+### What didn't work / notes
+- The role select was blank while the spec's `chatbox:role:companion` was attached; it now shows the library role
+  with the same name.
+- Typed chat only enters through the OpenCV window, so the live check stops at the prompt (no LLM reply checked).
+
+---
+
 ## feat: role + persona assignment from the viz — attachable role subgraphs, OCEAN → style  *(branch `feature/persona-roles`)*
 **Date:** 2026-10-16
 

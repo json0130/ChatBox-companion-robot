@@ -1837,6 +1837,8 @@ class WebcamKGLoop:
         self._chat_history.clear()          # old replies would set the old tone
         self._mark_kg_dirty()
         print(f"[WebcamLoop] role → {role.descriptor}; persona → {persona.descriptor}")
+        for block in self._role_persona_blocks(role, persona):
+            print("    " + block.replace("\n", "\n    "))
 
     def _culture_override_path(self) -> Optional[str]:
         kg = getattr(self, "kg_path", None)
@@ -2024,15 +2026,48 @@ class WebcamKGLoop:
             for i, p in ranked) or "—"))
         print(bar + "\n")
 
+    def _role_persona_blocks(self, role, persona) -> list[str]:
+        """HOW YOU TALK + WHAT YOU KNOW, from the robot's ATTACHED role subgraph and
+        OCEAN persona only — nothing here depends on who the robot is talking to.
+        Placed after the HOW TO REPLY rules so it colours HOW the robot replies,
+        never WHAT it may claim."""
+        from modules.graph_relationship.roles import ocean_style, role_lines, role_parts
+        parts = role_parts(self.store, role.id) if role else {}
+        lines = lambda kind: role_lines(self.store, role.id, kind) if role else []
+        style = (ocean_style(persona.ocean) if persona and persona.ocean else []) \
+            + lines("manner") + lines("do")
+        talk = []
+        if lines("goal"):
+            talk.append("Goal in every conversation: " + " ".join(lines("goal")))
+        if style:
+            talk.append("Style — keep to it every turn:\n"
+                        + "\n".join(f"  – {x}" for x in style))
+        if lines("avoid"):
+            talk.append("Avoid:\n" + "\n".join(f"  – {x}" for x in lines("avoid")))
+        if lines("phrase"):
+            talk.append("Lines in your voice (for tone only — never repeat them word "
+                        "for word):\n" + "\n".join(f'  – "{x}"' for x in lines("phrase")))
+        out = []
+        if talk:
+            who = role.descriptor if role else "yourself"
+            out.append(f"━━━ HOW YOU TALK AS A {who.upper()} ━━━\n" + "\n".join(talk))
+        # ponytail: whole knowledge subgraph injected; rank by the message (like the
+        # culture offers) once a role carries more than a handful of topics.
+        knowledge = parts.get("knowledge", [])
+        if knowledge:
+            out.append(
+                f"━━━ WHAT YOU KNOW AS A {role.descriptor.upper()} ━━━\n" + "\n".join(
+                    f"  – {label}: {' '.join(items)}" if items else f"  – {label}"
+                    for label, items in knowledge))
+        return out
+
     def _build_system_prompt(self, pid: Optional[str], *,
                              rag_hits: Optional[list] = None) -> str:
         """Assemble the system prompt from the seeded RobotNode + retrieved memory,
         in three labelled blocks. Used when PAD is disabled (no PAD system_prompt).
         Mood/emotion is deliberately not injected (kept for the graph/viz only)."""
         from modules.graph_relationship.topics import robot_capability
-        from modules.graph_relationship.roles import (
-            attached_persona, attached_role, ocean_style, role_knowledge,
-        )
+        from modules.graph_relationship.roles import attached_persona, attached_role
         persona = attached_persona(self.store, self.robot_id)
         personas = [persona.descriptor] if persona else []
         role = attached_role(self.store, self.robot_id)
@@ -2092,26 +2127,8 @@ class WebcamKGLoop:
                 how_to_reply += (
                     "\n• Cultural manner (soft guidance, secondary to answering their "
                     f"actual question): {_hint}")
-        # Persona → interaction style, straight from OCEAN (no PAD), then the
-        # role's own manner. Placed after the rules so they colour HOW the robot
-        # replies, never WHAT it may claim.
-        style = ocean_style(persona.ocean) if persona and persona.ocean else []
-        if role and role.style_hint:
-            style.append(role.style_hint)
-        if style:
-            how_to_reply += "\n• Your interaction style — keep to it every turn:\n" + \
-                "\n".join(f"  – {s}" for s in style)
         blocks.append(how_to_reply)
-
-        # ── ROLE KNOWLEDGE ── only the ATTACHED role's subgraph reaches the prompt.
-        # ponytail: whole subgraph injected; rank by the message (like the culture
-        # offers) once a role carries more than a handful of topics.
-        knowledge = role_knowledge(self.store, role.id) if role else []
-        if knowledge:
-            blocks.append(
-                f"━━━ WHAT YOU KNOW AS A {role.descriptor.upper()} ━━━\n" + "\n".join(
-                    f"  – {label}: {' '.join(facts)}" if facts else f"  – {label}"
-                    for label, facts in knowledge))
+        blocks.extend(self._role_persona_blocks(role, persona))
 
         # ── WHO YOU'RE TALKING TO ──
         if pid:

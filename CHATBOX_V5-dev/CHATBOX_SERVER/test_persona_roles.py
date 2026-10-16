@@ -58,8 +58,12 @@ def test_viz_assignment_reaches_prompt(tmp_path):
     assert "a tutor robot" in prompt
     assert "Your job in this role: help the child practise maths" in prompt
     assert "Personality: organised, quiet, warm." in prompt
+    assert "HOW YOU TALK AS A TUTOR" in prompt
+    assert "Goal in every conversation: The child works" in prompt   # role: goal
     assert "short and low-key" in prompt                     # OCEAN → style
-    assert "give a hint, let them try" in prompt               # role style hint
+    assert "Give a hint, let them try" in prompt               # role: do
+    assert "Avoid:" in prompt and "Giving the answer straight away" in prompt
+    assert '"What do you think comes next?"' in prompt         # role: phrase
     assert "WHAT YOU KNOW AS A TUTOR" in prompt and "fractions" in prompt
 
     # switch role: the tutor subgraph detaches from the prompt
@@ -70,6 +74,7 @@ def test_viz_assignment_reaches_prompt(tmp_path):
     L._sync_persona_assignment()
     prompt = L._build_system_prompt(None)
     assert "a storyteller robot" in prompt and "fractions" not in prompt
+    assert "HOW YOU TALK AS A STORYTELLER" in prompt and "Giving the answer" not in prompt
 
 
 def test_old_replies_hidden_after_assignment(tmp_path):

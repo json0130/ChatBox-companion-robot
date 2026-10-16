@@ -17,6 +17,7 @@ rag_indexes/
 *.faiss
 sessions.db
 kg_state.json
+persona_assignment.json
 kg_culture.json
 faces.npz
 *.npz

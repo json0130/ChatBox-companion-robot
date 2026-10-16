@@ -6,6 +6,40 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## feat: role + persona assignment from the viz — attachable role subgraphs, OCEAN → style  *(branch `feature/persona-roles`)*
+**Date:** 2026-10-16
+
+### What was tried
+Give the robot a role and a personality from the browser, built like the culture layer and without PAD.
+- `graph_relationship/roles.py` (schema + store only, like cultures.py): library roles `role:<slug>` own a
+  knowledge subgraph (`role_knows` → `RoleTopicNode` `rk:<role>:<topic>` with facts). A robot plays the role its
+  `has_role` edge points at; attach/detach moves that edge, so detached roles stay in the graph and add nothing to
+  the prompt. `RoleNode` gained `brief` + `style_hint`; `PersonaNode` gained `ocean`.
+- Persona = OCEAN in [-1, 1] → words for the IDENTITY line and observable style rules ("let them lead, don't push
+  new topics") for HOW TO REPLY, strongest trait first, ±0.25 dead zone. No PAD.
+- `modules/role_seed.py`: companion / tutor / storyteller / reading buddy / receptionist (hand-written demo data),
+  seeded with the specs at start-up; attaches nothing by itself.
+- Viz panel "Role & persona" → `POST /persona` → `persona_assignment.json` beside the KG (atomic write). The loop
+  adopts it on its next tick (main thread owns the store) and again at start-up after the spec seed.
+- Persona change: in-memory chat history cleared, and the robot's own replies from before the assignment (`ts`)
+  are dropped from the "recent conversation" block; what the person said is kept.
+- Ported `ai_server_llm.py` (with `json_mode`/`temperature`/`seed`) and `--ai-server HOST[:PORT]`.
+
+### What worked
+- `tests_roles.py` (attach/detach, knowledge stays with its role, words/style, bad input, save/load round trip) and
+  `test_persona_roles.py` (viz request → loop → prompt; role switch removes the old knowledge; old replies hidden,
+  their words kept). All 72 existing graph tests and every root test script still pass.
+- Live: viz panel → tutor, E −0.8 → prompt carried "a tutor robot", the brief, "Personality: quiet", the quiet
+  style rule, the tutor's manner and only the tutor's knowledge; viz showed "now: tutor · quiet".
+
+### What didn't work / notes
+- The PAD-driven version is parked on `feature/persona-roles-pad`; PAD stays out until persona styling is tested.
+- The spec seed re-attaches the spec role/persona every launch; the sidecar re-applies the assignment right after,
+  so the viz may show the spec role for the first moment of a run.
+- Role knowledge is injected whole (fine for the demo library; needs retrieval if a role gets many topics).
+
+---
+
 ## merge: KG-knowledge-extraction (now on main) into feature/cultural-awareness  *(branch `feature/cultural-awareness`)*
 **Date:** 2026-09-24
 

@@ -170,16 +170,27 @@ class SessionNode(BaseModel):
 # learned per turn.
 
 class PersonaNode(BaseModel):
-    """Authored persona/character descriptor, e.g. 'introverted, shy'."""
+    """Authored persona/character descriptor, e.g. 'introverted, shy'.
+    `ocean` is set when the persona was ASSIGNED as Big-Five traits (roles.py);
+    the descriptor is then derived from it. None for a hand-written spec persona."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     descriptor: str
+    ocean: Optional[Dict[str, float]] = None
     node_type: Literal["persona"] = "persona"
 
 
 class RoleNode(BaseModel):
-    """Authored role descriptor, e.g. 'companion'."""
+    """A role the robot can play, e.g. 'companion' or 'tutor'.
+
+    Spec roles are anchor-scoped (`chatbox:role:companion`); library roles
+    (roles.py) are shared, `role:<slug>`, and own a knowledge subgraph of
+    RoleTopicNodes. A robot plays the role its has_role edge points at — attach /
+    detach is moving that edge. `brief` = what the role is for; `style_hint` = how
+    to talk in it. Both default "" so old graphs load unchanged."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     descriptor: str
+    brief: str = ""
+    style_hint: str = ""
     node_type: Literal["role"] = "role"
 
 
@@ -264,12 +275,22 @@ class CultureTopicNode(BaseModel):
     node_type: Literal["culture_topic"] = "culture_topic"
 
 
+class RoleTopicNode(BaseModel):
+    """Knowledge a ROLE carries, e.g. 'fractions' under tutor. Like
+    CultureTopicNode: the robot's own node (id `rk:<role-slug>:<topic-slug>`),
+    separate from shared person TopicNodes, so it never couples people."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    label: str
+    facts: List[str] = Field(default_factory=list)
+    node_type: Literal["role_topic"] = "role_topic"
+
+
 # Union of all node types (discriminated on node_type for (de)serialisation)
 AnyNode = Union[
     RobotNode, PersonNode, TopicNode,
     PersonaNode, RoleNode, CapabilityNode, InterestNode,
     InteractionNode, SessionNode, ConversationNode,
-    CultureNode, CultureTopicNode,
+    CultureNode, CultureTopicNode, RoleTopicNode,
 ]
 
 
@@ -495,7 +516,13 @@ class CulturePriorEdge(EdgeBase):
 CultureEdge = Union[KnowsCultureEdge, BelongsToCultureEdge, CulturePriorEdge]
 
 
+class RoleKnowsEdge(EdgeBase):
+    """RoleNode → RoleTopicNode: knowledge that comes with the role. SLOW."""
+    edge_type: Literal["role_knows"] = "role_knows"
+    timescale: Timescale = Timescale.SLOW
+
+
 AnyEdge = Union[
     RelationshipEdge, PersonAttributeEdge, IdentityEdge, TopicEdge,
-    InteractionEdge, CultureEdge,
+    InteractionEdge, CultureEdge, RoleKnowsEdge,
 ]

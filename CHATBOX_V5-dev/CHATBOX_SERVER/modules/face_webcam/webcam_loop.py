@@ -1174,7 +1174,9 @@ class WebcamKGLoop:
             )
             try:
                 from modules.graph_relationship.seed import seed_all
+                from modules.role_seed import seed_role_library
                 seed_all(self.store, spec_dir)
+                seed_role_library(self.store)
                 if self.kg_path:
                     self.store.save(self.kg_path)
             except Exception as exc:  # noqa: BLE001 — seeding is best-effort
@@ -1251,6 +1253,12 @@ class WebcamKGLoop:
         self._active_person_t = 0.0
         # First-impression: sequence for provisional 'guest_N' ids (unknown faces).
         self._guest_seq = 0
+        # Role/persona assignment from the viz (persona_assignment.json). `since`
+        # is when it was made: the robot's own replies from before it are kept out
+        # of the prompt so the new persona doesn't imitate the old one.
+        self._persona_mtime: Optional[float] = None
+        self._persona_since: Optional[str] = None
+        self._sync_persona_assignment()
 
         # #2: the whole chat pipeline (RAG + prompt build + LLM reply) runs on a
         # dedicated worker thread so the display never freezes while the robot
@@ -1791,6 +1799,45 @@ class WebcamKGLoop:
 
         return "\n".join(lines)
 
+    def _persona_assignment_path(self) -> Optional[str]:
+        kg = getattr(self, "kg_path", None)
+        return os.path.join(os.path.dirname(kg) or ".", "persona_assignment.json") if kg else None
+
+    def _sync_persona_assignment(self) -> None:
+        """Adopt the role + OCEAN persona assigned in the viz, when the file changes.
+        Written by the viz server ({robot_id: {role, ocean, ts}}); applied here, on
+        the main thread, because only the loop mutates the store. Also re-applied at
+        start-up, after the spec seed has re-attached the spec role/persona."""
+        path = self._persona_assignment_path()
+        try:
+            mtime = os.path.getmtime(path) if path else None
+        except OSError:
+            mtime = None
+        if mtime is None or mtime == self._persona_mtime:
+            return
+        self._persona_mtime = mtime
+        try:
+            with open(path, encoding="utf-8") as fh:
+                entry = json.load(fh).get(self.robot_id)
+        except (OSError, ValueError) as exc:
+            print(f"[WebcamLoop] persona assignment unreadable: {exc}")
+            return
+        if not entry:
+            return
+        from modules.graph_relationship.roles import apply_assignment
+        try:
+            with self._store_lock:
+                role, persona = apply_assignment(self.store, self.robot_id,
+                                                 entry["role"], entry["ocean"],
+                                                 source="viz")
+        except (KeyError, ValueError) as exc:
+            print(f"[WebcamLoop] persona assignment rejected: {exc}")
+            return
+        self._persona_since = entry.get("ts")
+        self._chat_history.clear()          # old replies would set the old tone
+        self._mark_kg_dirty()
+        print(f"[WebcamLoop] role → {role.descriptor}; persona → {persona.descriptor}")
+
     def _culture_override_path(self) -> Optional[str]:
         kg = getattr(self, "kg_path", None)
         if not kg:
@@ -1983,22 +2030,24 @@ class WebcamKGLoop:
         in three labelled blocks. Used when PAD is disabled (no PAD system_prompt).
         Mood/emotion is deliberately not injected (kept for the graph/viz only)."""
         from modules.graph_relationship.topics import robot_capability
-        personas = [n.descriptor for _e, n in
-                    self.store.query_neighbors(self.robot_id, "has_persona")
-                    if n.node_type == "persona"]
-        roles = [n.descriptor for _e, n in
-                 self.store.query_neighbors(self.robot_id, "has_role")
-                 if n.node_type == "role"]
+        from modules.graph_relationship.roles import (
+            attached_persona, attached_role, ocean_style, role_knowledge,
+        )
+        persona = attached_persona(self.store, self.robot_id)
+        personas = [persona.descriptor] if persona else []
+        role = attached_role(self.store, self.robot_id)
         cap = robot_capability(self.store, self.robot_id)
         caps = cap.items if cap else []
 
-        role_word = roles[0] if roles else "friendly companion"
+        role_word = role.descriptor if role else "friendly companion"
 
         blocks: list[str] = []
         # ── IDENTITY ──
         ident = ["━━━ IDENTITY ━━━",
                  f"You are {self._robot_display}, a {role_word} robot chatting "
                  f"with someone through a webcam."]
+        if role and role.brief:
+            ident.append(f"Your job in this role: {role.brief}.")
         if personas:
             ident.append(f"Personality: {', '.join(personas)}.")
         if caps:
@@ -2020,7 +2069,7 @@ class WebcamKGLoop:
             "invent or guess a name.\n"
             "• Do NOT state a specific fact — a name, number, title, place, or a 'did "
             "you know…' claim — unless it appears in the memory below (including the "
-            "cultural facts). You may chat about a topic in general terms, but never "
+            "cultural facts and your role knowledge). You may chat about a topic in general terms, but never "
             "make up specifics to sound knowledgeable; if you don't have a concrete "
             "fact, say so plainly or ask.\n"
             "• Stay on the topic they actually referenced. If they say 'tell me more "
@@ -2043,7 +2092,26 @@ class WebcamKGLoop:
                 how_to_reply += (
                     "\n• Cultural manner (soft guidance, secondary to answering their "
                     f"actual question): {_hint}")
+        # Persona → interaction style, straight from OCEAN (no PAD), then the
+        # role's own manner. Placed after the rules so they colour HOW the robot
+        # replies, never WHAT it may claim.
+        style = ocean_style(persona.ocean) if persona and persona.ocean else []
+        if role and role.style_hint:
+            style.append(role.style_hint)
+        if style:
+            how_to_reply += "\n• Your interaction style — keep to it every turn:\n" + \
+                "\n".join(f"  – {s}" for s in style)
         blocks.append(how_to_reply)
+
+        # ── ROLE KNOWLEDGE ── only the ATTACHED role's subgraph reaches the prompt.
+        # ponytail: whole subgraph injected; rank by the message (like the culture
+        # offers) once a role carries more than a handful of topics.
+        knowledge = role_knowledge(self.store, role.id) if role else []
+        if knowledge:
+            blocks.append(
+                f"━━━ WHAT YOU KNOW AS A {role.descriptor.upper()} ━━━\n" + "\n".join(
+                    f"  – {label}: {' '.join(facts)}" if facts else f"  – {label}"
+                    for label, facts in knowledge))
 
         # ── WHO YOU'RE TALKING TO ──
         if pid:
@@ -2067,10 +2135,13 @@ class WebcamKGLoop:
             ss = getattr(self, "_session_store", None)
             if ss is not None:
                 convo = []
+                since = getattr(self, "_persona_since", None) or ""
                 for t in ss.recent_turns(pid, 5):
                     if t.get("child"):
                         convo.append(f"  them: {t['child']}")
-                    if t.get("reply"):
+                    # Replies from before the current role/persona would set the old
+                    # tone; what THEY said still matters, so only ours is dropped.
+                    if t.get("reply") and (t.get("ts") or "") >= since:
                         convo.append(f"  you:  {t['reply']}")
                 if convo:
                     who.append("Recent conversation so far (oldest → newest):\n"
@@ -2329,6 +2400,7 @@ class WebcamKGLoop:
                 self._reload_if_externally_changed()   # adopt viz deletions (persist)
                 self._drain_pending_topics()
                 self._drain_pending_culture()   # mid-session culture auto-attach
+                self._sync_persona_assignment()  # role/persona assigned in the viz
                 self._drain_adapt_events(worker)  # learn new face views (main thread)
                 # viz highlight (debounced). `present` = a face (even unknown) is on
                 # camera, so an unrecognised person drops the highlight to ChatBox only.
@@ -2941,6 +3013,9 @@ def main() -> None:
                    help="Enable LLM verbal responses via Ollama")
     p.add_argument("--model",      default=_DEFAULT_MODEL,
                    help=f"Ollama model (default: {_DEFAULT_MODEL})")
+    p.add_argument("--ai-server",  default=None, metavar="HOST[:PORT]",
+                   help="Use the lab AI server instead of Ollama for chat + extraction "
+                        "(port default 7898, env AI_HOST/AI_PORT). Embeddings still use Ollama.")
     p.add_argument("--emotion",    default="hsemotion",
                    choices=["hsemotion", "hsemotion-b2", "efficientnet"],
                    help="Emotion detection backend (default: hsemotion)")
@@ -3086,7 +3161,10 @@ def main() -> None:
         return
 
     llm = None
-    if args.llm:
+    if args.ai_server:
+        from modules.ai_server_llm import from_arg
+        llm = from_arg(args.ai_server)
+    elif args.llm:
         llm = LLMClient(model=args.model)
         llm.connect()
 

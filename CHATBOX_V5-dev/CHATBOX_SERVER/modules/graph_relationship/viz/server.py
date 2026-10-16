@@ -68,6 +68,8 @@ _TIMESCALE_BY_EDGE_TYPE = {
     "knows_culture": "SLOW",
     "belongs_to_culture": "SLOW",
     "culture_prior": "SLOW",
+    # Role layer (roles.py) — SLOW.
+    "role_knows": "SLOW",
 }
 
 # node_type -> display type (frontend maps this to a shape)
@@ -89,6 +91,8 @@ _NODE_TYPE_DISPLAY = {
     "culture": "Culture",
     # Robot-owned cultural-knowledge topic (cultures.py) — Command A.
     "culture_topic": "CultureTopic",
+    # Knowledge that comes with a role (roles.py).
+    "role_topic": "RoleTopic",
 }
 
 
@@ -195,6 +199,8 @@ def transform(raw: dict) -> dict:
             obj["facts"] = n.get("facts", []) or []         # shareable cultural facts
         elif node_type == "culture":
             obj["styleHint"] = n.get("style_hint", "") or ""  # static manner hint
+        elif node_type == "role_topic":
+            obj["facts"] = n.get("facts", []) or []         # what the role knows
         nodes.append(obj)
 
     edges = []
@@ -305,6 +311,65 @@ class GraphState:
         with open(self._override_path(), "w", encoding="utf-8") as fh:
             json.dump({"active_culture": v}, fh)
         return v
+
+    # ── role / persona assignment (sidecar, read by the webcam loop) ───────────
+    # {robot_id: {"role": "role:tutor", "ocean": {O,C,E,A,N}, "ts": iso}}. The loop
+    # applies it to the graph (attach the role, build the persona); this server
+    # only validates and writes the request, so it still never edits schema objects.
+
+    _TRAITS = ("O", "C", "E", "A", "N")
+
+    def _persona_path(self) -> str:
+        return os.path.join(os.path.dirname(os.path.abspath(self.kg_path)),
+                            "persona_assignment.json")
+
+    def persona_choices(self) -> dict:
+        """Robots, library roles and what each robot currently plays (from the KG)."""
+        raw = self._raw()
+        nodes = {n.get("id"): n for n in raw.get("nodes", [])}
+        robots = sorted(i for i, n in nodes.items() if n.get("node_type") == "robot")
+        roles = sorted(({"id": i, "label": n.get("descriptor", i),
+                         "brief": n.get("brief", ""), "style": n.get("style_hint", "")}
+                        for i, n in nodes.items()
+                        if n.get("node_type") == "role" and str(i).startswith("role:")),
+                       key=lambda r: r["id"])
+        current = {r: {} for r in robots}
+        for e in raw.get("edges", []):
+            src, tgt = e.get("source_id"), e.get("target_id")
+            if src not in current or tgt not in nodes:
+                continue
+            if e.get("edge_type") == "has_role":
+                current[src]["role"] = tgt
+                current[src]["role_label"] = nodes[tgt].get("descriptor", tgt)
+            elif e.get("edge_type") == "has_persona":
+                current[src]["persona"] = nodes[tgt].get("descriptor", "")
+                current[src]["ocean"] = nodes[tgt].get("ocean")
+        return {"robots": robots, "roles": roles, "current": current}
+
+    def set_persona(self, robot: str, role: str, ocean: dict) -> dict:
+        from datetime import datetime, timezone
+        choices = self.persona_choices()
+        if robot not in choices["robots"]:
+            raise ValueError(f"unknown robot {robot!r}")
+        if role not in {r["id"] for r in choices["roles"]}:
+            raise ValueError(f"unknown role {role!r}")
+        try:
+            ocean = {k: max(-1.0, min(1.0, float(ocean[k]))) for k in self._TRAITS}
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("ocean needs numeric O/C/E/A/N")
+        path = self._persona_path()
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (FileNotFoundError, json.JSONDecodeError, ValueError, OSError):
+            data = {}
+        data[robot] = {"role": role, "ocean": ocean,
+                       "ts": datetime.now(timezone.utc).isoformat()}
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2)
+        os.replace(tmp, path)          # atomic: the loop never reads half a file
+        return data[robot]
 
     def culture_labels(self) -> list:
         """Labels of CultureNodes the robot knows — the choices for the selector."""
@@ -425,6 +490,9 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None)
                 body = json.dumps({"active": state.get_culture_override(),
                                    "cultures": state.culture_labels()}).encode()
                 self._send(200, body, "application/json")
+            elif path == "/persona":
+                self._send(200, json.dumps(state.persona_choices()).encode(),
+                           "application/json")
             else:
                 self._send(404, b"not found", "text/plain")
 
@@ -436,6 +504,18 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None)
                 if path == "/culture":
                     active = state.set_culture_override(str(body.get("active_culture", "auto")))
                     self._send(200, json.dumps({"ok": True, "active": active}).encode(),
+                               "application/json")
+                    return
+                if path == "/persona":
+                    try:
+                        a = state.set_persona(str(body.get("robot", "")),
+                                              str(body.get("role", "")),
+                                              body.get("ocean") or {})
+                    except ValueError as exc:
+                        self._send(400, json.dumps({"ok": False, "error": str(exc)})
+                                   .encode(), "application/json")
+                        return
+                    self._send(200, json.dumps({"ok": True, **a}).encode(),
                                "application/json")
                     return
                 if path != "/delete":

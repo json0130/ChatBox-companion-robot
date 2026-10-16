@@ -197,3 +197,23 @@ cd /home/jay/Desktop/2026-Jay/ChatBox-companion-robot/CHATBOX-DEMO_V4/CHATBOX_SE
 
   delta per tick = 0.025 × PAD_Pleasure  (max delta = 0.025 when P=1.0)
 ================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+ 8. ROLE & PERSONA  (feature/persona-roles — two terminals, same folder)
+────────────────────────────────────────────────────────────────────────────────
+
+  cd /home/jay/Desktop/2026-Jay/ChatBox-companion-robot/CHATBOX_V5-dev/CHATBOX_SERVER
+
+  # Terminal 1 — the robot (webcam window; type to chat). AI server or Ollama:
+  python3 -m modules.face_webcam.webcam_loop --ai-server 172.24.47.255
+  python3 -m modules.face_webcam.webcam_loop --llm
+
+  # Terminal 2 — the graph + the "Role & persona" panel → http://127.0.0.1:8765
+  python3 -m modules.graph_relationship.viz.server
+
+  # Pick a role + set the OCEAN sliders → apply. The loop adopts it on its next
+  # tick (terminal 1 prints "role → … ; persona → …"). Saved in
+  # persona_assignment.json next to the KG, so it survives a restart.
+  # Roles and their knowledge: modules/role_seed.py (ROLE_LIBRARY).
+================================================================================

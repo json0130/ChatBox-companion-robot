@@ -6,6 +6,27 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## fix: adopt a saved role/persona assignment at loop start-up  *(branch `feature/persona-roles`, also on `feature/rolesim`)*
+**Date:** 2026-10-19
+
+### What was tried
+Starting `webcam_loop` after the first Apply in the viz crashed with `AttributeError: 'WebcamKGLoop' object has
+no attribute '_store_lock'`. `_sync_persona_assignment()` was called early in `__init__`, before the store lock
+existed — and before `_kg_dirty` is initialised (it is reset to False a few lines later, which would also have
+dropped the "needs saving" flag). It is now the last statement of `__init__`.
+
+### What worked
+- Regression test `test_loop_applies_saved_assignment_at_startup` builds the REAL `WebcamKGLoop` with a saved
+  `persona_assignment.json`: it reproduces the exact AttributeError on the old code and passes on the fix.
+- Replayed the user's real `kg_culture.json` + `persona_assignment.json` (on copies): the loop starts as a
+  receptionist and renders the HOW YOU TALK block.
+
+### What didn't work / notes
+- Missed earlier because my live test started with no assignment file and the unit tests built the loop with
+  `__new__`, skipping `__init__`.
+
+---
+
 ## feat: role speaking subnodes, profile cards, apply confirmation  *(branch `feature/persona-roles`)*
 **Date:** 2026-10-16
 

@@ -96,3 +96,22 @@ def test_viz_rejects_unknown_role(tmp_path):
         raise AssertionError(f"accepted {robot}/{role}")
     assert {r["id"] for r in viz.persona_choices()["roles"]} >= {"role:tutor",
                                                                 "role:companion"}
+
+
+def test_loop_applies_saved_assignment_at_startup(tmp_path):
+    """Regression: the REAL __init__ must adopt a persona_assignment.json that is
+    already on disk. It used to call the sync before _store_lock existed (crash), and
+    before _kg_dirty was initialised (dirty flag lost)."""
+    kg = str(tmp_path / "kg.json")
+    store = InMemoryGraphStore()
+    store.upsert_node(RobotNode(id="chatbox", name="ChatBox", embodiment=Embodiment.CAT))
+    seed_role_library(store)
+    store.save(kg)
+    viz = GraphState(kg)
+    viz.set_persona("chatbox", "role:tutor", SHY_TUTOR)          # as if made in the UI earlier
+
+    loop = WebcamKGLoop(robot_id="chatbox", faces_path=str(tmp_path / "faces.npz"),
+                        kg_path=kg, show_window=False, seed=False,
+                        sessions_db=str(tmp_path / "s.db"), embed_fn=None)
+    assert "a tutor robot" in loop._build_system_prompt(None)
+    assert loop._persona_since is not None and loop._kg_dirty    # still flagged for saving

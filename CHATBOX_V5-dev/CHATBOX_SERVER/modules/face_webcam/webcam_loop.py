@@ -1258,7 +1258,6 @@ class WebcamKGLoop:
         # of the prompt so the new persona doesn't imitate the old one.
         self._persona_mtime: Optional[float] = None
         self._persona_since: Optional[str] = None
-        self._sync_persona_assignment()
 
         # #2: the whole chat pipeline (RAG + prompt build + LLM reply) runs on a
         # dedicated worker thread so the display never freezes while the robot
@@ -1278,6 +1277,11 @@ class WebcamKGLoop:
         self._last_save_t = 0.0
         self._save_min_interval = 1.0   # seconds between debounced saves
         self._last_save_mtime = 0.0     # mtime of our own last write (external-edit detect)
+
+        # Adopt a role/persona assigned earlier in the viz. Must run LAST: it takes
+        # the store lock, sets the dirty flag and clears the chat history, all of
+        # which are created above (and _kg_dirty is reset to False just before).
+        self._sync_persona_assignment()
 
     def _spawn_topic_detect(self, msg: str, verbal: str, person_id: str,
                             robot_id: str, turn_row_id: Optional[int]) -> None:

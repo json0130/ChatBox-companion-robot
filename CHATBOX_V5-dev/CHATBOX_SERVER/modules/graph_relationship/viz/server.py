@@ -21,6 +21,11 @@ kg_state.json shape (from InMemoryGraphStore.save):
 
 Run:
     python3 -m graph_relationship.viz.server --kg-path kg_state.json --port 8765
+
+Optional chat (the ONLY part that imports CHATBOX code): start with --ai-server HOST[:PORT]
+or --ollama [MODEL] and the server also answers POST /chat via modules.persona_chat — a
+robot-only conversation (role + persona, no information about the visitor). Without
+those flags nothing here imports anything, as above.
 """
 
 from __future__ import annotations
@@ -350,8 +355,13 @@ class GraphState:
             elif e.get("edge_type") == "has_persona":
                 current[src]["persona"] = nodes[tgt].get("descriptor", "")
                 current[src]["ocean"] = nodes[tgt].get("ocean")
+        try:                                   # what was last REQUESTED (chat uses this)
+            with open(self._persona_path(), "r", encoding="utf-8") as fh:
+                assigned = json.load(fh)
+        except (FileNotFoundError, json.JSONDecodeError, ValueError, OSError):
+            assigned = {}
         return {"robots": robots, "roles": sorted(roles.values(), key=lambda r: r["id"]),
-                "current": current}
+                "current": current, "assigned": assigned}
 
     def set_persona(self, robot: str, role: str, ocean: dict) -> dict:
         from datetime import datetime, timezone
@@ -459,7 +469,8 @@ class HistoryProvider:
         return self.store.turns_for_topic(topic, person, limit=limit)
 
 
-def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None):
+def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
+                 chat=None):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):  # keep console clean
             pass
@@ -500,6 +511,12 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None)
             elif path == "/persona":
                 self._send(200, json.dumps(state.persona_choices()).encode(),
                            "application/json")
+            elif path == "/chat":
+                body = {"available": chat is not None,
+                        "backend": chat.backend if chat is not None else None,
+                        "hint": None if chat is not None else
+                        "start the viz server with --ai-server HOST[:PORT] or --ollama [MODEL]"}
+                self._send(200, json.dumps(body).encode(), "application/json")
             else:
                 self._send(404, b"not found", "text/plain")
 
@@ -512,6 +529,26 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None)
                     active = state.set_culture_override(str(body.get("active_culture", "auto")))
                     self._send(200, json.dumps({"ok": True, "active": active}).encode(),
                                "application/json")
+                    return
+                if path == "/chat":
+                    if chat is None:
+                        self._send(503, json.dumps({"ok": False, "error":
+                            "chat is off: start the viz server with --ai-server HOST[:PORT] "
+                            "or --ollama [MODEL]"}).encode(), "application/json")
+                        return
+                    try:
+                        hist = [(str(u), str(b)) for u, b in (body.get("history") or [])]
+                        out = chat.reply(str(body.get("robot", "chatbox")),
+                                         str(body.get("message", "")), hist)
+                    except ValueError as exc:
+                        self._send(400, json.dumps({"ok": False, "error": str(exc)}).encode(),
+                                   "application/json")
+                        return
+                    except Exception as exc:    # backend failure: say so, don't 500
+                        self._send(502, json.dumps({"ok": False, "error": str(exc)}).encode(),
+                                   "application/json")
+                        return
+                    self._send(200, json.dumps({"ok": True, **out}).encode(), "application/json")
                     return
                 if path == "/persona":
                     try:
@@ -558,16 +595,26 @@ def main():
                     help="SQLite transcript DB for topic-click history (default: sessions.db)")
     ap.add_argument("--embed-model", default="nomic-embed-text",
                     help="Ollama embedding model for RAG history (blank to use keyword only)")
+    ap.add_argument("--ai-server", default=None, metavar="HOST[:PORT]",
+                    help="enable the persona chat, answered by the lab AI server")
+    ap.add_argument("--ollama", nargs="?", const="qwen2.5:7b", default=None, metavar="MODEL",
+                    help="enable the persona chat, answered by local Ollama (default qwen2.5:7b)")
     args = ap.parse_args()
 
     kg_path = os.path.abspath(args.kg_path)
     state = GraphState(kg_path)
+    chat = None
+    if args.ai_server or args.ollama:
+        from modules.persona_chat import OllamaChat, PersonaChat, ai_server_chat
+        llm = ai_server_chat(args.ai_server) if args.ai_server else OllamaChat(args.ollama)
+        chat = PersonaChat(kg_path, state._persona_path(), llm)
     history = HistoryProvider(os.path.abspath(args.sessions_db),
                               embed_model=(args.embed_model or None))
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(state, history))
+    server = ThreadingHTTPServer((args.host, args.port), make_handler(state, history, chat))
 
     print(f"[viz] serving KG visualizer at  http://{args.host}:{args.port}/")
     print(f"[viz] polling KG file:          {state.kg_path}")
+    print(f"[viz] persona chat:             {chat.backend if chat else 'off (--ai-server / --ollama to enable)'}")
     if history.store is not None:
         kind = "RAG" if history.rag is not None else "keyword"
         print(f"[viz] topic history ({kind}) from:  {os.path.abspath(args.sessions_db)}")

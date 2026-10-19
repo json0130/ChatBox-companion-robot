@@ -237,3 +237,23 @@ def role_persona_blocks(store: GraphStore, role: Optional[RoleNode],
                 f"  – {label}: {' '.join(items)}" if items else f"  – {label}"
                 for label, items in knowledge))
     return out
+
+
+def role_identity_block(store: GraphStore, robot_id: str, display_name: str,
+                        role: Optional[RoleNode], persona: Optional[PersonaNode]) -> str:
+    """The IDENTITY block: who the robot is, its job in the role, its personality and
+    its skills. Shared by the webcam loop and the persona chat (which add no
+    information about the person on top of it)."""
+    from .topics import robot_capability
+    cap = robot_capability(store, robot_id)
+    role_word = role.descriptor if role else "friendly companion"
+    ident = ["━━━ IDENTITY ━━━",
+             f"You are {display_name}, a {role_word} robot chatting "
+             f"with someone through a webcam."]
+    if role and role.brief:
+        ident.append(f"Your job in this role: {role.brief}.")
+    if persona:
+        ident.append(f"Personality: {persona.descriptor}.")
+    if cap and cap.items:
+        ident.append(f"You can: {', '.join(cap.items)}.")
+    return "\n".join(ident)

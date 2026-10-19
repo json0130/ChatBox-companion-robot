@@ -63,6 +63,31 @@
   .bars i span { position: relative; z-index: 1; line-height: 14px; }
   #p-role-info { font-size: 11px; color: var(--muted); margin-top: 6px; line-height: 1.45; }
   #p-role-info b { color: var(--text); font-weight: 600; }
+  /* ── persona chat (left of the persona panel) ── */
+  #pchat { bottom: 14px; right: 380px; width: 380px; display: flex; flex-direction: column; }
+  #pchat > summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+  #pchat[open] { max-height: calc(100vh - 28px); }
+  #pc-as { font-size: 11px; color: var(--muted); margin: 6px 0 4px; min-height: 15px; }
+  #pc-as b { color: var(--text); font-weight: 600; }
+  #pc-log { height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
+            padding: 8px; background: var(--bg); border: 1px solid var(--panel-brd);
+            border-radius: 8px; }
+  .pc-msg { max-width: 88%; padding: 6px 9px; border-radius: 9px; font-size: 12.5px;
+            line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
+  .pc-you { align-self: flex-end; background: #2a2d3d; }
+  .pc-bot { align-self: flex-start; background: #2f2540; border: 1px solid var(--relationship); }
+  .pc-bot .pc-meta { display: block; margin-top: 3px; font-size: 10px; color: var(--muted); }
+  .pc-sys { align-self: center; color: var(--muted); font-size: 11px; text-align: center; }
+  .pc-err { align-self: stretch; color: #ff9b8a; font-size: 11.5px; }
+  #pc-form { display: flex; gap: 6px; margin-top: 8px; }
+  #pc-input { flex: 1; min-width: 0; background: var(--bg); color: var(--text);
+              border: 1px solid var(--panel-brd); border-radius: 6px; padding: 6px 8px;
+              font: inherit; font-size: 12.5px; }
+  #pc-form button { background: var(--relationship); color: #12131a; font-weight: 600;
+                    border: 0; border-radius: 6px; padding: 0 12px; cursor: pointer; font: inherit; }
+  #pc-form button.alt { background: transparent; color: var(--muted);
+                        border: 1px solid var(--panel-brd); font-weight: 400; }
+  #pc-form button:disabled, #pc-input:disabled { opacity: .5; cursor: default; }
   #p-brief, #p-now, #p-msg { font-size: 11.5px; color: var(--muted); margin-top: 6px;
              line-height: 1.45; }
 
@@ -174,6 +199,17 @@
   <button id="p-apply">apply</button>
   <div id="p-msg"></div>
   <div id="p-now"></div>
+</details>
+
+<details id="pchat" class="panel" open>
+  <summary>Chat with the robot <span class="muted" style="font-weight:400">— role &amp; persona only</span></summary>
+  <div id="pc-as"></div>
+  <div id="pc-log"></div>
+  <form id="pc-form" autocomplete="off">
+    <input id="pc-input" type="text" maxlength="600" placeholder="say something to the robot…">
+    <button type="submit" id="pc-send">send</button>
+    <button type="button" id="pc-clear" class="alt" title="clear this conversation">clear</button>
+  </form>
 </details>
 
 <div id="controls" class="panel">
@@ -888,7 +924,7 @@ function fillPersona() {           // form ← what the robot plays right now
       pEl("p-msg").innerHTML = `<span style="color:#3ddc84">✓ applied — ${esc(pEl("p-robot").value)} now talks as a ${esc(cur.role_label)} (${esc(cur.persona || "")})</span>`;
       pPending = null;
     } else if (Date.now() - pPending.t0 > 6000) {
-      pEl("p-msg").innerHTML = `<span style="color:#ff9b8a">sent, but the robot hasn't picked it up — is the webcam loop running on this KG file? It will apply when the loop starts.</span>`;
+      pEl("p-msg").innerHTML = `<span style="color:#d9b45a">saved — the chat already uses it. The webcam loop hasn't picked it up (not running on this KG file?); it applies it when it starts.</span>`;
       pPending = null;
     }
   }
@@ -914,6 +950,7 @@ async function loadPersona() {
   if (keep) pEl("p-robot").value = keep;
   if (keepRole) pEl("p-role").value = keepRole;
   fillPersona();
+  chatSync();
 }
 pEl("p-apply").addEventListener("click", async () => {
   const ocean = {};
@@ -924,9 +961,77 @@ pEl("p-apply").addEventListener("click", async () => {
   })).json();
   pDirty = false; pSelCard = null;
   if (r.ok) pPending = { role: r.role, ocean: r.ocean, t0: Date.now() };
-  pEl("p-msg").textContent = r.ok ? "sent — waiting for the robot to pick it up…"
+  pEl("p-msg").textContent = r.ok ? "saved — the chat uses it now; waiting for the webcam loop (optional)…"
                                   : "not applied: " + r.error;
 });
+// ---- persona chat -----------------------------------------------------------
+// Talks to POST /chat, which builds the prompt from the LAST APPLIED setup (the
+// assignment file), so it needs no webcam loop. The conversation restarts whenever a
+// new setup is applied, so the old persona's replies can't leak into the new one.
+const pcEl = id => document.getElementById(id);
+let chatHist = [], chatEpoch, chatBusy = false, chatOn = false;
+function chatAdd(cls, html) {
+  const log = pcEl("pc-log"), d = document.createElement("div");
+  d.className = "pc-msg " + cls; d.innerHTML = html; log.appendChild(d);
+  log.scrollTop = log.scrollHeight; return d;
+}
+function oceanText(o) { return TRAITS.map(([k]) => k + fmt2(o[k] || 0)).join(" "); }
+function chatSync() {            // called from loadPersona() each second
+  if (!pChoices) return;
+  const robot = pEl("p-robot").value || "chatbox";
+  const a = (pChoices.assigned || {})[robot] || null, epoch = a ? a.ts : null;
+  const role = a ? ((pChoices.roles || []).find(r => r.id === a.role) || {}).label || a.role
+                 : ((pChoices.current || {})[robot] || {}).role_label || "";
+  if (chatEpoch !== undefined && epoch !== chatEpoch) {
+    chatHist = [];
+    chatAdd("pc-sys", `— ${esc(robot)} now plays <b>${esc(role)}</b>` +
+            (a ? ` (${esc(oceanText(a.ocean))})` : "") + ` · conversation restarted —`);
+  }
+  chatEpoch = epoch;
+  if (!pcEl("pc-as").dataset.fromReply)
+    pcEl("pc-as").innerHTML = role ? `as <b>${esc(role)}</b>` + (a ? ` · ${esc(oceanText(a.ocean))}` : "") : "";
+}
+async function chatConfig() {
+  try {
+    const c = await (await fetch("/chat", { cache: "no-store" })).json();
+    chatOn = c.available;
+    pcEl("pc-input").disabled = pcEl("pc-send").disabled = !chatOn;
+    if (!chatOn && !pcEl("pc-log").children.length)
+      chatAdd("pc-err", "Chat is off. Restart the viz server with <code>--ai-server HOST[:PORT]</code> " +
+              "or <code>--ollama [MODEL]</code>.");
+    else if (chatOn && !pcEl("pc-log").children.length)
+      chatAdd("pc-sys", `connected: ${esc(c.backend)} — pick a role/persona, apply, then talk`);
+  } catch (_) {}
+}
+pcEl("pc-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const input = pcEl("pc-input"), msg = input.value.trim();
+  if (!msg || chatBusy || !chatOn) return;
+  input.value = ""; chatBusy = true; pcEl("pc-send").disabled = true;
+  chatAdd("pc-you", esc(msg));
+  const wait = chatAdd("pc-bot", "…");
+  try {
+    const r = await fetch("/chat", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ robot: pEl("p-robot").value || "chatbox", message: msg, history: chatHist }) });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || r.status);
+    chatHist.push([msg, j.reply]);
+    wait.innerHTML = esc(j.reply) + `<span class="pc-meta">${esc(j.role)} · ${esc(j.persona)}` +
+      (j.tag ? ` · [${esc(j.tag)}]` : "") + `</span>`;
+    pcEl("pc-as").dataset.fromReply = "1";
+    pcEl("pc-as").innerHTML = `as <b>${esc(j.role)}</b> · ${esc(j.persona)}`;
+  } catch (err) {
+    wait.className = "pc-msg pc-err"; wait.textContent = "No reply: " + err.message;
+  } finally {
+    chatBusy = false; pcEl("pc-send").disabled = !chatOn; pcEl("pc-log").scrollTop = 1e9; input.focus();
+  }
+});
+pcEl("pc-clear").addEventListener("click", () => {
+  chatHist = []; pcEl("pc-log").innerHTML = ""; delete pcEl("pc-as").dataset.fromReply;
+  chatConfig();
+});
+chatConfig();
+
 loadPersona();
 setInterval(loadPersona, 1000);
 

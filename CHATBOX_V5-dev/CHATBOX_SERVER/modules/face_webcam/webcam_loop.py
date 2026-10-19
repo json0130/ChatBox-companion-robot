@@ -2036,30 +2036,16 @@ class WebcamKGLoop:
         """Assemble the system prompt from the seeded RobotNode + retrieved memory,
         in three labelled blocks. Used when PAD is disabled (no PAD system_prompt).
         Mood/emotion is deliberately not injected (kept for the graph/viz only)."""
-        from modules.graph_relationship.topics import robot_capability
         from modules.graph_relationship.roles import (
-            attached_persona, attached_role, role_persona_blocks,
+            attached_persona, attached_role, role_identity_block, role_persona_blocks,
         )
         persona = attached_persona(self.store, self.robot_id)
-        personas = [persona.descriptor] if persona else []
         role = attached_role(self.store, self.robot_id)
-        cap = robot_capability(self.store, self.robot_id)
-        caps = cap.items if cap else []
-
-        role_word = role.descriptor if role else "friendly companion"
 
         blocks: list[str] = []
         # ── IDENTITY ──
-        ident = ["━━━ IDENTITY ━━━",
-                 f"You are {self._robot_display}, a {role_word} robot chatting "
-                 f"with someone through a webcam."]
-        if role and role.brief:
-            ident.append(f"Your job in this role: {role.brief}.")
-        if personas:
-            ident.append(f"Personality: {', '.join(personas)}.")
-        if caps:
-            ident.append(f"You can: {', '.join(caps)}.")
-        blocks.append("\n".join(ident))
+        blocks.append(role_identity_block(self.store, self.robot_id,
+                                          self._robot_display, role, persona))
 
         # ── HOW TO REPLY ──
         how_to_reply = (

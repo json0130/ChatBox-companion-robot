@@ -6,6 +6,36 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## feat: persona chat panel in the viz — talk to the robot as set up  *(branch `feature/persona-roles`, also on `feature/rolesim`)*
+**Date:** 2026-10-19
+
+### What was tried
+A "Chat with the robot" panel next to the persona panel, to compare how different roles / OCEAN personas change
+the replies. `POST /chat` on the viz server (enabled by `--ai-server HOST[:PORT]` or `--ollama [MODEL]`) →
+`modules/persona_chat.py`. About the ROBOT only: the prompt is IDENTITY + the loop's general reply rules (minus the
+webcam-memory ones) + `role_persona_blocks()`; no WHO block, memory, RAG, culture or tier — it does not use who the
+visitor is. Each message re-reads the KG file and `persona_assignment.json` into a private store, so the latest Apply
+applies at once and the webcam loop need not run. The page restarts the conversation (and clears the history sent
+to the model) whenever a new setup is applied, and tags each reply with role · persona words · expression tag.
+`roles.role_identity_block()` now builds the IDENTITY block for both the loop and the chat (golden test: the loop's
+prompt is byte-identical). `GET /persona` also returns `assigned` (what was last requested).
+
+### What worked
+- `test_persona_chat.py` (stub LLM, real HTTP): Apply → next message uses it; different setups give different
+  prompts; no person information in the prompt; history capped; error paths (chat off 503 / empty 400 / backend
+  502); works on a KG file with no seeded role library; reply-rule lines still match the loop's prompt.
+- Live on a copy of the KG against the AI server: same question under Baymax (companion) and Roz (receptionist) gave
+  clearly different replies, divider and meta line correct.
+
+### What didn't work / notes
+- A receptionist with no building knowledge invents directions ("…just to your left, past the security desk"):
+  the loop's "don't state specifics not in memory" rule is not enough on its own. Add facts to the role, as the
+  rolesim scenario does.
+- The old Apply message said the robot "hasn't picked it up" even though chat already uses the setup; reworded.
+- A viz server started before this change must be restarted to get `/chat`.
+
+---
+
 ## refactor: render the role/persona prompt blocks from roles.py  *(branch `feature/persona-roles`; same change as on `feature/rolesim`)*
 **Date:** 2026-10-19
 

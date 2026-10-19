@@ -6,6 +6,26 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## fix: persona chat defaults to the AI server and explains why it is unavailable  *(branch `feature/persona-roles`, also on `feature/rolesim`)*
+**Date:** 2026-10-19
+
+### What was tried
+The chat was only enabled by `--ai-server` / `--ollama`; started with neither, the page greyed out the input with no
+reason ("not able to type"). Now the lab AI server is the default backend (`$AI_HOST`, else the lab IP), `--ollama`
+swaps it, `--no-chat` turns it off. The page says why when chat is unavailable (switched off, or an old viz process
+with no `/chat` route), re-checks every 5 s so a restarted server recovers without a reload, and an unreachable AI
+server gives a message pointing at `--ollama` instead of a bare error; the client retries the connection per message.
+
+### What worked
+- Viz started with no flags → chat on via the AI server; typing, send and the reply work in the browser.
+  `--no-chat` shows the explanation and a disabled input. 10 chat tests pass.
+
+### What didn't work / notes
+- Not reproduced as a bug on the page itself: the input was enabled and focusable; the reported symptom matches a viz
+  started without a backend flag (or an old process).
+
+---
+
 ## feat: persona chat panel in the viz — talk to the robot as set up  *(branch `feature/persona-roles`, also on `feature/rolesim`)*
 **Date:** 2026-10-19
 

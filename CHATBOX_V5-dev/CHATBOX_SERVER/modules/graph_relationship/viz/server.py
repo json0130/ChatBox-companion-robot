@@ -22,10 +22,11 @@ kg_state.json shape (from InMemoryGraphStore.save):
 Run:
     python3 -m graph_relationship.viz.server --kg-path kg_state.json --port 8765
 
-Optional chat (the ONLY part that imports CHATBOX code): start with --ai-server HOST[:PORT]
-or --ollama [MODEL] and the server also answers POST /chat via modules.persona_chat — a
-robot-only conversation (role + persona, no information about the visitor). Without
-those flags nothing here imports anything, as above.
+Chat (the ONLY part that imports CHATBOX code): the server also answers POST /chat via
+modules.persona_chat — a robot-only conversation (role + persona, no information about
+the visitor). Backend: the lab AI server by default ($AI_HOST or the lab IP),
+--ai-server HOST[:PORT] to pick another, --ollama [MODEL] for a local model, --no-chat
+to switch it off (then nothing here imports anything, as above).
 """
 
 from __future__ import annotations
@@ -515,7 +516,7 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
                 body = {"available": chat is not None,
                         "backend": chat.backend if chat is not None else None,
                         "hint": None if chat is not None else
-                        "start the viz server with --ai-server HOST[:PORT] or --ollama [MODEL]"}
+                        "the viz server was started with --no-chat; restart it without that flag"}
                 self._send(200, json.dumps(body).encode(), "application/json")
             else:
                 self._send(404, b"not found", "text/plain")
@@ -533,8 +534,8 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
                 if path == "/chat":
                     if chat is None:
                         self._send(503, json.dumps({"ok": False, "error":
-                            "chat is off: start the viz server with --ai-server HOST[:PORT] "
-                            "or --ollama [MODEL]"}).encode(), "application/json")
+                            "chat is off (the viz server was started with --no-chat)"}
+                        ).encode(), "application/json")
                         return
                     try:
                         hist = [(str(u), str(b)) for u, b in (body.get("history") or [])]
@@ -596,17 +597,21 @@ def main():
     ap.add_argument("--embed-model", default="nomic-embed-text",
                     help="Ollama embedding model for RAG history (blank to use keyword only)")
     ap.add_argument("--ai-server", default=None, metavar="HOST[:PORT]",
-                    help="enable the persona chat, answered by the lab AI server")
+                    help="persona chat backend: this AI server (default: the lab AI server)")
     ap.add_argument("--ollama", nargs="?", const="qwen2.5:7b", default=None, metavar="MODEL",
-                    help="enable the persona chat, answered by local Ollama (default qwen2.5:7b)")
+                    help="persona chat backend: local Ollama instead (default model qwen2.5:7b)")
+    ap.add_argument("--no-chat", action="store_true", help="turn the persona chat off")
     args = ap.parse_args()
 
     kg_path = os.path.abspath(args.kg_path)
     state = GraphState(kg_path)
     chat = None
-    if args.ai_server or args.ollama:
-        from modules.persona_chat import OllamaChat, PersonaChat, ai_server_chat
-        llm = ai_server_chat(args.ai_server) if args.ai_server else OllamaChat(args.ollama)
+    if not args.no_chat:
+        from modules.persona_chat import (
+            DEFAULT_AI_SERVER, OllamaChat, PersonaChat, ai_server_chat,
+        )
+        llm = (OllamaChat(args.ollama) if args.ollama
+               else ai_server_chat(args.ai_server or DEFAULT_AI_SERVER))
         chat = PersonaChat(kg_path, state._persona_path(), llm)
     history = HistoryProvider(os.path.abspath(args.sessions_db),
                               embed_model=(args.embed_model or None))
@@ -614,7 +619,7 @@ def main():
 
     print(f"[viz] serving KG visualizer at  http://{args.host}:{args.port}/")
     print(f"[viz] polling KG file:          {state.kg_path}")
-    print(f"[viz] persona chat:             {chat.backend if chat else 'off (--ai-server / --ollama to enable)'}")
+    print(f"[viz] persona chat:             {chat.backend if chat else 'off (--no-chat)'}")
     if history.store is not None:
         kind = "RAG" if history.rag is not None else "keyword"
         print(f"[viz] topic history ({kind}) from:  {os.path.abspath(args.sessions_db)}")

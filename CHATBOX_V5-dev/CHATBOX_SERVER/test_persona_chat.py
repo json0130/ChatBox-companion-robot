@@ -23,7 +23,7 @@ from modules.graph_relationship.schema import Embodiment, RobotNode
 from modules.graph_relationship.store import InMemoryGraphStore
 from modules.graph_relationship.viz.server import GraphState, make_handler
 from modules.persona_chat import (
-    MAX_HISTORY_TURNS, REPLY_RULES, PersonaChat, split_tag,
+    MAX_HISTORY_TURNS, REPLY_RULES, ChatError, PersonaChat, split_tag,
 )
 from modules.role_seed import seed_role_library
 
@@ -121,7 +121,7 @@ def test_error_paths(env, tmp_path):
         env2 = {"url": f"http://127.0.0.1:{off.server_port}"}
         assert call(env2, "/chat")[1]["available"] is False
         s, out = call(env2, "/chat", {"message": "hi"})
-        assert s == 503 and "--ai-server" in out["error"]
+        assert s == 503 and "--no-chat" in out["error"]
     finally:
         off.shutdown()
 
@@ -139,6 +139,56 @@ def test_works_without_a_seeded_role_library(env, tmp_path):
     llm = StubLLM()
     out = PersonaChat(bare, state._persona_path(), llm).reply("chatbox", "hi", [])
     assert out["role"] == "tutor" and "HOW YOU TALK AS A TUTOR" in llm.calls[-1]["system"]
+
+
+class _LateServer(StubLLM):
+    """An AI-server client that was unreachable at start-up and comes up later."""
+    label = "ai-server:late"
+
+    def __init__(self):
+        super().__init__()
+        self.available, self.connects = False, 0
+
+    def connect(self):
+        self.connects += 1
+        self.available = True
+        return True
+
+    def respond(self, *a, **k):
+        if not self.available:
+            return "[LLM not connected — run with --ai-server]"
+        return super().respond(*a, **k)
+
+
+def test_reconnects_when_the_server_comes_up_later(env):
+    late = _LateServer()
+    chat = PersonaChat(env["kg"], env["state"]._persona_path(), late)
+    out = chat.reply("chatbox", "hi", [])              # start-up connect had failed; this retries
+    assert late.connects == 1 and out["reply"] == "Hello there!"
+
+
+def test_unreachable_server_message_points_at_the_fix(env):
+    class Down(StubLLM):
+        available = False
+        label = "ai-server:x:7898"
+
+        def connect(self):
+            return False
+
+        def respond(self, *a, **k):
+            return "[LLM not connected — run with --ai-server]"
+    with pytest.raises(ChatError, match="--ollama"):
+        PersonaChat(env["kg"], env["state"]._persona_path(), Down()).reply("chatbox", "hi", [])
+
+
+def test_default_backend_is_the_lab_ai_server(monkeypatch):
+    import importlib
+    import modules.persona_chat as pc
+    assert pc.DEFAULT_AI_SERVER == "172.24.47.255"
+    monkeypatch.setenv("AI_HOST", "10.0.0.9")
+    assert importlib.reload(pc).DEFAULT_AI_SERVER == "10.0.0.9"      # $AI_HOST wins
+    monkeypatch.delenv("AI_HOST")
+    importlib.reload(pc)
 
 
 def test_split_tag():

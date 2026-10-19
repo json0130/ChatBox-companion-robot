@@ -28,6 +28,10 @@ from modules.graph_relationship.schema import Embodiment, RobotNode
 from modules.graph_relationship.store import InMemoryGraphStore
 from modules.role_seed import seed_role_library
 
+# The lab AI server the robot talks to by default ($AI_HOST overrides; the viz server's
+# --ai-server HOST[:PORT] overrides both). Used when no chat backend flag is given.
+DEFAULT_AI_SERVER = os.environ.get("AI_HOST") or "172.24.47.255"
+
 MAX_HISTORY_TURNS = 6          # (message, reply) pairs sent back to the model
 MAX_MESSAGE_CHARS = 600
 
@@ -86,7 +90,7 @@ def ai_server_chat(spec: str):
     from modules.ai_server_llm import AIServerLLM, DEFAULT_PORT
     host, _, port = spec.partition(":")
     llm = AIServerLLM(host, int(port) if port else DEFAULT_PORT)
-    llm.connect()
+    llm.connect()                       # False if unreachable: reply() retries per message
     llm.label = f"ai-server:{llm.host}:{llm.port}"
     return llm
 
@@ -148,13 +152,18 @@ class PersonaChat:
         message = (message or "").strip()[:MAX_MESSAGE_CHARS]
         if not message:
             raise ValueError("empty message")
+        if getattr(self.llm, "available", True) is False:
+            self.llm.connect()          # the server may have come up since start-up
         store, assigned = build_store(self.kg_path, self.assignment_path, robot_id)
         system, who = build_prompt(store, robot_id)
         hist = [(str(u)[:MAX_MESSAGE_CHARS], str(b)[:MAX_MESSAGE_CHARS])
                 for u, b in history[-MAX_HISTORY_TURNS:]]
         raw = self.llm.respond(system, message, hist)
-        if raw.startswith("[LLM error") or raw.startswith("[LLM not connected"):
+        if raw.startswith("[LLM error"):
             raise ChatError(raw.strip("[]"))
+        if raw.startswith("[LLM not connected"):
+            raise ChatError(f"cannot reach {self.backend} — is the AI server up and on this "
+                            "network? (use --ollama for a local model)")
         tag, text = split_tag(raw)
         return {"reply": text or raw, "tag": tag, **who,
                 "assigned_ts": (assigned or {}).get("ts"), "backend": self.backend}

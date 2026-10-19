@@ -209,13 +209,14 @@ cd /home/jay/Desktop/2026-Jay/ChatBox-companion-robot/CHATBOX-DEMO_V4/CHATBOX_SE
   python3 -m modules.face_webcam.webcam_loop --ai-server 172.24.47.255
   python3 -m modules.face_webcam.webcam_loop --llm
 
-  # Terminal 2 — the graph + the "Role & persona" panel → http://127.0.0.1:8765
+  # Terminal 2 — the graph + the "Role & persona" panel + "Chat with the robot" panel
+  # → http://127.0.0.1:8765. The chat talks to the lab AI server by default ($AI_HOST or
+  # 172.24.47.255); it needs no webcam loop and knows nothing about who you are.
   python3 -m modules.graph_relationship.viz.server
-  # …with the "Chat with the robot" panel (talk to the robot as set up; role + persona only,
-  # nothing about who you are). Needs no webcam loop; pick ONE backend:
-  python3 -m modules.graph_relationship.viz.server --ai-server 172.24.47.255
-  python3 -m modules.graph_relationship.viz.server --ollama            # qwen2.5:7b
+  python3 -m modules.graph_relationship.viz.server --ai-server 10.0.0.5   # another AI server
+  python3 -m modules.graph_relationship.viz.server --ollama               # local qwen2.5:7b
   python3 -m modules.graph_relationship.viz.server --ollama qwen2.5:14b
+  python3 -m modules.graph_relationship.viz.server --no-chat              # graph only
 
   # Pick a role + set the OCEAN sliders → apply. The loop adopts it on its next
   # tick (terminal 1 prints "role → … ; persona → …"). Saved in

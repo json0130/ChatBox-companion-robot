@@ -991,17 +991,23 @@ function chatSync() {            // called from loadPersona() each second
   if (!pcEl("pc-as").dataset.fromReply)
     pcEl("pc-as").innerHTML = role ? `as <b>${esc(role)}</b>` + (a ? ` · ${esc(oceanText(a.ocean))}` : "") : "";
 }
+let chatState = null;            // "on" | "off" | "missing" — announce only on change
 async function chatConfig() {
-  try {
-    const c = await (await fetch("/chat", { cache: "no-store" })).json();
-    chatOn = c.available;
-    pcEl("pc-input").disabled = pcEl("pc-send").disabled = !chatOn;
-    if (!chatOn && !pcEl("pc-log").children.length)
-      chatAdd("pc-err", "Chat is off. Restart the viz server with <code>--ai-server HOST[:PORT]</code> " +
-              "or <code>--ollama [MODEL]</code>.");
-    else if (chatOn && !pcEl("pc-log").children.length)
-      chatAdd("pc-sys", `connected: ${esc(c.backend)} — pick a role/persona, apply, then talk`);
-  } catch (_) {}
+  let state, c = {};
+  try { c = await (await fetch("/chat", { cache: "no-store" })).json(); state = c.available ? "on" : "off"; }
+  catch (_) { state = "missing"; }          // old viz process: no /chat route at all
+  chatOn = state === "on";
+  pcEl("pc-input").disabled = pcEl("pc-send").disabled = !chatOn;
+  pcEl("pc-input").placeholder = chatOn ? "say something to the robot…" : "chat unavailable — see the note above";
+  if (state === chatState) return;
+  chatState = state;
+  if (state === "on")
+    chatAdd("pc-sys", `connected: ${esc(c.backend)} — pick a role/persona, apply, then talk`);
+  else if (state === "off")
+    chatAdd("pc-err", esc(c.hint || "Chat is off."));
+  else
+    chatAdd("pc-err", "This viz server has no chat endpoint — it was started before the chat was " +
+            "added. Stop it (Ctrl+C) and run it again: <code>python3 -m modules.graph_relationship.viz.server</code>");
 }
 pcEl("pc-form").addEventListener("submit", async e => {
   e.preventDefault();
@@ -1028,9 +1034,10 @@ pcEl("pc-form").addEventListener("submit", async e => {
 });
 pcEl("pc-clear").addEventListener("click", () => {
   chatHist = []; pcEl("pc-log").innerHTML = ""; delete pcEl("pc-as").dataset.fromReply;
-  chatConfig();
+  chatState = null; chatConfig();
 });
 chatConfig();
+setInterval(chatConfig, 5000);
 
 loadPersona();
 setInterval(loadPersona, 1000);

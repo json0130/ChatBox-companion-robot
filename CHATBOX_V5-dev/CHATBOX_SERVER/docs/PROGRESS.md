@@ -6,6 +6,19 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## refactor: render the role/persona prompt blocks from roles.py  *(branch `feature/persona-roles`; same change as on `feature/rolesim`)*
+**Date:** 2026-10-19
+
+### What was tried
+`_role_persona_blocks()` moved from `webcam_loop.py` into `roles.role_persona_blocks(store, role, persona)` so other
+callers (rolesim's B0 robot, the persona chat) render exactly the prompt the loop does. `test_prompt_golden.py`
+holds three prompts recorded BEFORE the move (spec role, assigned tutor, tutor + a recognised person).
+
+### What worked
+- The loop's prompt is byte-identical after the move; all persona tests pass.
+
+---
+
 ## fix: adopt a saved role/persona assignment at loop start-up  *(branch `feature/persona-roles`, also on `feature/rolesim`)*
 **Date:** 2026-10-19
 

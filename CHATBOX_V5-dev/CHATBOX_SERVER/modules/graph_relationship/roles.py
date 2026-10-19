@@ -199,3 +199,41 @@ def apply_assignment(store: GraphStore, robot_id: str, rid: str, ocean: Dict,
     """Attach role `rid` and the OCEAN persona to the robot (one assignment)."""
     return (attach_role(store, robot_id, rid, source=source),
             assign_persona(store, robot_id, ocean, source=source))
+
+
+# ── prompt rendering ───────────────────────────────────────────────────────────
+
+def role_persona_blocks(store: GraphStore, role: Optional[RoleNode],
+                        persona: Optional[PersonaNode]) -> List[str]:
+    """HOW YOU TALK + WHAT YOU KNOW, from the robot's ATTACHED role subgraph and
+    OCEAN persona only — nothing here depends on who the robot is talking to.
+    Placed after the HOW TO REPLY rules so it colours HOW the robot replies,
+    never WHAT it may claim. Shared by the webcam loop and rolesim's B0 robot."""
+    parts = role_parts(store, role.id) if role else {}
+    lines = lambda kind: role_lines(store, role.id, kind) if role else []
+    style = (ocean_style(persona.ocean) if persona and persona.ocean else []) \
+        + lines("manner") + lines("do")
+    talk = []
+    if lines("goal"):
+        talk.append("Goal in every conversation: " + " ".join(lines("goal")))
+    if style:
+        talk.append("Style — keep to it every turn:\n"
+                    + "\n".join(f"  – {x}" for x in style))
+    if lines("avoid"):
+        talk.append("Avoid:\n" + "\n".join(f"  – {x}" for x in lines("avoid")))
+    if lines("phrase"):
+        talk.append("Lines in your voice (for tone only — never repeat them word "
+                    "for word):\n" + "\n".join(f'  – "{x}"' for x in lines("phrase")))
+    out = []
+    if talk:
+        who = role.descriptor if role else "yourself"
+        out.append(f"━━━ HOW YOU TALK AS A {who.upper()} ━━━\n" + "\n".join(talk))
+    # ponytail: whole knowledge subgraph injected; rank by the message (like the
+    # culture offers) once a role carries more than a handful of topics.
+    knowledge = parts.get("knowledge", [])
+    if knowledge:
+        out.append(
+            f"━━━ WHAT YOU KNOW AS A {role.descriptor.upper()} ━━━\n" + "\n".join(
+                f"  – {label}: {' '.join(items)}" if items else f"  – {label}"
+                for label, items in knowledge))
+    return out

@@ -471,7 +471,7 @@ class HistoryProvider:
 
 
 def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
-                 chat=None):
+                 chat=None, robot=None):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):  # keep console clean
             pass
@@ -549,6 +549,8 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
                         self._send(502, json.dumps({"ok": False, "error": str(exc)}).encode(),
                                    "application/json")
                         return
+                    # robot = Esp32Link or None: the reply's action tag drives the real robot
+                    out["robot"] = robot.show(out.get("tag", "")) if robot is not None else None
                     self._send(200, json.dumps({"ok": True, **out}).encode(), "application/json")
                     return
                 if path == "/persona":
@@ -601,6 +603,9 @@ def main():
     ap.add_argument("--ollama", nargs="?", const="qwen2.5:7b", default=None, metavar="MODEL",
                     help="persona chat backend: local Ollama instead (default model qwen2.5:7b)")
     ap.add_argument("--no-chat", action="store_true", help="turn the persona chat off")
+    ap.add_argument("--esp32-host", default="", metavar="IP",
+                    help="ChatBox ESP32: each chat reply's action tag is sent as a robot expression")
+    ap.add_argument("--esp32-port", type=int, default=8888, help="ESP32 TCP port (default 8888)")
     args = ap.parse_args()
 
     kg_path = os.path.abspath(args.kg_path)
@@ -615,11 +620,16 @@ def main():
         chat = PersonaChat(kg_path, state._persona_path(), llm)
     history = HistoryProvider(os.path.abspath(args.sessions_db),
                               embed_model=(args.embed_model or None))
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(state, history, chat))
+    robot = None
+    if args.esp32_host:
+        from modules.esp32_link import Esp32Link
+        robot = Esp32Link(args.esp32_host, args.esp32_port)
+    server = ThreadingHTTPServer((args.host, args.port), make_handler(state, history, chat, robot))
 
     print(f"[viz] serving KG visualizer at  http://{args.host}:{args.port}/")
     print(f"[viz] polling KG file:          {state.kg_path}")
     print(f"[viz] persona chat:             {chat.backend if chat else 'off (--no-chat)'}")
+    print(f"[viz] robot (ESP32):            {f'{robot.host}:{robot.port}' if robot else 'off (--esp32-host)'}")
     if history.store is not None:
         kind = "RAG" if history.rag is not None else "keyword"
         print(f"[viz] topic history ({kind}) from:  {os.path.abspath(args.sessions_db)}")

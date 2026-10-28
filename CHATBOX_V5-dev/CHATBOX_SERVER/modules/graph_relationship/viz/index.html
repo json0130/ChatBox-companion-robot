@@ -1023,7 +1023,10 @@ pcEl("pc-form").addEventListener("submit", async e => {
     if (!j.ok) throw new Error(j.error || r.status);
     chatHist.push([msg, j.reply]);
     wait.innerHTML = esc(j.reply) + `<span class="pc-meta">${esc(j.role)} · ${esc(j.persona)}` +
-      (j.tag ? ` · [${esc(j.tag)}]` : "") + `</span>`;
+      (j.tag ? ` · [${esc(j.tag)}]` : "") +
+      (j.robot ? (j.robot.sent ? ` · robot: ${esc(j.robot.expression)} ✓`
+                  : j.robot.expression ? ` · robot unreachable (${esc(j.robot.host)})`
+                  : " · robot: no expression for this tag") : "") + `</span>`;
     pcEl("pc-as").dataset.fromReply = "1";
     pcEl("pc-as").innerHTML = `as <b>${esc(j.role)}</b> · ${esc(j.persona)}`;
   } catch (err) {

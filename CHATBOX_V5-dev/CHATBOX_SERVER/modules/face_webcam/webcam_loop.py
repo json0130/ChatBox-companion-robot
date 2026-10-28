@@ -80,6 +80,7 @@ from modules.face_webcam.face_id import FaceIdentifier
 from modules.face_webcam.emotion_detector import EmotionDetector
 from modules.face_webcam.demographics import DemographicsDetector
 from modules.session_store import SessionStore, DEFAULT_DB as _DEFAULT_SESSIONS_DB
+from modules.esp32_link import TAG_TO_ESP32 as _TAG_TO_ESP32, send_esp32 as _send_esp32
 
 # ── LLM ───────────────────────────────────────────────────────────────────────
 
@@ -138,25 +139,6 @@ _TIER_COL = {
 
 _TAG_RE = re.compile(r'^\[([A-Z_]+)\]', re.ASCII)
 
-# Map LLM action tags → ESP32 validExpressions[]
-_TAG_TO_ESP32: dict[str, str] = {
-    "GREETING": "greeting",
-    "WAVE":     "wave",
-    "NOD":      "head_nod",
-    "CONFUSED": "confused",
-    "SAD":      "sad",
-    "ANGRY":    "angry",
-    "SHRUG":    "shrug",
-    "POINT":    "point",
-    "DANCE":    "seq_dance",
-    "SLEEP":    "sleep",
-    "IDLE":     "idle",
-    "HAPPY":    "ears_wiggle",
-    "SURPRISE": "ears_perk",
-    "EARS":     "ears_perk",
-}
-
-
 _LEAK_MARKERS = ("<|im_start|>", "<|im_end|>", "<|endoftext|>",
                  "\nuser", "\nUser", "\nassistant", "\nAssistant")
 
@@ -179,16 +161,6 @@ def _parse_llm_response(text: str) -> tuple[str, str]:
     if m:
         return m.group(1), text[m.end():].strip()
     return "", text.strip()
-
-
-def _send_esp32(expression: str, host: str, port: int = 8888,
-                timeout: float = 0.5) -> None:
-    try:
-        with socket.create_connection((host, port), timeout=timeout) as s:
-            s.sendall((expression + "\n").encode())
-        print(f"[ESP32] → {expression!r}")
-    except OSError as exc:
-        print(f"[ESP32] send failed ({host}:{port}): {exc}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

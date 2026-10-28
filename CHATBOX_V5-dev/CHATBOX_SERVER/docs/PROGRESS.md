@@ -6,6 +6,27 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
+## feat: viz persona chat drives the real ChatBox through the ESP32  *(branch `feature/persona-roles`, local)*
+**Date:** 2026-10-28
+
+### What was tried
+`--esp32-host IP [--esp32-port]` on the viz server: after each persona-chat reply its action tag is sent to the
+ChatBox ESP32 as an expression, so a role/persona assigned in the graph UI can be watched on the robot. The tag map and
+sender moved from `webcam_loop.py` into `modules/esp32_link.py` (stdlib only; the loop imports it back under the same
+names); `/chat` returns `robot: {host, expression, sent}` and the meta line shows it.
+
+### What worked
+- Tests with a fake ESP32 socket: tag → expression line received; untagged reply sends nothing; an unreachable robot
+  still returns the reply (`sent: false`); no flag → `robot: null`. 18 persona tests pass.
+
+### What didn't work / notes
+- NOT run on the real robot yet. The ESP32 only shows expressions (ears/face): the ChatBox code has no speech output,
+  so wording differences between roles/personas are only visible in the panel text, not heard. Navel (own TTS) would
+  need a separate output adapter.
+- First version of the test raced the fake robot's thread; it now waits for the line.
+
+---
+
 ## fix: persona chat defaults to the AI server and explains why it is unavailable  *(branch `feature/persona-roles`, also on `feature/rolesim`)*
 **Date:** 2026-10-19
 

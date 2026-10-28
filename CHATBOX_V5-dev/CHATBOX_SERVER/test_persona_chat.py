@@ -90,6 +90,74 @@ def test_apply_then_chat_uses_it_without_a_loop(env):
     assert call(env, "/persona")[1]["assigned"]["chatbox"]["role"] == "role:storyteller"
 
 
+def _fake_esp32():
+    """A listening socket standing in for the ChatBox ESP32; returns (port, lines list)."""
+    import socket
+    srv = socket.socket(); srv.bind(("127.0.0.1", 0)); srv.listen(5)
+    lines = []
+
+    def serve():
+        while True:
+            try:
+                conn, _ = srv.accept()
+            except OSError:
+                return
+            with conn:
+                lines.append(conn.makefile().readline().strip())
+    threading.Thread(target=serve, daemon=True).start()
+    return srv, lines
+
+
+def test_reply_tag_drives_the_esp32(env):
+    from modules.esp32_link import Esp32Link
+    srv, lines = _fake_esp32()
+    robot = Esp32Link("127.0.0.1", srv.getsockname()[1])
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
+        env["state"], None, PersonaChat(env["kg"], env["state"]._persona_path(), env["llm"]), robot))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/chat"
+        req = urllib.request.Request(url, json.dumps({"message": "hi"}).encode(),
+                                     {"Content-Type": "application/json"})
+        out = json.load(urllib.request.urlopen(req, timeout=5))
+        assert out["tag"] == "HAPPY"
+        assert out["robot"] == {"host": f"127.0.0.1:{robot.port}", "expression": "ears_wiggle", "sent": True}
+        import time
+        for _ in range(50):                                    # the fake robot logs from its own thread
+            if lines:
+                break
+            time.sleep(0.02)
+        assert lines == ["ears_wiggle"]
+        env["llm"].reply = "no tag here"                       # untagged reply → nothing sent
+        out = json.load(urllib.request.urlopen(req, timeout=5))
+        assert out["robot"]["sent"] is False and out["robot"]["expression"] is None
+        assert lines == ["ears_wiggle"]
+    finally:
+        server.shutdown(); srv.close()
+
+
+def test_unreachable_robot_does_not_break_the_reply(env):
+    from modules.esp32_link import Esp32Link
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
+        env["state"], None, PersonaChat(env["kg"], env["state"]._persona_path(), env["llm"]),
+        Esp32Link("127.0.0.1", 1)))                            # nothing listens on port 1
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{server.server_port}/chat",
+                                     json.dumps({"message": "hi"}).encode(),
+                                     {"Content-Type": "application/json"})
+        out = json.load(urllib.request.urlopen(req, timeout=5))
+        assert out["ok"] and out["reply"] and out["robot"]["sent"] is False
+    finally:
+        server.shutdown()
+
+
+def test_no_robot_means_robot_null(env):
+    req = urllib.request.Request(env["url"] + "/chat", json.dumps({"message": "hi"}).encode(),
+                                 {"Content-Type": "application/json"})
+    assert json.load(urllib.request.urlopen(req, timeout=5))["robot"] is None
+
+
 def test_prompt_is_about_the_robot_only(env):
     call(env, "/persona", {"robot": "chatbox", "role": "role:receptionist", "ocean": SHY_TUTOR})
     call(env, "/chat", {"robot": "chatbox", "message": "hi"})

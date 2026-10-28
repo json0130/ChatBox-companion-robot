@@ -961,7 +961,9 @@ pEl("p-apply").addEventListener("click", async () => {
   })).json();
   pDirty = false; pSelCard = null;
   if (r.ok) pPending = { role: r.role, ocean: r.ocean, t0: Date.now() };
-  pEl("p-msg").textContent = r.ok ? "saved — the chat uses it now; waiting for the webcam loop (optional)…"
+  pEl("p-msg").textContent = r.ok ? "saved — the chat uses it now; waiting for the webcam loop (optional)…" +
+      (r.robot ? (r.robot.sent ? ` · sent to ${r.robot.robots} connected robot${r.robot.robots > 1 ? "s" : ""}`
+                               : " · no robot connected") : "")
                                   : "not applied: " + r.error;
 });
 // ---- persona chat -----------------------------------------------------------
@@ -1024,9 +1026,8 @@ pcEl("pc-form").addEventListener("submit", async e => {
     chatHist.push([msg, j.reply]);
     wait.innerHTML = esc(j.reply) + `<span class="pc-meta">${esc(j.role)} · ${esc(j.persona)}` +
       (j.tag ? ` · [${esc(j.tag)}]` : "") +
-      (j.robot ? (j.robot.sent ? ` · robot: ${esc(j.robot.expression)} ✓`
-                  : j.robot.expression ? ` · robot unreachable (${esc(j.robot.host)})`
-                  : " · robot: no expression for this tag") : "") + `</span>`;
+      (j.robot ? (j.robot.sent ? ` · spoken on ${j.robot.robots} robot${j.robot.robots > 1 ? "s" : ""} ✓`
+                  : " · no robot connected") : "") + `</span>`;
     pcEl("pc-as").dataset.fromReply = "1";
     pcEl("pc-as").innerHTML = `as <b>${esc(j.role)}</b> · ${esc(j.persona)}`;
   } catch (err) {

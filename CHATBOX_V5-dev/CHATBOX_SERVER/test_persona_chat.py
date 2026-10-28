@@ -90,72 +90,92 @@ def test_apply_then_chat_uses_it_without_a_loop(env):
     assert call(env, "/persona")[1]["assigned"]["chatbox"]["role"] == "role:storyteller"
 
 
-def _fake_esp32():
-    """A listening socket standing in for the ChatBox ESP32; returns (port, lines list)."""
-    import socket
-    srv = socket.socket(); srv.bind(("127.0.0.1", 0)); srv.listen(5)
-    lines = []
+class _FakeRobot:
+    """A Socket.IO client behaving like the Jetson / Navel client: connect out, client_init, listen."""
 
-    def serve():
-        while True:
-            try:
-                conn, _ = srv.accept()
-            except OSError:
-                return
-            with conn:
-                lines.append(conn.makefile().readline().strip())
-    threading.Thread(target=serve, daemon=True).start()
-    return srv, lines
+    def __init__(self, port, name="ChatBox", client_id="chatbox_jetson_001"):
+        import socketio
+        self.events, self.sio = [], socketio.Client()
+        for ev in ("client_init_response", "persona_update", "demo_step"):
+            self.sio.on(ev, lambda data, ev=ev: self.events.append((ev, data)))
+        self.sio.connect(f"http://127.0.0.1:{port}", transports=["polling"])
+        self.sio.emit("client_init", {"robot_name": name, "client_id": client_id, "modules": ["gpt"]})
+        self.sio.emit("image_frame", {"data": "ignored"})        # robots stream frames; the hub ignores them
 
-
-def test_reply_tag_drives_the_esp32(env):
-    from modules.esp32_link import Esp32Link
-    srv, lines = _fake_esp32()
-    robot = Esp32Link("127.0.0.1", srv.getsockname()[1])
-    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
-        env["state"], None, PersonaChat(env["kg"], env["state"]._persona_path(), env["llm"]), robot))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    try:
-        url = f"http://127.0.0.1:{server.server_port}/chat"
-        req = urllib.request.Request(url, json.dumps({"message": "hi"}).encode(),
-                                     {"Content-Type": "application/json"})
-        out = json.load(urllib.request.urlopen(req, timeout=5))
-        assert out["tag"] == "HAPPY"
-        assert out["robot"] == {"host": f"127.0.0.1:{robot.port}", "expression": "ears_wiggle", "sent": True}
+    def wait_for(self, event, n=1, timeout=3.0):
         import time
-        for _ in range(50):                                    # the fake robot logs from its own thread
-            if lines:
-                break
+        end = time.time() + timeout
+        while time.time() < end:
+            got = [d for e, d in self.events if e == event]
+            if len(got) >= n:
+                return got
             time.sleep(0.02)
-        assert lines == ["ears_wiggle"]
-        env["llm"].reply = "no tag here"                       # untagged reply → nothing sent
-        out = json.load(urllib.request.urlopen(req, timeout=5))
-        assert out["robot"]["sent"] is False and out["robot"]["expression"] is None
-        assert lines == ["ears_wiggle"]
-    finally:
-        server.shutdown(); srv.close()
+        raise AssertionError(f"no {event!r}; got {[e for e, _ in self.events]}")
+
+    def close(self):
+        self.sio.disconnect()
 
 
-def test_unreachable_robot_does_not_break_the_reply(env):
-    from modules.esp32_link import Esp32Link
+@pytest.fixture
+def hub_env(env):
+    from modules.robot_hub import RobotHub
+    hub = RobotHub(port=0, host="127.0.0.1"); hub.start()
     server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
-        env["state"], None, PersonaChat(env["kg"], env["state"]._persona_path(), env["llm"]),
-        Esp32Link("127.0.0.1", 1)))                            # nothing listens on port 1
+        env["state"], None, PersonaChat(env["kg"], env["state"]._persona_path(), env["llm"]), hub))
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    try:
-        req = urllib.request.Request(f"http://127.0.0.1:{server.server_port}/chat",
-                                     json.dumps({"message": "hi"}).encode(),
-                                     {"Content-Type": "application/json"})
-        out = json.load(urllib.request.urlopen(req, timeout=5))
-        assert out["ok"] and out["reply"] and out["robot"]["sent"] is False
-    finally:
-        server.shutdown()
+    robots = []
+    yield {**env, "hub": hub, "url": f"http://127.0.0.1:{server.server_port}", "robots": robots}
+    for r in robots:
+        r.close()
+    server.shutdown(); hub.stop()
 
 
-def test_no_robot_means_robot_null(env):
-    req = urllib.request.Request(env["url"] + "/chat", json.dumps({"message": "hi"}).encode(),
-                                 {"Content-Type": "application/json"})
-    assert json.load(urllib.request.urlopen(req, timeout=5))["robot"] is None
+def _post(url, path, body):
+    req = urllib.request.Request(url + path, json.dumps(body).encode(), {"Content-Type": "application/json"})
+    return json.load(urllib.request.urlopen(req, timeout=5))
+
+
+def test_chat_reply_is_spoken_by_the_connected_robot(hub_env):
+    robot = _FakeRobot(hub_env["hub"].port); hub_env["robots"].append(robot)
+    assert robot.wait_for("client_init_response")[0]["success"] is True
+    out = _post(hub_env["url"], "/chat", {"message": "hi"})
+    assert out["robot"] == {"robots": 1, "sent": True}
+    step = robot.wait_for("demo_step")[0]
+    assert step["text"] == "[HAPPY] Hello there!" and step["require_ack"] is False
+    hub_env["llm"].reply = "no tag here"                       # untagged reply is still spoken
+    _post(hub_env["url"], "/chat", {"message": "again"})
+    assert robot.wait_for("demo_step", 2)[1]["text"] == "no tag here"
+
+
+def test_apply_pushes_the_persona_and_a_late_robot_gets_it(hub_env):
+    early = _FakeRobot(hub_env["hub"].port); hub_env["robots"].append(early)
+    early.wait_for("client_init_response")
+    out = _post(hub_env["url"], "/persona", {"robot": "chatbox", "role": "role:tutor", "ocean": SHY_TUTOR})
+    assert out["ok"] and out["robot"] == {"robots": 1, "sent": True}
+    p = early.wait_for("persona_update")[0]
+    assert p["personality"] == {"O": 0.5, "C": 0.9, "E": 0.05, "A": 0.8, "N": 0.55}   # -1..1 -> 0..1
+    assert p["persona_name"] and p["robot_role"]
+    late = _FakeRobot(hub_env["hub"].port, "Navel", "navel_001"); hub_env["robots"].append(late)
+    assert late.wait_for("persona_update")[0] == p                     # replayed on connect
+
+
+def test_no_robot_connected_is_reported_not_an_error(hub_env):
+    out = _post(hub_env["url"], "/chat", {"message": "hi"})
+    assert out["ok"] and out["reply"] and out["robot"] == {"robots": 0, "sent": False}
+
+
+def test_no_hub_means_robot_null(env):
+    assert _post(env["url"], "/chat", {"message": "hi"})["robot"] is None
+
+
+def test_client_init_needs_a_name(hub_env):
+    import socketio
+    got = []
+    c = socketio.Client(); c.on("client_init_response", got.append)
+    c.connect(f"http://127.0.0.1:{hub_env['hub'].port}", transports=["polling"])
+    c.emit("client_init", {})
+    import time; time.sleep(0.3); c.disconnect()
+    assert got and got[0]["success"] is False and hub_env["hub"].robots() == []
 
 
 def test_prompt_is_about_the_robot_only(env):

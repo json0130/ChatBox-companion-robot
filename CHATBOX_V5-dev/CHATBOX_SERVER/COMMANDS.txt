@@ -217,10 +217,16 @@ cd /home/jay/Desktop/2026-Jay/ChatBox-companion-robot/CHATBOX-DEMO_V4/CHATBOX_SE
   python3 -m modules.graph_relationship.viz.server --ollama               # local qwen2.5:7b
   python3 -m modules.graph_relationship.viz.server --ollama qwen2.5:14b
   python3 -m modules.graph_relationship.viz.server --no-chat              # graph only
-  # Drive the real ChatBox from the chat panel: each reply's action tag ([HAPPY], [SAD]...) is sent
-  # to the ESP32 as an expression, and the reply's meta line shows "robot: ears_wiggle ✓" or
-  # "robot unreachable". The ESP32 only moves (ears/face); it does not speak.
-  python3 -m modules.graph_relationship.viz.server --esp32-host 10.42.0.100
+  # Put the setup on a REAL robot (ChatBox Jetson or Navel): the viz hosts a hub they connect OUT to,
+  # same Socket.IO contract as the central servers. Point the robot's client_config.json "server_url"
+  # at http://<this machine's IP>:5000 and restart its client. Then:
+  #   Apply            -> persona_update (role + OCEAN): the robot says "Persona updated to <name>."
+  #   chat panel reply -> demo_step: the robot SPEAKS the reply; its [TAG] drives the face (on the
+  #                       ChatBox the Jetson forwards the tag to the ESP32). Meta line: "spoken on 1 robot ✓".
+  # A robot that connects after Apply gets the last persona replayed. Don't run this at the same time as
+  # the central server on port 5000 (use --robot-hub 5001 and the matching server_url instead).
+  python3 -m modules.graph_relationship.viz.server --robot-hub
+  python3 -m modules.graph_relationship.viz.server --robot-hub 5001
 
   # Pick a role + set the OCEAN sliders → apply. The loop adopts it on its next
   # tick (terminal 1 prints "role → … ; persona → …"). Saved in

@@ -6,24 +6,30 @@ research write-up can reference which approaches were attempted and why.
 
 ---
 
-## feat: viz persona chat drives the real ChatBox through the ESP32  *(branch `feature/persona-roles`, local)*
+## feat: robot hub — the viz puts the role/persona on a real ChatBox (Jetson) or Navel  *(branch `feature/persona-roles`, local)*
 **Date:** 2026-10-28
 
 ### What was tried
-`--esp32-host IP [--esp32-port]` on the viz server: after each persona-chat reply its action tag is sent to the
-ChatBox ESP32 as an expression, so a role/persona assigned in the graph UI can be watched on the robot. The tag map and
-sender moved from `webcam_loop.py` into `modules/esp32_link.py` (stdlib only; the loop imports it back under the same
-names); `/chat` returns `robot: {host, expression, sent}` and the meta line shows it.
+Both robots run a client that connects OUT to a Socket.IO server (`client_init`, then server events). The Jetson,
+not the ESP32, is the ChatBox's client (it forwards expression tags to the ESP32). `--robot-hub [PORT]` on the viz
+server hosts a small server (`modules/robot_hub.py`) speaking that contract, so a robot only needs its
+`server_url` pointed at the viz machine. Apply → `persona_update` (role, OCEAN as the 0..1 `personality` block, name;
+the robot announces "Persona updated to …"); chat replies → `demo_step` (the robot speaks the reply, its `[TAG]`
+drives the face). A robot connecting after Apply gets the last persona replayed. `/chat` and `/persona` return
+`robot: {robots, sent}` and the panel shows it. (First attempt sent tags straight to the ESP32; dropped — the
+Jetson owns that link. `esp32_link.py` stays for the webcam loop, which runs next to the ESP32.)
 
 ### What worked
-- Tests with a fake ESP32 socket: tag → expression line received; untagged reply sends nothing; an unreachable robot
-  still returns the reply (`sent: false`); no flag → `robot: null`. 18 persona tests pass.
+- Tests with a real Socket.IO client standing in for the Jetson/Navel: handshake, reply spoken (tagged and untagged),
+  persona pushed with the -1..1 → 0..1 mapping, late robot replay, no robot connected reported (not an error), bad
+  `client_init` refused, robot streams ignored. 20 persona tests pass; real viz start-up answers the handshake.
 
 ### What didn't work / notes
-- NOT run on the real robot yet. The ESP32 only shows expressions (ears/face): the ChatBox code has no speech output,
-  so wording differences between roles/personas are only visible in the panel text, not heard. Navel (own TTS) would
-  need a separate output adapter.
-- First version of the test raced the fake robot's thread; it now waits for the line.
+- NOT run on a real Jetson or Navel yet.
+- Voice is not changed by the persona yet (`voice_config` not sent); only role/personality and the spoken words differ.
+- Clients' `persona_update` also rewrites their client_config.json (`robot_role`, `personality`) — by design in the
+  client, but it persists on the robot after the test.
+- Port 5000 clashes with the central server if it runs on the same machine; use `--robot-hub 5001`.
 
 ---
 

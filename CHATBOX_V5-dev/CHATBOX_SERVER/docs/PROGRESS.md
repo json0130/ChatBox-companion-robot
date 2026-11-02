@@ -1125,3 +1125,7 @@ the person turned or looked away. Four separate causes, not one.
   absolute threshold into a relative one. jay still has a single enrolled view until re-enrolled
   with the guided poses. Emotion now receives profile crops it was not validated on (emotion is off
   by default).
+
+## Project 56 (non-verbal) module added, parked — 2026-11-02
+- **Done:** merged `final_demo` (adds `FINAL_DEMO/`, no conflicts; branch kept). Copied Navel's Method B planner into `modules/project56/` (co_speech, action_selector, robot_profile + 9 test files); imports prefixed `modules.project56.`. 123 tests pass.
+- **Not done on purpose:** no hookup to the persona UI / hub; no ChatBox action profile. See `modules/project56/README.md`.

@@ -8,6 +8,7 @@ from modules.project56.co_speech.profiles import (
     NAVEL_LINEAR_SPEECH_DURATION_PROFILE,
     NAVEL_SPEECH_TIMING_PROFILE,
 )
+from modules.project56.robot_profile.chatbox_profile import CHATBOX_PROFILE
 from modules.project56.robot_profile.models import (
     ActionProfile,
     RobotProfile,
@@ -114,6 +115,7 @@ _NAVEL_001_PROFILE = RobotProfile(
 
 _PLACEHOLDER_PROFILES = MappingProxyType({
     _NAVEL_001_PROFILE.robot_id: _NAVEL_001_PROFILE,
+    CHATBOX_PROFILE.robot_id: CHATBOX_PROFILE,
 })
 
 

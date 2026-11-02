@@ -1,0 +1,7 @@
+python-socketio[client]
+requests
+pyaudio
+numpy
+gtts
+python-dotenv
+pyserial

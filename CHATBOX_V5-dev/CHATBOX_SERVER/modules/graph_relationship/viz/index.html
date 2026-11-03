@@ -40,7 +40,11 @@
           box-shadow: -4px 0 18px rgba(0,0,0,0.35); font-size: 13px; }
   #side > section { padding: 12px 14px; min-height: 0; }
   #side h2 { margin: 0 0 6px; font-size: 13px; font-weight: 600; }
-  #persona { flex: 1 1 66%; overflow-y: auto; border-bottom: 1px solid var(--panel-brd); }
+  #persona { flex: 1 1 66%; overflow-y: auto; padding-top: 0; border-bottom: 1px solid var(--panel-brd); }
+  #p-top { position: sticky; top: 0; z-index: 2; margin: 0 -14px; padding: 12px 14px 8px;
+           background: var(--panel); border-bottom: 1px solid var(--panel-brd); }
+  #p-top #p-apply { margin-top: 6px; }
+  #p-top #p-msg, #p-top #p-now { margin-top: 4px; }
   #persona select, #persona button { width: 100%; margin-top: 4px; background: var(--bg);
              color: var(--text); border: 1px solid var(--panel-brd); border-radius: 6px;
              padding: 5px 6px; font: inherit; font-size: 12px; }
@@ -188,7 +192,12 @@
 
 <aside id="side">
 <section id="persona">
-  <h2>Role &amp; persona</h2>
+  <div id="p-top">
+    <h2>Role &amp; persona</h2>
+    <button id="p-apply">apply</button>
+    <div id="p-msg"></div>
+    <div id="p-now"></div>
+  </div>
   <div class="legend-title" style="margin-top:10px">Profiles <span class="muted"
     style="text-transform:none;letter-spacing:0">— click to load, then apply</span></div>
   <div id="p-cards"></div>
@@ -200,9 +209,6 @@
   <div id="p-role-info"></div>
   <div class="legend-title" style="margin-top:10px">Personality (OCEAN, −1 … +1)</div>
   <div id="p-traits"></div>
-  <button id="p-apply">apply</button>
-  <div id="p-msg"></div>
-  <div id="p-now"></div>
 </section>
 
 <section id="pchat">
@@ -377,7 +383,8 @@ const gLinks  = root.append("g");
 const gLabels = root.append("g");  // edge-weight labels
 const gNodes  = root.append("g");
 
-svg.call(d3.zoom().scaleExtent([0.15, 4]).on("zoom", (e) => root.attr("transform", e.transform)));
+const zoomer = d3.zoom().scaleExtent([0.15, 4]).on("zoom", (e) => root.attr("transform", e.transform));
+svg.call(zoomer);
 
 // ---- persistent data + simulation ---------------------------------------
 const nodeById = new Map();   // id -> node datum (keeps x/y across ticks)
@@ -405,6 +412,34 @@ const sim = d3.forceSimulation([])
   .alphaDecay(0.045)
   .on("tick", ticked);
 
+// ---- first layout: spread seed, pre-run the forces, fit to view ------------
+// Starting every node in a 80 px clump makes the first seconds a tangle, so seed the
+// nodes on a sunflower spiral (grouped by type), run the simulation to rest off-screen,
+// then show the settled result zoomed to fit.
+function settleLayout() {
+  const nodes = [...nodeById.values()].sort((a, b) => a.type.localeCompare(b.type));
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  nodes.forEach((n, i) => {
+    const r = 62 * Math.sqrt(i + 0.5), a = i * golden;
+    n.x = width / 2 + r * Math.cos(a); n.y = height / 2 + r * Math.sin(a);
+    n.vx = n.vy = 0; n.fx = n.fy = null;
+  });
+  sim.nodes(nodes); sim.force("link").links(links);
+  sim.alpha(1);
+  for (let i = 0; i < 320; i++) sim.tick();      // tick() draws nothing
+  ticked(); fitView();
+  sim.alpha(0.02).restart();                     // stay alive for dragging
+}
+function fitView(pad = 90) {
+  const ns = [...nodeById.values()];
+  if (!ns.length) return;
+  const x0 = d3.min(ns, d => d.x), x1 = d3.max(ns, d => d.x);
+  const y0 = d3.min(ns, d => d.y), y1 = d3.max(ns, d => d.y);
+  const k = Math.min(1.2, width / (x1 - x0 + 2 * pad), height / (y1 - y0 + 2 * pad));
+  svg.call(zoomer.transform, d3.zoomIdentity
+    .translate(width / 2 - k * (x0 + x1) / 2, height / 2 - k * (y0 + y1) / 2).scale(k));
+}
+
 // ---- force sliders (Obsidian-style) --------------------------------------
 const FORCE_DEFAULTS = { "f-charge": 700, "f-dist": 130, "f-lstr": 0.35, "f-center": 0.04 };
 function bindForceSlider(id, valId, fmt, apply) {
@@ -427,6 +462,7 @@ document.getElementById("ctrl-reset").addEventListener("click", () => {
     const el = document.getElementById(id);
     el.value = def; el.dispatchEvent(new Event("input"));
   }
+  settleLayout();                    // reset = defaults + a fresh, spread-out layout
 });
 
 const weightScale = d3.scaleSqrt().domain([0, 1]).range([1, 7]).clamp(true);
@@ -435,6 +471,7 @@ const weightScale = d3.scaleSqrt().domain([0, 1]).range([1, 7]).clamp(true);
 let activeState = {};   // {person, culture} — the loop's current focus (viz highlight)
 function update(graph) {
   activeState = graph.active || {};
+  const firstLoad = nodeById.size === 0;
   // nodes: keep existing (position preserved), add new near centre, drop removed
   const incoming = new Set(graph.nodes.map(n => n.id));
   for (const n of graph.nodes) {
@@ -479,9 +516,10 @@ function update(graph) {
 
   sim.nodes(nodes);
   sim.force("link").links(links);
-  sim.alpha(0.35).restart();
+  if (!firstLoad) sim.alpha(0.35).restart();
 
   render(nodes);
+  if (firstLoad) settleLayout();     // after render, so there are elements to position
 }
 
 function render(nodes) {

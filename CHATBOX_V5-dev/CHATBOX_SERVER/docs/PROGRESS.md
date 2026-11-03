@@ -1143,3 +1143,9 @@ the person turned or looked away. Four separate causes, not one.
 ## Viz: Apply on top, spread-out first layout — 2026-11-03
 - **Done:** Apply button, status and "now:" line moved to a sticky header at the top of the persona column. First load seeds nodes on a sunflower spiral, pre-runs the forces to rest, then zooms to fit; Reset (forces) now re-runs that layout too. Checked in a browser: spread out on load and after Reset.
 - **Found:** the Jetson's `edge_tts_output.py` stores `voice_config.rate` but never uses it (gTTS path plays the mp3 through ffmpeg unchanged), and `pitch` isn't read at all — so persona voice differences need a client change.
+
+## Persona voices + resizable persona/chat column — 2026-11-03
+- **Done (server):** `modules/persona_voice.py` maps role + OCEAN to speed / pitch / tone / volume offsets; `RobotHub.push_persona` sends them as `voice_config` (merged with the base voice keys `language/gender/provider`, because the client replaces its whole `voice_config`); Apply message shows them. 4 tests + hub test.
+- **Done (Jetson, `FINAL_DEMO/CHATBOX_CLIENT/OutputModules/edge_tts_output.py`):** `update_voice_config` now reads `pitch`/`tone`/`volume`, and the gTTS ffmpeg step uses `_voice_filter()` (atempo × rate, asetrate pitch shift at constant speed, treble/bass, volume). Neutral persona = the old `atempo=1.25` exactly. Checked against real ffmpeg on a 200 Hz tone: measured pitch and length matched the targets for three personas.
+- **Not covered:** the offline Piper fallback ignores pitch/tone/volume; not yet heard on the real robot. The numbers in `ROLE_VOICE` / `voice_for` are a first guess to tune by ear.
+- **UI:** drag the column's left edge to widen it (graph follows) and the bar between Role & persona and Chat to share height; sizes are remembered in the browser.

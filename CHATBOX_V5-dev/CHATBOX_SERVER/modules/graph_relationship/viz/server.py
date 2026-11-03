@@ -581,15 +581,17 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
                         self._send(400, json.dumps({"ok": False, "error": str(exc)})
                                    .encode(), "application/json")
                         return
+                    from modules.graph_relationship.roles import ocean_words
+                    from modules.persona_voice import voice_for
+                    role = next((r for r in state.persona_choices()["roles"]
+                                 if r["id"] == a["role"]), {})
+                    label = role.get("label", a["role"])
+                    voice = voice_for(label, a["ocean"])
                     robot = None
                     if hub is not None:                     # tell the connected robot(s) about the new setup
-                        from modules.graph_relationship.roles import ocean_words
-                        role = next((r for r in state.persona_choices()["roles"]
-                                     if r["id"] == a["role"]), {})
-                        label = role.get("label", a["role"])
                         robot = hub.push_persona(f"{label}, {ocean_words(a['ocean'])}",
-                                                 role.get("brief") or label, a["ocean"])
-                    self._send(200, json.dumps({"ok": True, **a, "robot": robot}).encode(),
+                                                 role.get("brief") or label, a["ocean"], voice)
+                    self._send(200, json.dumps({"ok": True, **a, "voice": voice, "robot": robot}).encode(),
                                "application/json")
                     return
                 if path != "/delete":

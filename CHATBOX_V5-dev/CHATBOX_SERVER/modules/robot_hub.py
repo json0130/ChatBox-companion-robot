@@ -15,6 +15,10 @@ import socketio
 from werkzeug.serving import make_server
 
 
+# the ChatBox client's own voice_config keys (client_config.json); persona offsets go on top
+BASE_VOICE = {"language": "en", "gender": "female", "provider": "gtts"}
+
+
 def ocean_to_personality(ocean: Dict[str, float]) -> Dict[str, float]:
     """viz OCEAN is -1..1; the client_config `personality` block is 0..1."""
     return {k: round((float(v) + 1) / 2, 3) for k, v in ocean.items()}
@@ -63,9 +67,12 @@ class RobotHub:
         with self._lock:
             return [dict(c) for c in self.clients.values()]
 
-    def push_persona(self, persona_name: str, robot_role: str, ocean: Dict[str, float]) -> dict:
+    def push_persona(self, persona_name: str, robot_role: str, ocean: Dict[str, float],
+                     voice: Optional[Dict[str, str]] = None) -> dict:
         payload = {"persona_name": persona_name, "robot_role": robot_role,
                    "personality": ocean_to_personality(ocean)}
+        if voice:           # the client REPLACES its whole voice_config, so keep the base voice keys
+            payload["voice_config"] = {**BASE_VOICE, **voice}
         with self._lock:
             self.last_persona = payload
             targets = list(self.clients)

@@ -35,6 +35,9 @@ class EdgeTTSOutputModule(OutputModule):
         self._language   = self.config.get('language', 'en')
         self._gender     = self.config.get('gender', 'female')
         self._rate       = self.config.get('rate', '+0%')
+        self._pitch      = '+0st'   # persona voice (ffmpeg): pitch / tone / volume
+        self._tone       = '+0dB'
+        self._volume     = '+0dB'
 
         # Speaker output. "auto" as the device picks the USB card that can play
         # sound — card numbers (and the _1 suffix on twin USB devices) swap
@@ -162,7 +165,12 @@ class EdgeTTSOutputModule(OutputModule):
         Accepted keys:
           language  : str  e.g. 'en', 'es', 'fr', 'ja'
           gender    : str  'female' | 'male'
-          rate      : str  e.g. '+0%', '+10%'
+          rate      : str  e.g. '+0%', '+10%'  (speed vs the normal pace)
+          pitch     : str  semitones, e.g. '+1.5st'  (speed unchanged)
+          tone      : str  dB, '+3dB' brighter / '-3dB' warmer
+          volume    : str  dB, e.g. '+2dB'
+        Pitch/tone/volume apply to the gTTS voice (ffmpeg); a value with another unit
+        (e.g. the old '+0Hz') is ignored.
         """
         with self._voice_lock:
             if 'language' in voice_config:
@@ -174,6 +182,38 @@ class EdgeTTSOutputModule(OutputModule):
             if 'rate' in voice_config:
                 self._rate = voice_config['rate']
                 logger.info(f"[TTS] Rate     → {self._rate}")
+            for key in ('pitch', 'tone', 'volume'):
+                if key in voice_config:
+                    setattr(self, '_' + key, voice_config[key])
+                    logger.info(f"[TTS] {key.capitalize():8} → {voice_config[key]}")
+
+    @staticmethod
+    def _num(value, unit: str) -> float:
+        """'+1.5st' -> 1.5 for unit 'st'; anything else -> 0."""
+        m = re.fullmatch(r'\s*([+-]?\d+(?:\.\d+)?)\s*' + unit + r'\s*', str(value), re.I)
+        return float(m.group(1)) if m else 0.0
+
+    def _voice_filter(self) -> str:
+        """ffmpeg -filter:a chain: normal pace x persona rate, pitch shift at constant speed,
+        tone, volume. With a neutral persona this is exactly the old 'atempo=<talking_speed>'."""
+        with self._voice_lock:
+            rate, pitch, tone, vol = self._rate, self._pitch, self._tone, self._volume
+        speed = float(self.talking_speed) * (1 + self._num(rate, '%') / 100)
+        shift = 2 ** (self._num(pitch, 'st') / 12)
+        chain = []
+        if abs(shift - 1) > 1e-3:
+            # play the audio 'shift' times faster (pitch up), resample back, undo the speed-up
+            chain += ['aresample=48000', f'asetrate={48000 * shift:.0f}', 'aresample=22050']
+            speed /= shift
+        speed = max(0.5, min(2.0, speed))                 # atempo's supported range
+        chain.append(f'atempo={speed:.3f}')
+        t = self._num(tone, 'dB')
+        if t:
+            chain += [f'treble=g={t:.1f}:f=3000', f'bass=g={-t / 2:.1f}:f=200']
+        v = self._num(vol, 'dB')
+        if v:
+            chain.append(f'volume={v:.1f}dB')
+        return ','.join(chain)
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
@@ -411,7 +451,7 @@ class EdgeTTSOutputModule(OutputModule):
 
             subprocess.run([
                 'ffmpeg', '-i', tmp_mp3,
-                '-filter:a', f'atempo={self.talking_speed}',
+                '-filter:a', self._voice_filter(),
                 '-ar', '22050', '-ac', '1', '-sample_fmt', 's16', '-y', tmp_wav,
             ], capture_output=True, check=True)
 

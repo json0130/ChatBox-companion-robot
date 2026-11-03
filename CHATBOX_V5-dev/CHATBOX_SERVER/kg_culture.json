@@ -776,12 +776,12 @@
     },
     {
       "id": "chatbox:persona:assigned",
-      "descriptor": "practical, organised, quiet, frank",
+      "descriptor": "curious, organised, outgoing, frank",
       "ocean": {
-        "O": -0.7,
-        "C": 0.9,
-        "E": -0.5,
-        "A": -0.6,
+        "O": 0.4,
+        "C": 0.7,
+        "E": 0.6,
+        "A": -0.3,
         "N": 0.0
       },
       "node_type": "persona"
@@ -2129,24 +2129,24 @@
       "timescale": "SLOW"
     },
     {
-      "id": "89fc108f-c707-4e36-ba33-6bfa1ebfc275",
+      "id": "04a38f85-c624-4eed-b89e-718d3b6b3e7e",
       "source_id": "chatbox",
-      "target_id": "role:receptionist",
+      "target_id": "role:tutor",
       "provenance": {
         "source": "viz",
-        "timestamp": "2026-10-19T04:58:25.564651Z",
+        "timestamp": "2026-11-03T04:11:03.394221Z",
         "confidence": 1.0
       },
       "edge_type": "has_role",
       "timescale": "SLOW"
     },
     {
-      "id": "81f87fbc-8c09-473a-9a18-5c57cf1bb5a5",
+      "id": "ca490c00-1937-494f-807f-2261217316b5",
       "source_id": "chatbox",
       "target_id": "chatbox:persona:assigned",
       "provenance": {
         "source": "viz",
-        "timestamp": "2026-10-19T04:58:25.564714Z",
+        "timestamp": "2026-11-03T04:11:03.394284Z",
         "confidence": 1.0
       },
       "edge_type": "has_persona",

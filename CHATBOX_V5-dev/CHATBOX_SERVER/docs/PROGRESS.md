@@ -1134,3 +1134,8 @@ the person turned or looked away. Four separate causes, not one.
 - **Done:** `modules/project56/robot_profile/chatbox_profile.py` — 6 planner actions (DEFAULT, GREET, POINT, UNCERTAIN, SAD, HAPPY) + `CHATBOX_NATIVE_TAG` (planner action → Jetson `EMOTION_MAP` tag); registered in the provider under `chatbox_jetson_001`. 4 new tests, incl. a check against FINAL_DEMO's `robot.py` EMOTION_MAP (every native tag exists and gives a distinct motion).
 - **Not measured (knobs):** gesture length 4.5 s (firmware: 5 steps × 900 ms) and speech timing (Navel's numbers). The duration filter drops unprofiled actions, so every action needs a duration.
 - **Not done:** AGREE/DENY need `NOD`/`SHAKE` in the client's EMOTION_MAP; executor + hub hookup still to build.
+
+## Viz: Apply updates the graph; persona + chat get their own column — 2026-11-03
+- **Done:** `POST /persona` now also attaches the role + persona in the KG file (`GraphState._attach_in_graph`, `roles.apply_assignment`), so the graph shows it with no webcam loop. A running loop applies the same assignment itself. New test `test_apply_attaches_the_role_in_the_graph_without_a_loop`.
+- **UI:** removed the node-type/legend panel; Role & persona and Chat with the robot now live in a fixed right column and the graph canvas ends at its left edge; Forces moved to the bottom-left. Checked in a browser (1512×790).
+- **Found while testing:** `persona_assignment.json` is tracked now, so every Apply shows it as modified.

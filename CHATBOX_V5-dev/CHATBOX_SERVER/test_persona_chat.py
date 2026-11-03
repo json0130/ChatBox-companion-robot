@@ -68,6 +68,14 @@ def call(env, path, body=None):
         return exc.code, json.load(exc)
 
 
+def test_apply_attaches_the_role_in_the_graph_without_a_loop(env):
+    ocean = {"O": 0.0, "C": 0.8, "E": -0.3, "A": 0.9, "N": -0.8}
+    status, out = call(env, "/persona", {"robot": "chatbox", "role": "role:companion", "ocean": ocean})
+    assert status == 200 and out["graph"] is True
+    cur = env["state"].persona_choices()["current"]["chatbox"]
+    assert cur["role"] == "role:companion" and cur["ocean"] == ocean
+
+
 def test_apply_then_chat_uses_it_without_a_loop(env):
     assert call(env, "/chat")[1] == {"available": True, "backend": "stub", "hint": None}
     s, a = call(env, "/persona", {"robot": "chatbox", "role": "role:tutor", "ocean": SHY_TUTOR})

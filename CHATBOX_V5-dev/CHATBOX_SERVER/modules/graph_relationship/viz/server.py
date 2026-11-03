@@ -387,7 +387,25 @@ class GraphState:
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=2)
         os.replace(tmp, path)          # atomic: the loop never reads half a file
-        return data[robot]
+        return {**data[robot], "graph": self._attach_in_graph(robot, role, ocean)}
+
+    def _attach_in_graph(self, robot: str, role: str, ocean: dict) -> bool:
+        """Attach the role + persona in the KG file now, so the graph shows it even with
+        no webcam loop running. A running loop applies the same assignment itself."""
+        from modules.graph_relationship.roles import apply_assignment
+        from modules.graph_relationship.store import InMemoryGraphStore
+        store = InMemoryGraphStore()
+        try:
+            if not store.load(self.kg_path, quiet=True):
+                return False
+            apply_assignment(store, robot, role, ocean, source="viz")
+            tmp = self.kg_path + ".tmp"
+            store.save(tmp)
+            os.replace(tmp, self.kg_path)      # atomic: the poller never reads half a file
+        except (OSError, ValueError, KeyError) as exc:
+            print(f"[viz] could not attach the role in the graph: {exc}")
+            return False
+        return True
 
     def culture_labels(self) -> list:
         """Labels of CultureNodes the robot knows — the choices for the selector."""

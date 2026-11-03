@@ -30,6 +30,7 @@ class RobotHub:
         self.clients: Dict[str, dict] = {}           # sid -> {robot_name, client_id}
         self.last_persona: Optional[dict] = None     # replayed to a robot that connects after Apply
         self._step = 0
+        self._acks: Dict[str, threading.Event] = {}  # step_id -> set when the robot finished speaking it
         self._lock = threading.Lock()
         self._server = make_server(host, port, socketio.WSGIApp(self.sio), threaded=True)
         self.port = self._server.server_port
@@ -51,6 +52,12 @@ class RobotHub:
                           "message": f"persona hub: {data['robot_name']} connected"}, to=sid)
             if persona:
                 self.sio.emit("persona_update", persona, to=sid)
+
+        @self.sio.on("ack")
+        def ack(sid, data):
+            ev = self._acks.get((data or {}).get("step_id", ""))
+            if ev:
+                ev.set()
 
         @self.sio.on("disconnect")
         def disconnect(sid):
@@ -87,3 +94,21 @@ class RobotHub:
         for sid in targets:
             self.sio.emit("demo_step", {"step_id": step, "text": text, "require_ack": False}, to=sid)
         return {"robots": len(targets), "sent": bool(targets)}
+
+    def say_steps(self, texts, timeout: float = 30.0) -> dict:
+        """Speak `texts` one after another: each is its own demo_step, sent once the robot has
+        acked (= finished speaking) the previous one, so each step's [TAG] fires its own gesture.
+        Blocks; call from a thread. A robot that never acks costs `timeout` per step."""
+        with self._lock:
+            targets = list(self.clients)
+        for text in texts:
+            with self._lock:
+                self._step += 1
+                step = f"persona-{self._step}"
+            ev = self._acks[step] = threading.Event()
+            for sid in targets:
+                self.sio.emit("demo_step", {"step_id": step, "text": text, "require_ack": True}, to=sid)
+            if targets:
+                ev.wait(timeout)
+            self._acks.pop(step, None)
+        return {"robots": len(targets), "sent": bool(targets), "steps": len(texts)}

@@ -27,5 +27,6 @@ HAPPY→HANDS_CLAP...). Two numbers are NOT measured and are marked as knobs in 
 `EXPRESSION_SECONDS` (4.5, from the firmware's 5×900 ms steps) and the speech timing (Navel's values).
 AGREE/DENY wait for a `NOD`/`SHAKE` entry in the client's `EMOTION_MAP` (firmware already has head_nod/head_shake).
 
-Next (not started): call the planner from the robot hub
-after a chat reply, with the persona/role as the style input.
+Used by `modules/action_tag_generator.py` (branch `action_tag_generator`): reply -> one native tag per
+sentence -> sent to the Jetson one `demo_step` at a time (`RobotHub.say_steps`). Enable in the viz with
+`--robot-hub --action-tags`. Not wired: the Navel executor, lookahead.

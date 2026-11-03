@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
@@ -489,7 +490,7 @@ class HistoryProvider:
 
 
 def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
-                 chat=None, hub=None):
+                 chat=None, hub=None, tagger=None):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):  # keep console clean
             pass
@@ -568,8 +569,21 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
                                    "application/json")
                         return
                     # hub = RobotHub or None: the connected robot speaks the reply (its tag drives the face)
-                    out["robot"] = (hub.say(f"[{out['tag']}] {out['reply']}" if out.get("tag") else out["reply"])
-                                    if hub is not None else None)
+                    if hub is not None and tagger is not None:
+                        # Method B: one gesture tag per sentence, spoken one step at a time
+                        try:
+                            from modules.action_tag_generator import step_texts
+                            out["plan"] = tagger.generate(out["reply"], str(body.get("message", "")))
+                            texts = step_texts(out["plan"])
+                            threading.Thread(target=hub.say_steps, args=(texts,), daemon=True).start()
+                            out["robot"] = {"robots": len(hub.robots()), "sent": bool(hub.robots()),
+                                            "steps": len(texts)}
+                        except Exception as exc:    # planner failed: fall back to the single reply
+                            out["plan_error"] = str(exc)
+                            out["robot"] = hub.say(out["reply"])
+                    else:
+                        out["robot"] = (hub.say(f"[{out['tag']}] {out['reply']}" if out.get("tag") else out["reply"])
+                                        if hub is not None else None)
                     self._send(200, json.dumps({"ok": True, **out}).encode(), "application/json")
                     return
                 if path == "/persona":
@@ -636,6 +650,10 @@ def main():
                     help="serve a hub the ChatBox Jetson / Navel client connects to (set its server_url "
                          "to http://THIS_IP:PORT, default 5000): Apply pushes the persona, chat replies "
                          "are spoken by the robot")
+    ap.add_argument("--action-tags", action="store_true",
+                    help="with --robot-hub: Method B -- split each chat reply into sentences and pick a "
+                         "gesture tag per sentence (modules/action_tag_generator.py) instead of the "
+                         "reply's single tag")
     args = ap.parse_args()
 
     kg_path = os.path.abspath(args.kg_path)
@@ -655,11 +673,18 @@ def main():
         from modules.robot_hub import RobotHub
         hub = RobotHub(args.robot_hub)
         hub.start()
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(state, history, chat, hub))
+    tagger = None
+    if args.action_tags:
+        if hub is None or chat is None:
+            ap.error("--action-tags needs --robot-hub and the chat (not --no-chat)")
+        from modules.action_tag_generator import ActionTagGenerator, ChatLLM
+        tagger = ActionTagGenerator(ChatLLM(chat.llm))
+    server = ThreadingHTTPServer((args.host, args.port), make_handler(state, history, chat, hub, tagger))
 
     print(f"[viz] serving KG visualizer at  http://{args.host}:{args.port}/")
     print(f"[viz] polling KG file:          {state.kg_path}")
     print(f"[viz] persona chat:             {chat.backend if chat else 'off (--no-chat)'}")
+    print(f"[viz] action tags (Method B):   {'on' if tagger else 'off (--action-tags)'}")
     print(f"[viz] robot hub:                {f'port {hub.port} (robot server_url -> http://THIS_IP:{hub.port})' if hub else 'off (--robot-hub)'}")
     if history.store is not None:
         kind = "RAG" if history.rag is not None else "keyword"

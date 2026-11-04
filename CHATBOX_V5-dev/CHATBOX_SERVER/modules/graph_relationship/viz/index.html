@@ -335,6 +335,26 @@ const personColor = id => id === "jay" ? PERSON_WHITE : _personPalette(id);
 // One colour per robot (its node, what it owns, its edges); people are white. Roles/topics stay neutral.
 const ROBOT_COLOR = { chatbox: "#ff8c42", navel: "#4fc3f7" };   // orange / blue
 const PERSON_WHITE = "#ffffff";
+// A role a robot has (has_role) and what hangs off it is that robot's PROFILE: drawn in the robot's colour,
+// a little lighter. A profile node both robots have stays neutral (it is shared).
+const lighter = c => d3.color(c).brighter(0.45).formatHex();
+let attached = new Map();          // node id -> robot id owning that profile subgraph
+function computeAttached() {
+  const adj = new Map(), owners = new Map();
+  links.forEach(l => {
+    (adj.get(l.source.id) || adj.set(l.source.id, []).get(l.source.id)).push(l.target);
+    (adj.get(l.target.id) || adj.set(l.target.id, []).get(l.target.id)).push(l.source);
+  });
+  links.filter(l => l.type === "has_role" && l.source.type === "Robot" && ROBOT_COLOR[l.source.id]).forEach(l => {
+    const seen = new Set([l.target.id]), stack = [l.target];
+    while (stack.length) { const n = stack.pop();
+      (owners.get(n.id) || owners.set(n.id, new Set()).get(n.id)).add(l.source.id);
+      for (const m of adj.get(n.id) || [])
+        if (!seen.has(m.id) && m.type !== "Robot" && m.type !== "Person") { seen.add(m.id); stack.push(m); } }
+  });
+  attached = new Map([...owners].filter(([, o]) => o.size === 1).map(([id, o]) => [id, [...o][0]]));
+}
+const profileColor = id => attached.has(id) ? lighter(ROBOT_COLOR[attached.get(id)]) : null;
 const ownerColor = id => { const o = nodeOwner(id); return !o ? null : o.kind === "robot" ? (ROBOT_COLOR[o.id] || null) : personColor(o.id); };
 const personIds = new Set();
 const robotIds  = new Set();
@@ -364,6 +384,7 @@ function edgeColor(d) {
   if (CULTURE_EDGE_TYPES.has(d.type)) return shadeByTimescale(CULTURE_EDGE, d.timescale);
   const s = d.source.id || d.source, t = d.target.id || d.target;
   const owner = nodeOwner(s) || nodeOwner(t);   // source decides; target is fallback
+  if (!owner && attached.has(s) && attached.has(t)) return shadeByTimescale(profileColor(s), d.timescale);
   const base = !owner ? ROBOT_EDGE : owner.kind === "person" ? personColor(owner.id) : (ROBOT_COLOR[owner.id] || ROBOT_EDGE);
   return shadeByTimescale(base, d.timescale);
 }
@@ -568,6 +589,7 @@ function update(graph) {
       affinity10: e.affinity10, confidence: e.confidence, cross: e.cross,
     }));
 
+  computeAttached();
   const maxW = d3.max(links, d => Math.abs(d.weight)) || 1;
   weightScale.domain([0, maxW]);
 
@@ -649,11 +671,13 @@ function render(nodes) {
     shape.style("--own-fill", d.type === "Robot" || d.type === "Person" ? oc : null)
          .style("--own", oc && d.type !== "Topic" && d.type !== "RoleTopic" ? oc : null);
     shape.attr("stroke-width", oc && d.type !== "Robot" && d.type !== "Person" ? 2.5 : null);
+    const pc = profileColor(d.id);
+    if (pc) shape.style("--own-fill", pc).style("--own", pc);        // an attached profile: its robot's colour, lighter
     // Feature-2d: tint Topic nodes by their category (updates live on category change).
     if (d.type === "Topic") {
       g.select(".node-shape").style("fill", categoryColor(d.category));
     } else if (d.type === "RoleTopic") {
-      g.select(".node-shape").style("fill", ROLE_PART_COLOR[d.kind] || ROLE_PART_COLOR.knowledge);
+      g.select(".node-shape").style("fill", pc || ROLE_PART_COLOR[d.kind] || ROLE_PART_COLOR.knowledge);
     }
   });
 

@@ -1,26 +1,24 @@
-"""What the Navel graph starts with: the robot, what it can do, its gesture list and how to reach it.
+"""What the Navel graph starts with: the robot and the topics it declares. Nothing else.
 
 Facts come from the robot-robot-interaction repo (branch feat/navel-demo-client, commit dad21e4):
-navel-client/client_config.json (tags, ports, modules), navel-client/client.py (how it connects) and
-lab-demo-server/data/snapshot (navel_001's declared topics). The ChatBox graph shares none of it.
+lab-demo-server/data/snapshot (navel_001's 7 declared topics); the gesture tags and connection facts
+below come from navel-client/client_config.json and navel-client/client.py. They are kept here as plain
+data (a robot client / the viz can read them) and are NOT graph nodes: the graph is the robot and its topics.
 
-    robot --has_capability--> capability  (what Navel can do)  --about--> topics it declares
-    robot --has_capability--> one node per connection fact
-
-Like the ChatBox, the gestures are NOT nodes: the list below is what a robot client / the viz
-reads, and the capability node only mentions that Navel gestures.
+    robot --about--> topic        (the ChatBox graph shares none of it)
 """
 from __future__ import annotations
 
-import os
 from typing import Dict
 
-from modules.graph_relationship.schema import (
-    CapabilityNode, HasCapabilityEdge, Provenance)
-from modules.graph_relationship.seed import seed_from_spec
+from modules.graph_relationship.schema import AboutEdge, Provenance
+from modules.graph_relationship.topics import resolve_topic
 
-SPEC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "graph_relationship", "specs", "navel_spec.json")
 SOURCE = "spec:navel_profile"
+
+TOPICS = ["co-speech gesture", "gaze and head coordination", "gesture selection",
+          "speech and gesture timing", "non verbal interaction", "robot to robot communication",
+          "speech segmentation"]
 
 # Navel's own gesture tags (client_config.json allowed_tags / tag_descriptions): it performs these, not the ChatBox's
 ACTIONS: Dict[str, str] = {
@@ -47,14 +45,9 @@ CONNECTION: Dict[str, str] = {
 }
 
 
-def _capability(store, robot_id: str, cap_id: str, text: str) -> None:
-    store.upsert_node(CapabilityNode(id=cap_id, items=[text]))
-    store.upsert_edge(HasCapabilityEdge(source_id=robot_id, target_id=cap_id,
-                                        provenance=Provenance(source=SOURCE, confidence=1.0)))
-
-
 def seed_navel(store) -> None:
-    """Idempotent: ids are fixed, so running it again just refreshes the same nodes."""
-    seed_from_spec(store, SPEC)                      # robot, abilities, declared topics
-    for key, text in CONNECTION.items():
-        _capability(store, "navel", f"navel:connection:{key}", f"connect: {text}")
+    """Idempotent: topic ids are derived from the label, so running it again changes nothing."""
+    for label in TOPICS:
+        topic = resolve_topic(store, label)
+        store.upsert_edge(AboutEdge(source_id="navel", target_id=topic.id,
+                                    provenance=Provenance(source=SOURCE, confidence=1.0)))

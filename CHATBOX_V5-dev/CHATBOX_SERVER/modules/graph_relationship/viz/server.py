@@ -492,21 +492,25 @@ class HistoryProvider:
 
 
 def seed_robot_graph(path: str, robot_id: str) -> None:
-    """A graph file for a robot other than the ChatBox: just the robot and the role library (no
-    people), plus, for Navel, what it can do / its gestures / how to reach it. Safe to run on every
-    start: an existing file is only topped up when the Navel profile is missing."""
+    """A graph file for a robot other than the ChatBox: the robot and the role library (no people),
+    plus, for Navel, the topics it declares. Safe to run on every start: an existing file loses the
+    capability nodes an earlier version added to the Navel graph, and gets the topics if it has none."""
     from modules.graph_relationship.schema import Embodiment, RobotNode
     from modules.graph_relationship.store import InMemoryGraphStore
     from modules.role_seed import seed_role_library
     store = InMemoryGraphStore()
-    if os.path.exists(path):
-        store.load(path, quiet=True)
-        if robot_id != "navel" or store.get_node("navel:capability") is not None:
-            return
+    existed = os.path.exists(path) and store.load(path, quiet=True)
+    legacy = [n.id for n in list(store._nodes.values())
+              if robot_id == "navel" and n.node_type == "capability" and n.id.startswith("navel:")]
+    for nid in legacy:
+        store.delete_node(nid)
     if store.get_node(robot_id) is None:
         store.upsert_node(RobotNode(id=robot_id, name=robot_id.capitalize(), embodiment=Embodiment.CAT))
         seed_role_library(store)
-    if robot_id == "navel":
+    has_topics = any(e.edge_type == "about" and e.source_id == "navel" for e in store._edges.values())
+    if existed and not legacy and (robot_id != "navel" or has_topics):
+        return
+    if robot_id == "navel" and not has_topics:
         from modules.navel_profile import seed_navel
         seed_navel(store)
     store.save(path)

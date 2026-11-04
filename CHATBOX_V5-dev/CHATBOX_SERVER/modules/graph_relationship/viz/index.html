@@ -688,29 +688,38 @@ function render(nodes) {
 }
 
 // ---- focus on the selected robot (tab) -------------------------------------
-// ONE graph holds every robot. The selected robot's subgraph stays lit (it, what it owns, the roles
-// it plays and what hangs off them, and for the ChatBox the people it talks to); the rest fades.
-// Walking out from the robot never goes through ANOTHER robot, so a role both play is shared, not leaked.
-function robotFocusSet(robotId) {
+// ONE graph holds every robot. Selecting a robot fades ONLY the other robot(s) and what belongs to them
+// (their topics, and for the ChatBox the people it talks to). Profile nodes (roles, their topics, personas)
+// are never faded, whoever they are attached to; a profile or topic both robots reach stays lit too.
+const PROFILE_TYPES = new Set(["Role", "RoleTopic", "Persona"]);
+function adjacency() {
   const adj = new Map();
   links.forEach(l => {
     (adj.get(l.source.id) || adj.set(l.source.id, []).get(l.source.id)).push(l.target);
     (adj.get(l.target.id) || adj.set(l.target.id, []).get(l.target.id)).push(l.source);
   });
-  const seen = new Set([robotId]), stack = [robotId];
+  return adj;
+}
+function walk(adj, start, stop) {                       // everything reachable from `start` without entering `stop`
+  const seen = new Set([start]), stack = [start];
   while (stack.length) for (const n of adj.get(stack.pop()) || [])
-    if (!seen.has(n.id) && !(n.type === "Robot" && n.id !== robotId)) { seen.add(n.id); stack.push(n.id); }
+    if (!seen.has(n.id) && !stop(n)) { seen.add(n.id); stack.push(n.id); }
   return seen;
 }
+function robotFocusSet(robotId) {                       // the selected robot and what it reaches (the view fits onto this)
+  return walk(adjacency(), robotId, n => n.type === "Robot" && n.id !== robotId);
+}
+function robotFadeSet(robotId) {
+  const adj = adjacency(), mine = robotFocusSet(robotId), faded = new Set();
+  for (const r of robotIds) if (r !== robotId)
+    for (const id of walk(adj, r, n => (n.type === "Robot" && n.id !== r) || PROFILE_TYPES.has(n.type)))
+      if (!mine.has(id) || id === r) faded.add(id);
+  return faded;
+}
 function applyRobotFocus() {
-  if (!nodeById.has(curRobot)) {                       // no such robot in the graph yet: show everything
-    gNodes.selectAll("g.node").classed("offfocus", false);
-    gLinks.selectAll("line").classed("offfocus", false);
-    return;
-  }
-  const lit = robotFocusSet(curRobot);
-  gNodes.selectAll("g.node").classed("offfocus", d => !lit.has(d.id));
-  gLinks.selectAll("line").classed("offfocus", d => !(lit.has(d.source.id) && lit.has(d.target.id)));
+  const faded = nodeById.has(curRobot) ? robotFadeSet(curRobot) : new Set();
+  gNodes.selectAll("g.node").classed("offfocus", d => faded.has(d.id));
+  gLinks.selectAll("line").classed("offfocus", d => faded.has(d.source.id) || faded.has(d.target.id));
 }
 function fitFocus(pad = 110) {                         // glide the view onto the selected robot's subgraph
   if (!nodeById.has(curRobot)) return;

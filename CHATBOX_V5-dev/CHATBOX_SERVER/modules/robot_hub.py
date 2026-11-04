@@ -66,6 +66,8 @@ class RobotHub:
             self.sio.emit("client_init_response", {"success": True, "client_id": data["client_id"],
                           "robot_name": data["robot_name"],
                           "message": f"persona hub: {data['robot_name']} connected"}, to=sid)
+            # tag-only step (no words): the robot starts in its default pose
+            self.sio.emit("demo_step", {"step_id": "connect", "text": "[DEFAULT]", "require_ack": False}, to=sid)
             if persona:
                 self.sio.emit("persona_update", persona, to=sid)
 

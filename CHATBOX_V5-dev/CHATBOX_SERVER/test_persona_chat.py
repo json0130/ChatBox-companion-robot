@@ -104,8 +104,10 @@ class _FakeRobot:
     def __init__(self, port, name="ChatBox", client_id="chatbox_jetson_001"):
         import socketio
         self.events, self.sio = [], socketio.Client()
+        self.connect_steps = []                    # the [DEFAULT] sent on connect, kept apart from the reply steps
         for ev in ("client_init_response", "persona_update", "demo_step"):
-            self.sio.on(ev, lambda data, ev=ev: self.events.append((ev, data)))
+            self.sio.on(ev, lambda data, ev=ev: (self.connect_steps if data.get("step_id") == "connect"
+                                                 else self.events).append((ev, data)))
         self.sio.connect(f"http://127.0.0.1:{port}", transports=["polling"])
         self.sio.emit("client_init", {"robot_name": name, "client_id": client_id, "modules": ["gpt"]})
         self.sio.emit("image_frame", {"data": "ignored"})        # robots stream frames; the hub ignores them
@@ -331,3 +333,14 @@ def test_robots_endpoint_shows_connect_and_disconnect(hub_env):
     while robots()["robots"] and time.time() < end:
         time.sleep(0.05)
     assert robots()["robots"] == []
+
+
+def test_robot_gets_the_default_pose_when_it_connects(hub_env):
+    robot = _FakeRobot(hub_env["hub"].port); hub_env["robots"].append(robot)
+    robot.wait_for("client_init_response")
+    import time
+    end = time.time() + 3
+    while not robot.connect_steps and time.time() < end:
+        time.sleep(0.02)
+    (ev, step), = robot.connect_steps
+    assert ev == "demo_step" and step["text"] == "[DEFAULT]" and step["require_ack"] is False

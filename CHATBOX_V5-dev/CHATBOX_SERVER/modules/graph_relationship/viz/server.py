@@ -538,8 +538,9 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
                 self._send(200, json.dumps(state.persona_choices()).encode(),
                            "application/json")
             elif path == "/robots":
+                from modules.chatbox_actions import ACTIONS
                 body = {"hub": hub is not None, "port": hub.port if hub else None,
-                        "robots": hub.robots() if hub else []}
+                        "robots": hub.robots() if hub else [], "actions": ACTIONS}
                 self._send(200, json.dumps(body).encode(), "application/json")
             elif path == "/chat":
                 body = {"available": chat is not None,
@@ -559,6 +560,19 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
                     active = state.set_culture_override(str(body.get("active_culture", "auto")))
                     self._send(200, json.dumps({"ok": True, "active": active}).encode(),
                                "application/json")
+                    return
+                if path == "/action":               # a button: play one gesture on the connected robot(s)
+                    from modules.chatbox_actions import ACTIONS
+                    tag = str(body.get("tag", "")).upper()
+                    if tag not in ACTIONS:
+                        self._send(400, json.dumps({"ok": False, "error": f"unknown action {tag!r}"}).encode(),
+                                   "application/json")
+                    elif hub is None or not hub.robots():
+                        self._send(409, json.dumps({"ok": False, "error": "no robot connected"}).encode(),
+                                   "application/json")
+                    else:
+                        self._send(200, json.dumps({"ok": True, "tag": tag, **hub.say(f"[{tag}]")}).encode(),
+                                   "application/json")
                     return
                 if path == "/chat":
                     if chat is None:

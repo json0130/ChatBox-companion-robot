@@ -1196,3 +1196,8 @@ the person turned or looked away. Four separate causes, not one.
 - `client_init` success -> hub also emits a tag-only `demo_step` `[DEFAULT]` (step_id "connect", no ack) to that robot, before the persona replay, so it starts and reconnects in the default pose.
 - Test: test_robot_gets_the_default_pose_when_it_connects; `_FakeRobot` keeps the connect step in `connect_steps` so reply-step indices in other tests are unchanged.
 - Caveat: if the Jetson has not yet reached the ESP32 (TCP/serial) when it joins the hub, the client logs "[Arduino] Cannot send 'DEFAULT' — not connected" and the pose is not set; the ESP32 powers up in default anyway.
+
+## Robot action buttons (viz, left side)
+- `POST /action {tag}` -> `[TAG]` as a tag-only demo_step (no ack) to the connected robot(s); 400 for a tag outside `chatbox_actions.ACTIONS`, 409 when no robot is connected. `GET /robots` also returns `actions`, so the UI builds one button per ChatBox action (tooltip = its usage text).
+- UI: "Robot actions" panel under the HUD; buttons are disabled until the robot row is green (re-checked every 2 s) and show "sent WAVE ✓".
+- Worked: browser check with a fake robot (disabled -> enabled on connect, WAVE received as "[WAVE]"); test_action_button_plays_a_gesture_only_when_a_robot_is_connected.

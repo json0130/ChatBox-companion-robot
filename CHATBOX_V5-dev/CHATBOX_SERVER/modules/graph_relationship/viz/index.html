@@ -32,6 +32,14 @@
     box-shadow: 0 4px 18px rgba(0,0,0,0.35);
   }
   #hud   { top: 14px; left: 14px; min-width: 190px; }
+  #actions { top: 168px; left: 14px; width: 190px; }
+  #actions h1 { margin: 0 0 8px; font-size: 14px; letter-spacing: .3px; }
+  #act-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  #act-btns button { padding: 5px 4px; font-size: 11.5px; border-radius: 6px; cursor: pointer;
+                     background: var(--bg); color: var(--text); border: 1px solid var(--panel-brd); }
+  #act-btns button:hover:not(:disabled) { border-color: var(--slow); }
+  #act-btns button:disabled { opacity: .4; cursor: not-allowed; }
+  #act-msg { margin-top: 6px; font-size: 11.5px; min-height: 1.2em; }
   #controls { bottom: 14px; left: 14px; min-width: 216px; }
   /* dedicated right column: role & persona on top, chat with the robot below; the graph
      canvas ends at its left edge */
@@ -200,6 +208,12 @@
   <div class="stat"><span class="muted">edges</span><b id="e-count">0</b></div>
   <div class="stat"><span class="muted">updated</span><b id="ts" class="muted">—</b></div>
   <div class="stat"><span class="muted">robot</span><b id="rb-stat"><span id="rb-dot" class="off"></span><span id="rb-txt">—</span></b></div>
+</div>
+
+<div id="actions" class="panel">
+  <h1>Robot actions</h1>
+  <div id="act-btns"></div>
+  <div id="act-msg" class="muted">connect a robot to use these</div>
 </div>
 
 <aside id="side">
@@ -1108,15 +1122,39 @@ loadPersona();
 setInterval(loadPersona, 1000);
 
 // ---- robot connection status ------------------------------------------------
+let robotUp = false;
+function renderActions(actions) {
+  const box = pEl("act-btns");
+  if (box.children.length || !actions) return;
+  for (const [tag, tip] of Object.entries(actions)) {
+    const b = document.createElement("button");
+    b.textContent = tag.replace("_", " ").toLowerCase(); b.title = tip; b.dataset.tag = tag;
+    b.addEventListener("click", async () => {
+      const m = pEl("act-msg"); m.textContent = `sending ${tag}…`;
+      try {
+        const r = await fetch("/action", {method: "POST", headers: {"Content-Type": "application/json"},
+                                          body: JSON.stringify({tag})});
+        const j = await r.json();
+        m.textContent = j.ok ? `sent ${tag} ✓` : (j.error || r.status);
+      } catch (e) { m.textContent = "failed: " + e.message; }
+    });
+    box.appendChild(b);
+  }
+}
 async function robotStatus() {
   let dot = "off", txt = "hub off";
+  robotUp = false;
   try {
     const j = await (await fetch("/robots")).json();
+    renderActions(j.actions); robotUp = j.hub && j.robots.length > 0;
     if (j.hub && j.robots.length) {
       dot = "on"; txt = j.robots.map(r => esc(r.robot_name)).join(", ");
     } else if (j.hub) { dot = ""; txt = `waiting · :${j.port}`; }
   } catch (e) { dot = ""; txt = "viz offline"; }
   pEl("rb-dot").className = dot; pEl("rb-txt").innerHTML = txt;
+  document.querySelectorAll("#act-btns button").forEach(b => b.disabled = !robotUp);
+  if (!robotUp) pEl("act-msg").textContent = "connect a robot to use these";
+  else if (pEl("act-msg").textContent.startsWith("connect")) pEl("act-msg").textContent = "click to play on the robot";
 }
 robotStatus();
 setInterval(robotStatus, 2000);

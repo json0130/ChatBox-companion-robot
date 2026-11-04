@@ -344,3 +344,19 @@ def test_robot_gets_the_default_pose_when_it_connects(hub_env):
         time.sleep(0.02)
     (ev, step), = robot.connect_steps
     assert ev == "demo_step" and step["text"] == "[DEFAULT]" and step["require_ack"] is False
+
+
+def test_action_button_plays_a_gesture_only_when_a_robot_is_connected(hub_env):
+    import urllib.error
+    def post(tag):
+        try:
+            return _post(hub_env["url"], "/action", {"tag": tag})
+        except urllib.error.HTTPError as e:
+            return e.code, json.load(e)
+    assert post("WAVE")[0] == 409                                      # nobody connected
+    robot = _FakeRobot(hub_env["hub"].port); hub_env["robots"].append(robot)
+    robot.wait_for("client_init_response")
+    assert post("wave")["ok"]
+    step = robot.wait_for("demo_step")[0]
+    assert step["text"] == "[WAVE]" and step["require_ack"] is False
+    assert post("EXCITED")[0] == 400                                   # only the ChatBox's own tags

@@ -34,7 +34,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import queue
 import threading
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
@@ -499,18 +501,35 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
 
     def converse(robot, message, hist):
         """One turn: persona reply, then the robot (if any) speaks it. Shared by /chat and the mic."""
+        t0 = time.time()
         out = chat.reply(robot, message, hist)
+        out["timing"] = {"reply_s": round(time.time() - t0, 2)}
         # hub = RobotHub or None: the connected robot speaks the reply (its tag drives the face)
         if hub is not None and tagger is not None:
-            # Method B: one gesture tag per sentence, spoken one step at a time
+            # Method B: one gesture tag per sentence; each sentence is spoken as soon as ITS tag is
+            # chosen, while the next ones are still being planned
+            from modules.action_tag_generator import step_texts
+            q, queued = queue.Queue(), []
+            def steps():
+                while (t := q.get()) is not None:
+                    yield t
+            threading.Thread(target=hub.say_steps, args=(steps(),), daemon=True).start()
+            def on_step(i):
+                if not queued:
+                    out["timing"]["first_step_s"] = round(time.time() - t0, 2)
+                queued.append(i); q.put(step_texts([i])[0])
+            t0 = time.time()
             try:
-                from modules.action_tag_generator import step_texts
-                out["plan"] = tagger.generate(out["reply"], message)
-                texts = step_texts(out["plan"])
-                out["robot"] = speak(texts)
-            except Exception as exc:    # planner failed: fall back to the single reply
+                out["plan"] = tagger.generate(out["reply"], message, on_step=on_step)
+                out["timing"]["tags_s"] = round(time.time() - t0, 2)
+            except Exception as exc:    # planner failed: say what is left as one plain reply
                 out["plan_error"] = str(exc)
-                out["robot"] = speak([out["reply"]])
+                if not queued:
+                    q.put(out["reply"])
+            finally:
+                q.put(None)
+            n = len(hub.robots())
+            out["robot"] = {"robots": n, "sent": bool(n), "steps": len(queued) or 1}
         else:
             out["robot"] = (speak([f"[{out['tag']}] {out['reply']}" if out.get("tag") else out["reply"]])
                             if hub is not None else None)
@@ -525,7 +544,9 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
             item["id"] = (voice_log[-1]["id"] + 1) if voice_log else 1
             voice_log.append(item); del voice_log[:-50]
         try:
+            t0 = time.time()
             ok, text, _ = stt.transcribe_audio_base64(audio_b64)
+            item["stt_s"] = round(time.time() - t0, 2)
             if not ok or not text.strip():
                 item["error"] = text if not ok else "nothing heard"
                 return
@@ -538,6 +559,8 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
             if (a or {}).get("ts") != voice_ts[0]:      # a new setup was applied: restart the conversation
                 voice_hist.clear(); voice_ts[0] = (a or {}).get("ts")
             item["out"] = out = converse(robot, item["text"], list(voice_hist))
+            print(f"[voice] stt {item['stt_s']}s · reply {out['timing']['reply_s']}s"
+                  f" · tags {out['timing'].get('tags_s', '-')}s · {item['text']!r}")
             voice_hist.append((item["text"], out["reply"]))
         except Exception as exc:
             item["error"] = str(exc)
@@ -715,9 +738,11 @@ def main():
                          "reply's single tag")
     ap.add_argument("--no-voice", action="store_true",
                     help="with --robot-hub: don't transcribe the robot's microphone (faster-whisper)")
+    ap.add_argument("--whisper-device", default="cuda", choices=["cuda", "cpu"],
+                    help="with --robot-hub: where faster-whisper runs (default cuda, falls back to cpu "
+                         "if it cannot load)")
     ap.add_argument("--whisper-model", default="base", metavar="SIZE",
-                    help="with --robot-hub: faster-whisper model for the robot's microphone (default base; "
-                         "runs on the CPU, so small is about the most that stays quick)")
+                    help="with --robot-hub: faster-whisper model for the robot's microphone (default base)")
     args = ap.parse_args()
 
     kg_path = os.path.abspath(args.kg_path)
@@ -749,7 +774,8 @@ def main():
     stt = None
     if hub is not None and not args.no_voice:
         from modules.speech_processor import SpeechProcessor
-        stt = SpeechProcessor({"whisper_model_size": args.whisper_model})
+        stt = SpeechProcessor({"whisper_model_size": args.whisper_model, "whisper_device": args.whisper_device,
+                               "whisper_compute_type": "float16"})
         threading.Thread(target=stt.initialize, daemon=True).start()   # load in the background
     handler = make_handler(state, history, chat, hub, tagger, stt)
     port = first_free(args.port, args.host)
@@ -762,7 +788,7 @@ def main():
     print(f"[viz] polling KG file:          {state.kg_path}")
     print(f"[viz] persona chat:             {chat.backend if chat else 'off (--no-chat)'}")
     print(f"[viz] action tags (Method B):   {'on' if tagger else 'off (--action-tags)'}")
-    print(f"[viz] robot microphone:         {f'faster-whisper {args.whisper_model} (loading in the background)' if stt else 'off (needs --robot-hub, not --no-voice)'}")
+    print(f"[viz] robot microphone:         {f'faster-whisper {args.whisper_model} on {args.whisper_device} (loading in the background)' if stt else 'off (needs --robot-hub, not --no-voice)'}")
     print(f"[viz] robot hub:                {f'port {hub.port} (robot server_url -> http://THIS_IP:{hub.port})' if hub else 'off (--robot-hub)'}")
     if history.store is not None:
         kind = "RAG" if history.rag is not None else "keyword"

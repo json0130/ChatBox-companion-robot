@@ -54,15 +54,16 @@ class ActionTagGenerator:
         self.segmenter = SpeechSegmenter(CHATBOX_PROFILE.speech.segmentation_timing)
         self.orchestrator = CoSpeechPlanOrchestrator(selector)
 
-    def generate(self, reply: str, user_message: str = "") -> List[Dict[str, Optional[str]]]:
+    def generate(self, reply: str, user_message: str = "", on_step=None) -> List[Dict[str, Optional[str]]]:
+        """`on_step(item)` gets each {"text","action","tag"} as soon as its gesture is chosen."""
+        item = lambda text, a: {"text": text, "action": a, "tag": CHATBOX_NATIVE_TAG[a] if a else None}
         segments = self.segmenter.segment(reply)
         plan = self.orchestrator.build_selected_plan(
             segments, allowed_tags=list(CHATBOX_PROFILE.actions),
             context=ActionContext(user_message=user_message, dialogue=reply,
-                                  robot_id=CHATBOX_PROFILE.robot_id))
-        return [{"text": p.speech_segment.text, "action": p.selected_tag,
-                 "tag": CHATBOX_NATIVE_TAG[p.selected_tag] if p.selected_tag else None}
-                for p in plan.segments]
+                                  robot_id=CHATBOX_PROFILE.robot_id),
+            on_segment=(lambda text, a: on_step(item(text, a))) if on_step else None)
+        return [item(p.speech_segment.text, p.selected_tag) for p in plan.segments]
 
 
 def step_texts(items: List[Dict[str, Optional[str]]]) -> List[str]:

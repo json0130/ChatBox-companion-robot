@@ -70,8 +70,9 @@ class SpeechProcessor:
             #     device = self.device
             #     compute_type = self.compute_type
 
-            device = 'cpu'
-            compute_type = 'int8'
+            # CPU unless the caller explicitly asks for 'cuda' (the viz does); 'auto' stays CPU so the
+            # central server behaves as before. A failed GPU load falls back to CPU below.
+            device, compute_type = (('cuda', self.compute_type) if self.device == 'cuda' else ('cpu', 'int8'))
             
             # Try to load model with GPU first, fallback to CPU if it fails
             try:

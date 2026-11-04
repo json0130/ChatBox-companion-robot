@@ -46,7 +46,9 @@ class VoiceInputModule(InputModule):
         self.mode = "listening"
         self.audio_frames = []
         self.silence_chunks = 0
-        self.SILENCE_LIMIT = int((16000 / 1280) * 1.5) # 1.5 seconds of silence stops recording
+        # seconds of silence that end an utterance (it is sent only after this wait, so it is pure latency):
+        # export CHATBOX_SILENCE_SECONDS=0.8 for a snappier robot; too low cuts you off mid-pause
+        self.SILENCE_LIMIT = int((16000 / 1280) * float(os.environ.get('CHATBOX_SILENCE_SECONDS', 1.5)))
         
         # VAD & Volume Thresholds
         self.VOLUME_THRESHOLD = 500 # Threshold to stay recording

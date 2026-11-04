@@ -125,10 +125,14 @@ class RobotHub:
     def say_steps(self, texts, timeout: float = 30.0) -> dict:
         """Speak `texts` one after another: each is its own demo_step, sent once the robot has
         acked (= finished speaking) the previous one, so each step's [TAG] fires its own gesture.
-        Blocks; call from a thread. A robot that never acks costs `timeout` per step."""
+        `texts` may be a generator that blocks until the next sentence is ready, so speech can start
+        before the whole reply is planned. Blocks; call from a thread. A robot that never acks costs
+        `timeout` per step."""
         with self._lock:
             targets = list(self.clients)
+        n = 0
         for text in texts:
+            n += 1
             with self._lock:
                 self._step += 1
                 step = f"persona-{self._step}"
@@ -138,10 +142,10 @@ class RobotHub:
             if targets:
                 ev.wait(timeout)
             self._acks.pop(step, None)
-        if targets and texts:       # speech is over: tag-only step, no words, so the robot returns to its default pose
+        if targets and n:           # speech is over: tag-only step, no words, so the robot returns to its default pose
             with self._lock:
                 self._step += 1
                 step = f"persona-{self._step}"
             for sid in targets:
                 self.sio.emit("demo_step", {"step_id": step, "text": "[DEFAULT]", "require_ack": False}, to=sid)
-        return {"robots": len(targets), "sent": bool(targets), "steps": len(texts)}
+        return {"robots": len(targets), "sent": bool(targets), "steps": n}

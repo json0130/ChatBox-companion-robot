@@ -1086,12 +1086,20 @@ async function chatConfig() {
     chatAdd("pc-err", "This viz server has no chat endpoint — it was started before the chat was " +
             "added. Stop it (Ctrl+C) and run it again: <code>python3 -m modules.graph_relationship.viz.server</code>");
 }
-function showReply(el, j) {
+function timingText(j, stt) {
+  const t = j.timing || {}, parts = [];
+  if (stt != null) parts.push(`heard ${stt}s`);
+  if (t.reply_s != null) parts.push(`reply ${t.reply_s}s`);
+  if (t.first_step_s != null) parts.push(`first words +${t.first_step_s}s`);
+  else if (t.tags_s != null) parts.push(`gestures ${t.tags_s}s`);
+  return parts.length ? ` · ${parts.join(" · ")}` : "";
+}
+function showReply(el, j, stt) {
   el.className = "pc-msg pc-bot";
   el.innerHTML = esc(j.reply) + `<span class="pc-meta">${esc(j.role)} · ${esc(j.persona)}` +
     (j.tag ? ` · [${esc(j.tag)}]` : "") +
     (j.robot ? (j.robot.sent ? ` · spoken on ${j.robot.robots} robot${j.robot.robots > 1 ? "s" : ""} ✓`
-                : " · no robot connected") : "") + `</span>`;
+                : " · no robot connected") : "") + timingText(j, stt) + `</span>`;
   pcEl("pc-as").dataset.fromReply = "1";
   pcEl("pc-as").innerHTML = `as <b>${esc(j.role)}</b> · ${esc(j.persona)}`;
 }
@@ -1119,7 +1127,7 @@ async function pollVoice() {
       else chatAdd("pc-err", "🎤 couldn't make that out: " + esc(it.error));
     } else if (it.out) {
       chatHist.push([it.text, it.out.reply]);
-      showReply(v.bot, it.out);
+      showReply(v.bot, it.out, it.stt_s);
     }
   }
   voiceFirst = false;

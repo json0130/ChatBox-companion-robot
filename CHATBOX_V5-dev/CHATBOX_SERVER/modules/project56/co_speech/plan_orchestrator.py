@@ -41,9 +41,11 @@ class CoSpeechPlanOrchestrator:
         *,
         allowed_tags: Sequence[str],
         context: "ActionContext",
+        on_segment=None,
     ) -> CoSpeechPlan:
         """Select once per ordered segment and return a complete plan.
 
+        `on_segment(text, selected_tag)` is called as each segment is resolved (ChatBox addition).
         Selection exceptions propagate unchanged. Already resolved segments
         remain represented by the response-local builder, and no later segment
         is attempted after an error.
@@ -71,6 +73,8 @@ class CoSpeechPlanOrchestrator:
                 segment_id=speech_segment.segment_id,
                 selected_tag=selection.selected_tag,
             )
+            if on_segment is not None:      # lets the caller start speaking before the rest is planned
+                on_segment(speech_segment.text, selection.selected_tag)
 
         plan = builder.plan
         if not plan.is_complete:

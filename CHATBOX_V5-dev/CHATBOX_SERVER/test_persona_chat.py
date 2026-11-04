@@ -314,3 +314,18 @@ def test_reply_rules_still_match_the_loops_prompt():
     # the tag line differs on purpose (only ChatBox-performable tags, modules/chatbox_actions.py)
     missing = [r for r in rules[1:] if r not in real and not r.startswith("• Begin every reply")]
     assert not missing, missing
+
+
+def test_robots_endpoint_shows_connect_and_disconnect(hub_env):
+    import time
+    def robots():
+        with urllib.request.urlopen(hub_env["url"] + "/robots", timeout=5) as r:
+            return json.load(r)
+    assert robots()["hub"] is True and robots()["robots"] == []
+    robot = _FakeRobot(hub_env["hub"].port, name="ChatBox"); robot.wait_for("client_init_response")
+    assert [r["robot_name"] for r in robots()["robots"]] == ["ChatBox"]
+    robot.close()
+    end = time.time() + 3
+    while robots()["robots"] and time.time() < end:
+        time.sleep(0.05)
+    assert robots()["robots"] == []

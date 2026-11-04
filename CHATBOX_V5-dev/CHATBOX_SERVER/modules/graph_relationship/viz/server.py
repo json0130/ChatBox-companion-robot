@@ -531,6 +531,10 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
             elif path == "/persona":
                 self._send(200, json.dumps(state.persona_choices()).encode(),
                            "application/json")
+            elif path == "/robots":
+                body = {"hub": hub is not None, "port": hub.port if hub else None,
+                        "robots": hub.robots() if hub else []}
+                self._send(200, json.dumps(body).encode(), "application/json")
             elif path == "/chat":
                 body = {"available": chat is not None,
                         "backend": chat.backend if chat is not None else None,

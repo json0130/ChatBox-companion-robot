@@ -1176,3 +1176,8 @@ the person turned or looked away. Four separate causes, not one.
 - Tried: second `viz.server` with the same command -> "Address already in use". Now `--port` (8765) and `--robot-hub` (5000) fall back to the next free port (up to 20) and print "port N is taken -> using M".
 - Worked: both ports occupied -> viz on 18766, hub on 15001. Probe-by-bind (`robot_hub.first_free`) because werkzeug `make_server` calls sys.exit on EADDRINUSE.
 - Caveat: a second server still shares `kg_culture.json` / `persona_assignment.json` unless given its own `--kg-path`; the robot's `server_url` must use the port the hub printed.
+
+## Robot connection status in the viz
+- `GET /robots` -> {hub, port, robots:[{robot_name, client_id}]} from the hub's connected clients; HUD row "robot" polls it every 2 s: green dot + names = connected, red "waiting · :PORT" = hub up but no robot, grey "hub off" = no `--robot-hub`, red "viz offline" = server unreachable.
+- Worked: browser check with a fake Socket.IO robot (green "ChatBox" while connected, red "waiting" after it left); test_robots_endpoint_shows_connect_and_disconnect.
+- Caveat: "connected" means the client finished `client_init` on the hub; a robot whose connection dies silently shows until Socket.IO's ping timeout (~25 s) fires.

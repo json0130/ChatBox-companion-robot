@@ -30,18 +30,19 @@ def ocean_to_personality(ocean: Dict[str, float]) -> Dict[str, float]:
     return {k: round((float(v) + 1) / 2, 3) for k, v in ocean.items()}
 
 
-def first_free(port: int, host: str = "0.0.0.0", tries: int = 20) -> int:
-    """`port`, or the next free one (port+1, ...) if it is taken. Probes by binding, because
-    werkzeug's make_server exits the process on EADDRINUSE instead of raising."""
-    for p in range(port, port + tries):
-        with socket.socket() as probe:
-            try:
-                probe.bind((host, p))
-                return p
-            except OSError as e:
-                if e.errno != errno.EADDRINUSE:
-                    raise
-    raise OSError(errno.EADDRINUSE, f"no free port in {port}-{port + tries - 1}")
+def require_free(port: int, host: str = "0.0.0.0", what: str = "port") -> int:
+    """Ports are FIXED (viz 8765, robot hub 5000): the robots' server_url points at them, so quietly moving
+    to another port would leave a robot talking to nothing (or to a stale copy). If it is taken, stop with a
+    clear message instead. Probes by binding because werkzeug's make_server exits on EADDRINUSE with a vaguer one."""
+    with socket.socket() as probe:
+        try:
+            probe.bind((host, port))
+        except OSError as e:
+            if e.errno != errno.EADDRINUSE:
+                raise
+            raise SystemExit(f"[viz] {what} {port} is already in use - another viz (or the central server) is "
+                             f"running. Stop it first: fuser -k {port}/tcp")
+    return port
 
 
 class RobotHub:
@@ -52,8 +53,9 @@ class RobotHub:
         self._step = 0
         self._acks: Dict[str, threading.Event] = {}  # step_id -> set when the robot finished speaking it
         self._lock = threading.Lock()
+        self.links: Dict[str, "NavelLink"] = {}      # robot id -> a robot we dial OUT to (Navel runs its own server)
         self.on_speech = None                        # callable(audio_b64, robot_name), set by the viz: mic audio -> text -> reply
-        self._server = make_server(host, first_free(port, host), socketio.WSGIApp(self.sio), threaded=True)
+        self._server = make_server(host, require_free(port, host, "robot hub port"), socketio.WSGIApp(self.sio), threaded=True)
         self.port = self._server.server_port
         self._wire()
 
@@ -79,9 +81,7 @@ class RobotHub:
 
         @self.sio.on("ack")
         def ack(sid, data):
-            ev = self._acks.get((data or {}).get("step_id", ""))
-            if ev:
-                ev.set()
+            self._ack_step((data or {}).get("step_id", ""))
 
         @self.sio.on("speech")
         def speech(sid, data):
@@ -102,6 +102,21 @@ class RobotHub:
     def stop(self) -> None:
         self._server.shutdown()
 
+    def _ack_step(self, step_id: str) -> None:
+        ev = self._acks.get(step_id)
+        if ev:
+            ev.set()
+
+    def add_link(self, robot_id: str, link) -> None:
+        """Attach a robot we dial out to (see navel_link.py); it then behaves like a connected client."""
+        link.on_ack = self._ack_step
+        link.on_speech = lambda audio, name: self.on_speech and self.on_speech(audio, name)
+        self.links[robot_id] = link
+        link.start()
+
+    def _links(self, robot: Optional[str] = None) -> list:
+        return [l for r, l in self.links.items() if l.connected and (robot is None or r == robot)]
+
     def _sids(self, robot: Optional[str] = None) -> list:
         """Connected clients; `robot` (a robot id like "navel", matched to the client's robot_name,
         case-insensitive) limits it to that robot, None = every robot."""
@@ -111,8 +126,9 @@ class RobotHub:
 
     def robots(self, robot: Optional[str] = None) -> list:
         with self._lock:
-            return [dict(c) for c in self.clients.values()
-                    if robot is None or c["robot_name"].lower() == robot]
+            out = [dict(c) for c in self.clients.values()
+                   if robot is None or c["robot_name"].lower() == robot]
+        return out + [{"robot_name": l.name, "client_id": l.client_id, "via": l.url} for l in self._links(robot)]
 
     def push_persona(self, persona_name: str, robot_role: str, ocean: Dict[str, float],
                      voice: Optional[Dict[str, str]] = None, robot: Optional[str] = None) -> dict:
@@ -125,7 +141,11 @@ class RobotHub:
         targets = self._sids(robot)
         for sid in targets:
             self.sio.emit("persona_update", payload, to=sid)
-        return {"robots": len(targets), "sent": bool(targets)}
+        # Navel writes a persona_update into its own client_config.json (robot_role, tags, voice...), and our
+        # voice offsets are the ChatBox client's units, so it only gets the name and the OCEAN personality.
+        nav = {"event": "persona_update", "persona_name": persona_name, "personality": payload["personality"]}
+        sent = sum(l.send(nav) for l in self._links(robot))
+        return {"robots": len(targets) + sent, "sent": bool(targets) or bool(sent)}
 
     def say(self, text: str, robot: Optional[str] = None) -> dict:
         with self._lock:
@@ -134,7 +154,9 @@ class RobotHub:
         targets = self._sids(robot)
         for sid in targets:
             self.sio.emit("demo_step", {"step_id": step, "text": text, "require_ack": False}, to=sid)
-        return {"robots": len(targets), "sent": bool(targets)}
+        sent = sum(l.send({"event": "demo_step", "step_id": step, "text": text, "require_ack": False})
+                   for l in self._links(robot))
+        return {"robots": len(targets) + sent, "sent": bool(targets) or bool(sent)}
 
     def say_steps(self, texts, timeout: float = 30.0, robot: Optional[str] = None) -> dict:
         """Speak `texts` one after another: each is its own demo_step, sent once the robot has
@@ -142,7 +164,7 @@ class RobotHub:
         `texts` may be a generator that blocks until the next sentence is ready, so speech can start
         before the whole reply is planned. Only `robot` hears it (None = all). Blocks; call from a
         thread. A robot that never acks costs `timeout` per step."""
-        targets = self._sids(robot)
+        targets, links = self._sids(robot), self._links(robot)
         n = 0
         for text in texts:
             n += 1
@@ -152,7 +174,9 @@ class RobotHub:
             ev = self._acks[step] = threading.Event()
             for sid in targets:
                 self.sio.emit("demo_step", {"step_id": step, "text": text, "require_ack": True}, to=sid)
-            if targets:
+            heard = sum(l.send({"event": "demo_step", "step_id": step, "text": text, "require_ack": True})
+                        for l in links)
+            if targets or heard:
                 ev.wait(timeout)
             self._acks.pop(step, None)
         if n:                       # speech is over: tag-only step, no words, so the robot returns to its default pose
@@ -163,4 +187,4 @@ class RobotHub:
                          and self.clients[sid]["robot_name"].lower() in DEFAULT_POSE_ROBOTS]
             for sid in knows:
                 self.sio.emit("demo_step", {"step_id": step, "text": "[DEFAULT]", "require_ack": False}, to=sid)
-        return {"robots": len(targets), "sent": bool(targets), "steps": n}
+        return {"robots": len(targets) + len(links), "sent": bool(targets or links), "steps": n}

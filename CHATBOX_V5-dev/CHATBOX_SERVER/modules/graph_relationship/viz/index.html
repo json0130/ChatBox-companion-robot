@@ -1342,6 +1342,8 @@ async function robotStatus() {
     robotUp = j.hub && mine.length > 0;
     if (j.hub && mine.length) {
       dot = "on"; txt = mine.map(r => esc(r.robot_name)).join(", ");
+    } else if (j.hub && j.links && j.links[curRobot]) {      // a robot we dial: say where and why not
+      const l = j.links[curRobot]; dot = ""; txt = `dialling ${esc(l.url.replace("ws://", ""))}` + (l.error ? ` · ${esc(l.error)}` : "");
     } else if (j.hub) { dot = ""; txt = `waiting · :${j.port}`; }
   } catch (e) { dot = ""; txt = "viz offline"; }
   pEl("rb-dot").className = dot; pEl("rb-txt").innerHTML = txt;

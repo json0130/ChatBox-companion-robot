@@ -224,7 +224,8 @@ cd /home/jay/Desktop/2026-Jay/ChatBox-companion-robot/CHATBOX-DEMO_V4/CHATBOX_SE
   #   chat panel reply -> demo_step: the robot SPEAKS the reply; its [TAG] drives the face (on the
   #                       ChatBox the Jetson forwards the tag to the ESP32). Meta line: "spoken on 1 robot ✓".
   # A robot that connects after Apply gets the last persona replayed. Don't run this at the same time as
-  # the central server on port 5000 (use --robot-hub 5001 and the matching server_url instead).
+  # the central server on port 5000 (use --robot-hub 5001 and the matching server_url instead). Ports are FIXED: viz 8765 (--port), robot hub 5000;
+  if one is taken the viz stops with a message instead of moving to another port.
   python3 -m modules.graph_relationship.viz.server --robot-hub
   # Method B (branch action_tag_generator): split each chat reply into sentences, pick a gesture per
   # sentence with the LLM, send them to the robot one at a time ([WAVE] / [SAD] / [HANDS_CLAP] ...).

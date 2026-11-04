@@ -682,7 +682,8 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
                 from modules.chatbox_actions import ACTIONS
                 body = {"hub": hub is not None, "port": hub.port if hub else None,
                         "robots": hub.robots() if hub else [], "actions": ACTIONS,
-                        "workspaces": list(spaces)}
+                        "workspaces": list(spaces),
+                        "links": {r: l.status() for r, l in (hub.links.items() if hub else [])}}
                 self._send(200, json.dumps(body).encode(), "application/json")
             elif path == "/chat":
                 body = {"available": r_chat is not None,
@@ -797,6 +798,10 @@ def main():
                     help="graph file of the Navel tab (created with the role library if missing; it shares "
                          "nothing with the ChatBox graph)")
     ap.add_argument("--no-navel", action="store_true", help="no Navel tab")
+    ap.add_argument("--navel-host", metavar="IP", default=None,
+                    help="with --robot-hub: dial Navel at ws://IP:PORT (Navel runs its own WebSocket server and "
+                         "never connects out; e.g. 192.168.0.10 on the lab router)")
+    ap.add_argument("--navel-port", type=int, default=8765, help="Navel's ws_port (default 8765)")
     ap.add_argument("--port", type=int, default=8765, help="HTTP port (default 8765)")
     ap.add_argument("--host", default="127.0.0.1", help="Bind host (default 127.0.0.1)")
     ap.add_argument("--sessions-db", default="sessions.db",
@@ -821,9 +826,14 @@ def main():
     ap.add_argument("--whisper-device", default="cuda", choices=["cuda", "cpu"],
                     help="with --robot-hub: where faster-whisper runs (default cuda, falls back to cpu "
                          "if it cannot load)")
+    ap.add_argument("--whisper-language", default="en", metavar="CODE",
+                    help="with --robot-hub: language the robot's microphone is transcribed as (default en; "
+                         "'auto' lets whisper guess, which turns room noise into Indonesian etc.)")
     ap.add_argument("--whisper-model", default="base", metavar="SIZE",
                     help="with --robot-hub: faster-whisper model for the robot's microphone (default base)")
     args = ap.parse_args()
+    from modules.robot_hub import require_free
+    require_free(args.port, args.host, "viz port")          # fixed port: stop BEFORE dialling robots or loading models
 
     kg_path = os.path.abspath(args.kg_path)
     state = GraphState(kg_path)
@@ -844,13 +854,13 @@ def main():
     history = HistoryProvider(os.path.abspath(args.sessions_db),
                               embed_model=(args.embed_model or None))
     hub = None
-    from modules.robot_hub import first_free
     if args.robot_hub is not None:
         from modules.robot_hub import RobotHub
         hub = RobotHub(args.robot_hub)
         hub.start()
-        if hub.port != args.robot_hub:
-            print(f"[viz] hub port {args.robot_hub} is taken -> using {hub.port}")
+        if args.navel_host:
+            from modules.navel_link import NavelLink
+            hub.add_link("navel", NavelLink(args.navel_host, args.navel_port))
     tagger = None
     if args.action_tags:
         if hub is None or chat is None:
@@ -861,14 +871,11 @@ def main():
     if hub is not None and not args.no_voice:
         from modules.speech_processor import SpeechProcessor
         stt = SpeechProcessor({"whisper_model_size": args.whisper_model, "whisper_device": args.whisper_device,
-                               "whisper_compute_type": "float16"})
+                               "whisper_compute_type": "float16",
+                               "whisper_language": None if args.whisper_language == "auto" else args.whisper_language})
         threading.Thread(target=stt.initialize, daemon=True).start()   # load in the background
     handler = make_handler(state, history, chat, hub, tagger, stt, others)
-    port = first_free(args.port, args.host)
-    if port != args.port:
-        print(f"[viz] port {args.port} is taken -> using {port}")
-    args.port = port
-    server = ThreadingHTTPServer((args.host, port), handler)
+    server = ThreadingHTTPServer((args.host, args.port), handler)
 
     print(f"[viz] serving KG visualizer at  http://{args.host}:{args.port}/")
     print(f"[viz] polling KG file:          {state.kg_path}")
@@ -876,6 +883,7 @@ def main():
     print(f"[viz] persona chat:             {chat.backend if chat else 'off (--no-chat)'}")
     print(f"[viz] action tags (Method B):   {'on' if tagger else 'off (--action-tags)'}")
     print(f"[viz] robot microphone:         {f'faster-whisper {args.whisper_model} on {args.whisper_device} (loading in the background)' if stt else 'off (needs --robot-hub, not --no-voice)'}")
+    print(f"[viz] navel link:               {f'dialling ws://{args.navel_host}:{args.navel_port}' if args.navel_host and hub else 'off (--navel-host IP)'}")
     print(f"[viz] robot hub:                {f'port {hub.port} (robot server_url -> http://THIS_IP:{hub.port})' if hub else 'off (--robot-hub)'}")
     if history.store is not None:
         kind = "RAG" if history.rag is not None else "keyword"

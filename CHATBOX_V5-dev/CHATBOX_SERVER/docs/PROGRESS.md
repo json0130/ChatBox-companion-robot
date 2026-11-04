@@ -1181,3 +1181,8 @@ the person turned or looked away. Four separate causes, not one.
 - `GET /robots` -> {hub, port, robots:[{robot_name, client_id}]} from the hub's connected clients; HUD row "robot" polls it every 2 s: green dot + names = connected, red "waiting · :PORT" = hub up but no robot, grey "hub off" = no `--robot-hub`, red "viz offline" = server unreachable.
 - Worked: browser check with a fake Socket.IO robot (green "ChatBox" while connected, red "waiting" after it left); test_robots_endpoint_shows_connect_and_disconnect.
 - Caveat: "connected" means the client finished `client_init` on the hub; a robot whose connection dies silently shows until Socket.IO's ping timeout (~25 s) fires.
+
+## Persona announcement says only the role
+- Tried/found: viz Apply sent `persona_name = "<role>, <OCEAN words>"` and the Jetson (robot.py `on_persona_update`) speaks "Persona updated to {persona_name}." -> it read out the trait description too.
+- Worked: `persona_name` is now the role label only ("Persona updated to Receptionist."); OCEAN still travels in `personality`, the long description in `robot_role`. Client unchanged. test_persona_chat asserts no comma in persona_name.
+- Not verified on the Jetson. ESP32-stuck: diagnosed from code only (see chat); no hardware access.

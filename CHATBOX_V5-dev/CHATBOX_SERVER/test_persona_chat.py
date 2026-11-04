@@ -162,7 +162,7 @@ def test_apply_pushes_the_persona_and_a_late_robot_gets_it(hub_env):
     assert out["ok"] and out["robot"] == {"robots": 1, "sent": True}
     p = early.wait_for("persona_update")[0]
     assert p["personality"] == {"O": 0.5, "C": 0.9, "E": 0.05, "A": 0.8, "N": 0.55}   # -1..1 -> 0..1
-    assert p["persona_name"] and p["robot_role"]
+    assert p["persona_name"] and "," not in p["persona_name"] and p["robot_role"]   # spoken: role only
     assert p["voice_config"]["language"] == "en" and p["voice_config"]["pitch"].endswith("st")  # base voice kept
     assert out["voice"]["rate"] == p["voice_config"]["rate"]
     late = _FakeRobot(hub_env["hub"].port, "Navel", "navel_001"); hub_env["robots"].append(late)

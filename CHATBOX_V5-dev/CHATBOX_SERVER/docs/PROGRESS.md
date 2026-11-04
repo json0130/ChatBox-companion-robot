@@ -1163,3 +1163,4 @@ the person turned or looked away. Four separate causes, not one.
 
 ## Viz: apply button moves into the open profile — 2026-11-04
 - **Done:** the apply button and its status line moved out of the sticky header into the open profile card (bottom of its editor, `position: sticky; bottom: 0`), so it stays in view while that card is on screen and rests at the card's end when scrolled past. The header keeps the title and the "now:" line. Checked in a browser. With every card closed there is no apply button (open Custom or a profile).
+- **Reordered (same day):** in the open profile the Role select, its brief and goal/talks/avoids/knows now come first, then the pentagon, the OCEAN sliders and apply.

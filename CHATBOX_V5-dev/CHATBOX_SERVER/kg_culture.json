@@ -2129,24 +2129,24 @@
       "timescale": "SLOW"
     },
     {
-      "id": "bc33a79f-c204-4db5-8896-e150836a633b",
+      "id": "fac6c820-e383-41c1-af10-bfb845c47ab1",
       "source_id": "chatbox",
       "target_id": "role:storyteller",
       "provenance": {
         "source": "viz",
-        "timestamp": "2026-11-04T00:48:22.053036Z",
+        "timestamp": "2026-11-04T03:15:36.916746Z",
         "confidence": 1.0
       },
       "edge_type": "has_role",
       "timescale": "SLOW"
     },
     {
-      "id": "8d1f8398-4255-4d5f-9fa3-f54e6448095b",
+      "id": "c8ce451f-9ce4-4348-88eb-c53167ae4a00",
       "source_id": "chatbox",
       "target_id": "chatbox:persona:assigned",
       "provenance": {
         "source": "viz",
-        "timestamp": "2026-11-04T00:48:22.053092Z",
+        "timestamp": "2026-11-04T03:15:36.916810Z",
         "confidence": 1.0
       },
       "edge_type": "has_persona",

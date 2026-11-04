@@ -254,8 +254,8 @@ def transform(raw: dict) -> dict:
 class GraphState:
     """Reads kg_state.json on demand, caching the last good parse."""
 
-    def __init__(self, kg_path: str):
-        self.kg_path = kg_path
+    def __init__(self, kg_path: str, persona_file: str = "persona_assignment.json"):
+        self.kg_path, self.persona_file = kg_path, persona_file
         self._last_good_raw: dict = {"nodes": [], "edges": []}
 
     def _raw(self) -> dict:
@@ -331,7 +331,7 @@ class GraphState:
 
     def _persona_path(self) -> str:
         return os.path.join(os.path.dirname(os.path.abspath(self.kg_path)),
-                            "persona_assignment.json")
+                            self.persona_file)
 
     def persona_choices(self) -> dict:
         """Robots, library roles and what each robot currently plays (from the KG)."""
@@ -491,21 +491,46 @@ class HistoryProvider:
         return self.store.turns_for_topic(topic, person, limit=limit)
 
 
+PRIMARY = "chatbox"      # the robot of the main graph (--kg-path); `others` are extra robots, each with its own graph
+
+
+def seed_robot_graph(path: str, robot_id: str) -> None:
+    """A fresh graph file for a robot: just the robot and the role library (no people), so a robot
+    other than the ChatBox starts with its own graph that has nothing to do with the ChatBox's."""
+    if os.path.exists(path):
+        return
+    from modules.graph_relationship.schema import Embodiment, RobotNode
+    from modules.graph_relationship.store import InMemoryGraphStore
+    from modules.role_seed import seed_role_library
+    store = InMemoryGraphStore()
+    store.upsert_node(RobotNode(id=robot_id, name=robot_id.capitalize(), embodiment=Embodiment.CAT))
+    seed_role_library(store)
+    store.save(path)
+
+
 def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
-                 chat=None, hub=None, tagger=None, stt=None):
-    def speak(texts):
-        """Robot says `texts` in order (in a thread: it waits on acks), then returns to DEFAULT."""
-        threading.Thread(target=hub.say_steps, args=(texts,), daemon=True).start()
-        n = len(hub.robots())
+                 chat=None, hub=None, tagger=None, stt=None, others=None):
+    # robot id -> (its GraphState, its PersonaChat): one tab each, nothing shared between them
+    spaces = {PRIMARY: (state, chat), **(others or {})}
+
+    def space(robot):
+        if robot not in spaces:
+            raise ValueError(f"unknown robot {robot!r}")
+        return spaces[robot]
+
+    def speak(texts, robot=PRIMARY):
+        """`robot` says `texts` in order (in a thread: it waits on acks), then returns to DEFAULT."""
+        threading.Thread(target=hub.say_steps, args=(texts,), kwargs={"robot": robot}, daemon=True).start()
+        n = len(hub.robots(robot))
         return {"robots": n, "sent": bool(n), "steps": len(texts)}
 
     def converse(robot, message, hist):
         """One turn: persona reply, then the robot (if any) speaks it. Shared by /chat and the mic."""
         t0 = time.time()
-        out = chat.reply(robot, message, hist)
+        out = space(robot)[1].reply(robot, message, hist)
         out["timing"] = {"reply_s": round(time.time() - t0, 2)}
         # hub = RobotHub or None: the connected robot speaks the reply (its tag drives the face)
-        if hub is not None and tagger is not None:
+        if hub is not None and tagger is not None and robot == PRIMARY:
             # Method B: one gesture tag per sentence; each sentence is spoken as soon as ITS tag is
             # chosen, while the next ones are still being planned
             from modules.action_tag_generator import step_texts
@@ -513,7 +538,7 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
             def steps():
                 while (t := q.get()) is not None:
                     yield t
-            threading.Thread(target=hub.say_steps, args=(steps(),), daemon=True).start()
+            threading.Thread(target=hub.say_steps, args=(steps(),), kwargs={"robot": robot}, daemon=True).start()
             def on_step(i):
                 if not queued:
                     out["timing"]["first_step_s"] = round(time.time() - t0, 2)
@@ -528,18 +553,23 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
                     q.put(out["reply"])
             finally:
                 q.put(None)
-            n = len(hub.robots())
+            n = len(hub.robots(robot))
             out["robot"] = {"robots": n, "sent": bool(n), "steps": len(queued) or 1}
+        elif hub is not None and robot == PRIMARY:
+            out["robot"] = speak([f"[{out['tag']}] {out['reply']}" if out.get("tag") else out["reply"]], robot)
+        elif hub is not None:       # another robot: its client's tags are unknown here, so plain speech
+            out["robot"] = speak([out["reply"]], robot)
         else:
-            out["robot"] = (speak([f"[{out['tag']}] {out['reply']}" if out.get("tag") else out["reply"]])
-                            if hub is not None else None)
+            out["robot"] = None
         return out
 
-    voice_log, voice_hist, voice_ts, vlock = [], [], [None], threading.Lock()
+    voice_log, vlock = [], threading.Lock()
+    voice_hist, voice_ts = {}, {}           # per robot: its own spoken conversation, restarted on a new setup
 
     def on_speech(audio_b64, robot_name):
         """Mic audio from the robot: transcribe, show it like a typed message, reply, speak."""
-        item = {"id": 0, "text": "", "error": None, "out": None, "done": False}
+        robot = robot_name.lower().replace(" ", "")
+        item = {"id": 0, "robot": robot, "text": "", "error": None, "out": None, "done": False}
         with vlock:
             item["id"] = (voice_log[-1]["id"] + 1) if voice_log else 1
             voice_log.append(item); del voice_log[:-50]
@@ -551,17 +581,18 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
                 item["error"] = text if not ok else "nothing heard"
                 return
             item["text"] = text.strip()
-            if chat is None:
+            r_state, r_chat = space(robot)
+            if r_chat is None:
                 item["error"] = "chat is off (--no-chat)"
                 return
-            robot = robot_name.lower().replace(" ", "")
-            a = (state.persona_choices().get("assigned") or {}).get(robot)
-            if (a or {}).get("ts") != voice_ts[0]:      # a new setup was applied: restart the conversation
-                voice_hist.clear(); voice_ts[0] = (a or {}).get("ts")
-            item["out"] = out = converse(robot, item["text"], list(voice_hist))
+            a = (r_state.persona_choices().get("assigned") or {}).get(robot)
+            hist = voice_hist.setdefault(robot, [])
+            if (a or {}).get("ts") != voice_ts.get(robot):  # a new setup was applied: restart the conversation
+                hist.clear(); voice_ts[robot] = (a or {}).get("ts")
+            item["out"] = out = converse(robot, item["text"], list(hist))
             print(f"[voice] stt {item['stt_s']}s · reply {out['timing']['reply_s']}s"
                   f" · tags {out['timing'].get('tags_s', '-')}s · {item['text']!r}")
-            voice_hist.append((item["text"], out["reply"]))
+            hist.append((item["text"], out["reply"]))
         except Exception as exc:
             item["error"] = str(exc)
         finally:
@@ -584,6 +615,13 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
 
         def do_GET(self):
             path = self.path.split("?", 1)[0]
+            qs = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+            robot = (qs.get("robot") or [PRIMARY])[0]
+            try:
+                r_state, r_chat = space(robot)
+            except ValueError as exc:
+                self._send(400, json.dumps({"ok": False, "error": str(exc)}).encode(), "application/json")
+                return
             if path == "/" or path == "/index.html":
                 try:
                     with open(_INDEX_HTML, "rb") as fh:
@@ -592,23 +630,21 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
                 except OSError:
                     self._send(404, b"index.html not found", "text/plain")
             elif path == "/graph.json":
-                body = json.dumps(state.read()).encode("utf-8")
+                body = json.dumps(r_state.read()).encode("utf-8")
                 self._send(200, body, "application/json")
             elif path == "/history":
-                qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]
-                                           if "?" in self.path else "")
                 topic = (qs.get("topic") or [""])[0]
                 person = (qs.get("person") or [None])[0]
-                turns = history.history(topic, person) if history else []
+                turns = history.history(topic, person) if history and robot == PRIMARY else []   # transcripts are the ChatBox's
                 self._send(200, json.dumps({"topic": topic, "turns": turns}).encode(),
                            "application/json")
             elif path == "/culture":
                 # Current override + the cultures the robot knows (selector choices).
-                body = json.dumps({"active": state.get_culture_override(),
-                                   "cultures": state.culture_labels()}).encode()
+                body = json.dumps({"active": r_state.get_culture_override(),
+                                   "cultures": r_state.culture_labels()}).encode()
                 self._send(200, body, "application/json")
             elif path == "/persona":
-                self._send(200, json.dumps(state.persona_choices()).encode(),
+                self._send(200, json.dumps(r_state.persona_choices()).encode(),
                            "application/json")
             elif path == "/voice":
                 self._send(200, json.dumps({"enabled": stt is not None, "items": list(voice_log)}).encode(),
@@ -616,12 +652,13 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
             elif path == "/robots":
                 from modules.chatbox_actions import ACTIONS
                 body = {"hub": hub is not None, "port": hub.port if hub else None,
-                        "robots": hub.robots() if hub else [], "actions": ACTIONS}
+                        "robots": hub.robots() if hub else [], "actions": ACTIONS,
+                        "workspaces": list(spaces)}
                 self._send(200, json.dumps(body).encode(), "application/json")
             elif path == "/chat":
-                body = {"available": chat is not None,
-                        "backend": chat.backend if chat is not None else None,
-                        "hint": None if chat is not None else
+                body = {"available": r_chat is not None,
+                        "backend": r_chat.backend if r_chat is not None else None,
+                        "hint": None if r_chat is not None else
                         "the viz server was started with --no-chat; restart it without that flag"}
                 self._send(200, json.dumps(body).encode(), "application/json")
             else:
@@ -632,33 +669,42 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
             try:
                 length = int(self.headers.get("Content-Length", 0))
                 body = json.loads(self.rfile.read(length) or b"{}")
+                robot = str(body.get("robot") or PRIMARY)
+                try:
+                    r_state, r_chat = space(robot)
+                except ValueError as exc:
+                    self._send(400, json.dumps({"ok": False, "error": str(exc)}).encode(), "application/json")
+                    return
                 if path == "/culture":
-                    active = state.set_culture_override(str(body.get("active_culture", "auto")))
+                    active = r_state.set_culture_override(str(body.get("active_culture", "auto")))
                     self._send(200, json.dumps({"ok": True, "active": active}).encode(),
                                "application/json")
                     return
                 if path == "/action":               # a button: play one gesture on the connected robot(s)
                     from modules.chatbox_actions import ACTIONS
                     tag = str(body.get("tag", "")).upper()
-                    if tag not in ACTIONS:
+                    if robot != PRIMARY:
+                        self._send(400, json.dumps({"ok": False, "error": f"no actions defined for {robot} yet"}
+                                                   ).encode(), "application/json")
+                    elif tag not in ACTIONS:
                         self._send(400, json.dumps({"ok": False, "error": f"unknown action {tag!r}"}).encode(),
                                    "application/json")
-                    elif hub is None or not hub.robots():
+                    elif hub is None or not hub.robots(robot):
                         self._send(409, json.dumps({"ok": False, "error": "no robot connected"}).encode(),
                                    "application/json")
                     else:
-                        self._send(200, json.dumps({"ok": True, "tag": tag, **hub.say(f"[{tag}]")}).encode(),
+                        self._send(200, json.dumps({"ok": True, "tag": tag, **hub.say(f"[{tag}]", robot)}).encode(),
                                    "application/json")
                     return
                 if path == "/chat":
-                    if chat is None:
+                    if r_chat is None:
                         self._send(503, json.dumps({"ok": False, "error":
                             "chat is off (the viz server was started with --no-chat)"}
                         ).encode(), "application/json")
                         return
                     try:
                         hist = [(str(u), str(b)) for u, b in (body.get("history") or [])]
-                        out = converse(str(body.get("robot", "chatbox")), str(body.get("message", "")), hist)
+                        out = converse(robot, str(body.get("message", "")), hist)
                     except ValueError as exc:
                         self._send(400, json.dumps({"ok": False, "error": str(exc)}).encode(),
                                    "application/json")
@@ -671,7 +717,7 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
                     return
                 if path == "/persona":
                     try:
-                        a = state.set_persona(str(body.get("robot", "")),
+                        a = r_state.set_persona(robot,
                                               str(body.get("role", "")),
                                               body.get("ocean") or {})
                     except ValueError as exc:
@@ -679,15 +725,15 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
                                    .encode(), "application/json")
                         return
                     from modules.persona_voice import voice_for
-                    role = next((r for r in state.persona_choices()["roles"]
+                    role = next((r for r in r_state.persona_choices()["roles"]
                                  if r["id"] == a["role"]), {})
                     label = role.get("label", a["role"])
                     voice = voice_for(label, a["ocean"])
-                    robot = None
-                    if hub is not None:                     # tell the connected robot(s) about the new setup
-                        robot = hub.push_persona(label,     # the robot speaks "Persona updated to <name>."
-                                                 role.get("brief") or label, a["ocean"], voice)
-                    self._send(200, json.dumps({"ok": True, **a, "voice": voice, "robot": robot}).encode(),
+                    sent = None
+                    if hub is not None:                     # tell THIS robot about its new setup
+                        sent = hub.push_persona(label,      # the robot speaks "Persona updated to <name>."
+                                                role.get("brief") or label, a["ocean"], voice, robot)
+                    self._send(200, json.dumps({"ok": True, **a, "voice": voice, "robot": sent}).encode(),
                                "application/json")
                     return
                 if path != "/delete":
@@ -695,9 +741,9 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
                     return
                 kind = body.get("kind")
                 if kind == "node":
-                    removed = state.delete_node(str(body["id"]))
+                    removed = r_state.delete_node(str(body["id"]))
                 elif kind == "edge":
-                    removed = state.delete_edge(
+                    removed = r_state.delete_edge(
                         str(body["source"]), str(body["target"]), str(body["edge_type"]))
                 else:
                     self._send(400, b'{"ok":false,"error":"kind must be node|edge"}',
@@ -717,6 +763,10 @@ def main():
     ap.add_argument("--kg-path", default="kg_culture.json",
                     help="Path to the KG JSON written by InMemoryGraphStore.save "
                          "(default: kg_culture.json — the culture branch's isolated KG)")
+    ap.add_argument("--navel-kg-path", default="kg_navel.json",
+                    help="graph file of the Navel tab (created with the role library if missing; it shares "
+                         "nothing with the ChatBox graph)")
+    ap.add_argument("--no-navel", action="store_true", help="no Navel tab")
     ap.add_argument("--port", type=int, default=8765, help="HTTP port (default 8765)")
     ap.add_argument("--host", default="127.0.0.1", help="Bind host (default 127.0.0.1)")
     ap.add_argument("--sessions-db", default="sessions.db",
@@ -755,6 +805,12 @@ def main():
         llm = (OllamaChat(args.ollama) if args.ollama
                else ai_server_chat(args.ai_server or DEFAULT_AI_SERVER))
         chat = PersonaChat(kg_path, state._persona_path(), llm)
+    others = {}
+    if not args.no_navel:
+        navel_path = os.path.abspath(args.navel_kg_path)
+        seed_robot_graph(navel_path, "navel")
+        navel = GraphState(navel_path, "persona_assignment_navel.json")
+        others["navel"] = (navel, PersonaChat(navel_path, navel._persona_path(), llm) if chat else None)
     history = HistoryProvider(os.path.abspath(args.sessions_db),
                               embed_model=(args.embed_model or None))
     hub = None
@@ -777,7 +833,7 @@ def main():
         stt = SpeechProcessor({"whisper_model_size": args.whisper_model, "whisper_device": args.whisper_device,
                                "whisper_compute_type": "float16"})
         threading.Thread(target=stt.initialize, daemon=True).start()   # load in the background
-    handler = make_handler(state, history, chat, hub, tagger, stt)
+    handler = make_handler(state, history, chat, hub, tagger, stt, others)
     port = first_free(args.port, args.host)
     if port != args.port:
         print(f"[viz] port {args.port} is taken -> using {port}")
@@ -786,6 +842,7 @@ def main():
 
     print(f"[viz] serving KG visualizer at  http://{args.host}:{args.port}/")
     print(f"[viz] polling KG file:          {state.kg_path}")
+    print(f"[viz] navel tab:                {others['navel'][0].kg_path if others else 'off (--no-navel)'}")
     print(f"[viz] persona chat:             {chat.backend if chat else 'off (--no-chat)'}")
     print(f"[viz] action tags (Method B):   {'on' if tagger else 'off (--action-tags)'}")
     print(f"[viz] robot microphone:         {f'faster-whisper {args.whisper_model} on {args.whisper_device} (loading in the background)' if stt else 'off (needs --robot-hub, not --no-voice)'}")

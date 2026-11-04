@@ -231,6 +231,11 @@ cd /home/jay/Desktop/2026-Jay/ChatBox-companion-robot/CHATBOX-DEMO_V4/CHATBOX_SE
   python3 -m modules.graph_relationship.viz.server --robot-hub --action-tags --ai-server 10.42.0.118
   python3 -m modules.action_tag_generator "Hello! Nice to meet you." --ai-server 10.42.0.118   # plan only
   python3 -m modules.graph_relationship.viz.server --robot-hub 5001
+  # ONE server, ONE port, a TAB per robot (ChatBox | Navel; tabs show once there is more than one): each tab
+  # has its own graph, role/persona, chat, mic transcripts and connection light. Robots are told apart by the
+  # robot_name they connect with ("ChatBox", "Navel"); persona/speech only go to that robot, so Navel never sees
+  # the ChatBox's Jay graph. Navel's graph is kg_navel.json (created with the role library on first start):
+  #   --navel-kg-path FILE   --no-navel (ChatBox only)
   # The robot's MICROPHONE works through the hub too: its `speech` audio is transcribed here with
   # faster-whisper (CPU, model loads in the background) and appears in the chat panel as what you said,
   # then the reply is spoken on the robot like a typed one. --whisper-model small for better accuracy, --no-voice to skip.

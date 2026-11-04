@@ -21,6 +21,10 @@ from werkzeug.serving import make_server
 BASE_VOICE = {"language": "en", "gender": "female", "provider": "gtts"}
 
 
+# robots whose client knows the `[DEFAULT]` pose tag (ChatBox: EMOTION_MAP); other robots just get speech
+DEFAULT_POSE_ROBOTS = {"chatbox"}
+
+
 def ocean_to_personality(ocean: Dict[str, float]) -> Dict[str, float]:
     """viz OCEAN is -1..1; the client_config `personality` block is 0..1."""
     return {k: round((float(v) + 1) / 2, 3) for k, v in ocean.items()}
@@ -44,7 +48,7 @@ class RobotHub:
     def __init__(self, port: int = 5000, host: str = "0.0.0.0") -> None:
         self.sio = socketio.Server(async_mode="threading", cors_allowed_origins="*")
         self.clients: Dict[str, dict] = {}           # sid -> {robot_name, client_id}
-        self.last_persona: Optional[dict] = None     # replayed to a robot that connects after Apply
+        self.last_persona: Dict[str, dict] = {}      # robot id -> last persona, replayed to a robot that connects after Apply
         self._step = 0
         self._acks: Dict[str, threading.Event] = {}  # step_id -> set when the robot finished speaking it
         self._lock = threading.Lock()
@@ -63,12 +67,13 @@ class RobotHub:
                 return
             with self._lock:
                 self.clients[sid] = {"robot_name": data["robot_name"], "client_id": data["client_id"]}
-                persona = self.last_persona
+                persona = self.last_persona.get(data["robot_name"].lower())
             self.sio.emit("client_init_response", {"success": True, "client_id": data["client_id"],
                           "robot_name": data["robot_name"],
                           "message": f"persona hub: {data['robot_name']} connected"}, to=sid)
             # tag-only step (no words): the robot starts in its default pose
-            self.sio.emit("demo_step", {"step_id": "connect", "text": "[DEFAULT]", "require_ack": False}, to=sid)
+            if data["robot_name"].lower() in DEFAULT_POSE_ROBOTS:
+                self.sio.emit("demo_step", {"step_id": "connect", "text": "[DEFAULT]", "require_ack": False}, to=sid)
             if persona:
                 self.sio.emit("persona_update", persona, to=sid)
 
@@ -97,39 +102,47 @@ class RobotHub:
     def stop(self) -> None:
         self._server.shutdown()
 
-    def robots(self) -> list:
+    def _sids(self, robot: Optional[str] = None) -> list:
+        """Connected clients; `robot` (a robot id like "navel", matched to the client's robot_name,
+        case-insensitive) limits it to that robot, None = every robot."""
         with self._lock:
-            return [dict(c) for c in self.clients.values()]
+            return [sid for sid, c in self.clients.items()
+                    if robot is None or c["robot_name"].lower() == robot]
+
+    def robots(self, robot: Optional[str] = None) -> list:
+        with self._lock:
+            return [dict(c) for c in self.clients.values()
+                    if robot is None or c["robot_name"].lower() == robot]
 
     def push_persona(self, persona_name: str, robot_role: str, ocean: Dict[str, float],
-                     voice: Optional[Dict[str, str]] = None) -> dict:
+                     voice: Optional[Dict[str, str]] = None, robot: Optional[str] = None) -> dict:
         payload = {"persona_name": persona_name, "robot_role": robot_role,
                    "personality": ocean_to_personality(ocean)}
         if voice:           # the client REPLACES its whole voice_config, so keep the base voice keys
             payload["voice_config"] = {**BASE_VOICE, **voice}
         with self._lock:
-            self.last_persona = payload
-            targets = list(self.clients)
+            self.last_persona[robot or "*"] = payload
+        targets = self._sids(robot)
         for sid in targets:
             self.sio.emit("persona_update", payload, to=sid)
         return {"robots": len(targets), "sent": bool(targets)}
 
-    def say(self, text: str) -> dict:
+    def say(self, text: str, robot: Optional[str] = None) -> dict:
         with self._lock:
             self._step += 1
-            step, targets = f"persona-{self._step}", list(self.clients)
+            step = f"persona-{self._step}"
+        targets = self._sids(robot)
         for sid in targets:
             self.sio.emit("demo_step", {"step_id": step, "text": text, "require_ack": False}, to=sid)
         return {"robots": len(targets), "sent": bool(targets)}
 
-    def say_steps(self, texts, timeout: float = 30.0) -> dict:
+    def say_steps(self, texts, timeout: float = 30.0, robot: Optional[str] = None) -> dict:
         """Speak `texts` one after another: each is its own demo_step, sent once the robot has
         acked (= finished speaking) the previous one, so each step's [TAG] fires its own gesture.
         `texts` may be a generator that blocks until the next sentence is ready, so speech can start
-        before the whole reply is planned. Blocks; call from a thread. A robot that never acks costs
-        `timeout` per step."""
-        with self._lock:
-            targets = list(self.clients)
+        before the whole reply is planned. Only `robot` hears it (None = all). Blocks; call from a
+        thread. A robot that never acks costs `timeout` per step."""
+        targets = self._sids(robot)
         n = 0
         for text in texts:
             n += 1
@@ -142,10 +155,12 @@ class RobotHub:
             if targets:
                 ev.wait(timeout)
             self._acks.pop(step, None)
-        if targets and n:           # speech is over: tag-only step, no words, so the robot returns to its default pose
+        if n:                       # speech is over: tag-only step, no words, so the robot returns to its default pose
             with self._lock:
                 self._step += 1
                 step = f"persona-{self._step}"
-            for sid in targets:
+                knows = [sid for sid in targets if sid in self.clients
+                         and self.clients[sid]["robot_name"].lower() in DEFAULT_POSE_ROBOTS]
+            for sid in knows:
                 self.sio.emit("demo_step", {"step_id": step, "text": "[DEFAULT]", "require_ack": False}, to=sid)
         return {"robots": len(targets), "sent": bool(targets), "steps": n}

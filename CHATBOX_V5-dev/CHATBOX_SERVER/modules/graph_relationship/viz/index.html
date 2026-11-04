@@ -32,6 +32,17 @@
     box-shadow: 0 4px 18px rgba(0,0,0,0.35);
   }
   #hud   { top: 14px; left: 14px; min-width: 190px; }
+  #tabs { position: fixed; top: 12px; left: calc((100vw - var(--side)) / 2); transform: translateX(-50%);
+          display: flex; gap: 6px; z-index: 6; }
+  #tabs[hidden] { display: none; }
+  #tabs button { padding: 6px 16px; font-size: 13px; border-radius: 8px; cursor: pointer;
+                 background: rgba(28,30,41,0.92); color: var(--muted); border: 1px solid var(--panel-brd); }
+  #tabs button.on { color: var(--text); border-color: var(--slow); font-weight: 600; }
+  #tabs .tdot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 7px;
+                background: #e5534b; }
+  #tabs .tdot.on { background: #3ddc84; }
+  .pc-logr { display: flex; flex-direction: column; gap: 6px; }
+  .pc-logr[hidden] { display: none; }
   #actions { top: 168px; left: 14px; width: 190px; }
   #actions h1 { margin: 0 0 8px; font-size: 14px; letter-spacing: .3px; }
   #act-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
@@ -202,6 +213,8 @@
 <canvas style="display:none"></canvas>
 <svg id="graph"></svg>
 
+<div id="tabs" hidden></div>
+
 <div id="hud" class="panel">
   <h1>graph_relationship<span id="pulse"></span></h1>
   <div class="stat"><span class="muted">nodes</span><b id="n-count">0</b></div>
@@ -223,8 +236,7 @@
     <h2>Role &amp; persona</h2>
     <div id="p-now"></div>
   </div>
-  <div class="legend-title" style="margin-top:10px">Robot</div>
-  <select id="p-robot"></select>
+  <select id="p-robot" hidden></select>
   <div class="legend-title" style="margin-top:10px">Profiles <span class="muted"
     style="text-transform:none;letter-spacing:0">— click one to open it, then apply</span></div>
   <div id="p-cards"></div>
@@ -739,6 +751,8 @@ function clearHighlight() {
 }
 
 // ---- conversation panel ---------------------------------------------------
+let curRobot = "chatbox";          // the tab: every graph / persona / chat / voice call is for this robot
+const RQ = () => "robot=" + encodeURIComponent(curRobot);
 let selectedId = null;     // session (Event) node whose transcript is shown
 const convoEl   = document.getElementById("convo");
 const titleEl   = document.getElementById("convo-title");
@@ -831,7 +845,7 @@ async function loadTopicHistory(node) {
   const el = () => document.getElementById("topic-history");
   const topic = node.topicLabel || node.label || "";
   try {
-    const r = await fetch("/history?topic=" + encodeURIComponent(topic), { cache: "no-store" });
+    const r = await fetch("/history?topic=" + encodeURIComponent(topic) + "&" + RQ(), { cache: "no-store" });
     const j = await r.json();
     if (selectedId !== node.id) return;           // panel changed while loading
     const box = el(); if (!box) return;
@@ -858,7 +872,7 @@ async function loadTopicHistory(node) {
 async function postDelete(body) {
   try {
     const r = await fetch("/delete", { method: "POST",
-      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, robot: curRobot }) });
     const j = await r.json();
     if (!j.ok) { alert("Delete failed: " + (j.error || "unknown")); return false; }
     return true;
@@ -1014,7 +1028,7 @@ function fillPersona() {           // form ← what the robot plays right now
 }
 async function loadPersona() {
   try {
-    pChoices = await (await fetch("/persona", { cache: "no-store" })).json();
+    pChoices = await (await fetch("/persona?" + RQ(), { cache: "no-store" })).json();
   } catch (_) { return; }
   const keep = pEl("p-robot").value, keepRole = pEl("p-role").value;
   pEl("p-robot").innerHTML = pChoices.robots.map(r => `<option>${esc(r)}</option>`).join("");
@@ -1030,7 +1044,7 @@ pEl("p-apply").addEventListener("click", async () => {
   TRAITS.forEach(([k]) => ocean[k] = +pEl("p-" + k).value);
   const r = await (await fetch("/persona", { method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ robot: pEl("p-robot").value, role: pEl("p-role").value, ocean })
+    body: JSON.stringify({ robot: curRobot, role: pEl("p-role").value, ocean })
   })).json();
   pDirty = false;
   if (r.ok) pPending = { role: r.role, ocean: r.ocean, t0: Date.now() };
@@ -1046,40 +1060,52 @@ pEl("p-apply").addEventListener("click", async () => {
 // assignment file), so it needs no webcam loop. The conversation restarts whenever a
 // new setup is applied, so the old persona's replies can't leak into the new one.
 const pcEl = id => document.getElementById(id);
-let chatHist = [], chatEpoch, chatBusy = false, chatOn = false;
-function chatAdd(cls, html) {
-  const log = pcEl("pc-log"), d = document.createElement("div");
-  d.className = "pc-msg " + cls; d.innerHTML = html; log.appendChild(d);
-  log.scrollTop = log.scrollHeight; return d;
+// One independent conversation per robot (tab): its own bubbles, history, epoch and announcements.
+const chatHists = {}, chatEpochs = {}, chatStates = {};
+let chatBusy = false, chatOn = false;
+const histOf = r => (chatHists[r] ||= []);
+function logFor(robot) {
+  const box = pcEl("pc-log");
+  let l = box.querySelector(`.pc-logr[data-r="${robot}"]`);
+  if (!l) {
+    l = document.createElement("div"); l.className = "pc-logr"; l.dataset.r = robot;
+    l.hidden = robot !== curRobot; box.appendChild(l);
+  }
+  return l;
+}
+function chatAdd(cls, html, robot = curRobot) {
+  const d = document.createElement("div");
+  d.className = "pc-msg " + cls; d.innerHTML = html; logFor(robot).appendChild(d);
+  pcEl("pc-log").scrollTop = pcEl("pc-log").scrollHeight; return d;
 }
 function oceanText(o) { return TRAITS.map(([k]) => k + fmt2(o[k] || 0)).join(" "); }
 function chatSync() {            // called from loadPersona() each second
   if (!pChoices) return;
-  const robot = pEl("p-robot").value || "chatbox";
+  const robot = curRobot;
   const a = (pChoices.assigned || {})[robot] || null, epoch = a ? a.ts : null;
   const role = a ? ((pChoices.roles || []).find(r => r.id === a.role) || {}).label || a.role
                  : ((pChoices.current || {})[robot] || {}).role_label || "";
-  if (chatEpoch !== undefined && epoch !== chatEpoch) {
-    chatHist = [];
+  if (chatEpochs[robot] !== undefined && epoch !== chatEpochs[robot]) {
+    chatHists[robot] = [];
     chatAdd("pc-sys", `— ${esc(robot)} now plays <b>${esc(role)}</b>` +
             (a ? ` (${esc(oceanText(a.ocean))})` : "") + ` · conversation restarted —`);
   }
-  chatEpoch = epoch;
+  chatEpochs[robot] = epoch;
   if (!pcEl("pc-as").dataset.fromReply)
     pcEl("pc-as").innerHTML = role ? `as <b>${esc(role)}</b>` + (a ? ` · ${esc(oceanText(a.ocean))}` : "") : "";
 }
-let chatState = null;            // "on" | "off" | "missing" — announce only on change
 async function chatConfig() {
+  const robot = curRobot;          // the tab may change while this awaits
   let state, c = {};
-  try { c = await (await fetch("/chat", { cache: "no-store" })).json(); state = c.available ? "on" : "off"; }
+  try { c = await (await fetch("/chat?" + RQ(), { cache: "no-store" })).json(); state = c.available ? "on" : "off"; }
   catch (_) { state = "missing"; }          // old viz process: no /chat route at all
   chatOn = state === "on";
   pcEl("pc-input").disabled = pcEl("pc-send").disabled = !chatOn;
   pcEl("pc-input").placeholder = chatOn ? "say something to the robot…" : "chat unavailable — see the note above";
-  if (state === chatState) return;
-  chatState = state;
+  if (state === chatStates[robot]) return;
+  chatStates[robot] = state;
   if (state === "on")
-    chatAdd("pc-sys", `connected: ${esc(c.backend)} — pick a role/persona, apply, then talk`);
+    chatAdd("pc-sys", `connected: ${esc(c.backend)} — pick a role/persona, apply, then talk`, robot);
   else if (state === "off")
     chatAdd("pc-err", esc(c.hint || "Chat is off."));
   else
@@ -1094,12 +1120,13 @@ function timingText(j, stt) {
   else if (t.tags_s != null) parts.push(`gestures ${t.tags_s}s`);
   return parts.length ? ` · ${parts.join(" · ")}` : "";
 }
-function showReply(el, j, stt) {
+function showReply(el, j, stt, robot = curRobot) {
   el.className = "pc-msg pc-bot";
   el.innerHTML = esc(j.reply) + `<span class="pc-meta">${esc(j.role)} · ${esc(j.persona)}` +
     (j.tag ? ` · [${esc(j.tag)}]` : "") +
     (j.robot ? (j.robot.sent ? ` · spoken on ${j.robot.robots} robot${j.robot.robots > 1 ? "s" : ""} ✓`
                 : " · no robot connected") : "") + timingText(j, stt) + `</span>`;
+  if (robot !== curRobot) return;          // another tab's reply: leave this tab's header alone
   pcEl("pc-as").dataset.fromReply = "1";
   pcEl("pc-as").innerHTML = `as <b>${esc(j.role)}</b> · ${esc(j.persona)}`;
 }
@@ -1114,20 +1141,20 @@ async function pollVoice() {
     let v = voiceSeen.get(it.id);
     if (!v) {
       if (voiceFirst) { voiceSeen.set(it.id, { done: true }); continue; }   // history from before this page load
-      v = { done: false, you: it.text ? chatAdd("pc-you", esc(it.text)) : null, bot: null };
+      v = { done: false, you: it.text ? chatAdd("pc-you", esc(it.text), it.robot) : null, bot: null };
       voiceSeen.set(it.id, v);
     }
     if (v.done) continue;
-    if (it.text && !v.you) v.you = chatAdd("pc-you", esc(it.text));
-    if (it.text && !v.bot && !it.error) v.bot = chatAdd("pc-bot", "…");
+    if (it.text && !v.you) v.you = chatAdd("pc-you", esc(it.text), it.robot);
+    if (it.text && !v.bot && !it.error) v.bot = chatAdd("pc-bot", "…", it.robot);
     if (!it.done) continue;
     v.done = true;
     if (it.error) {
       if (v.bot) { v.bot.className = "pc-msg pc-err"; v.bot.textContent = "No reply: " + it.error; }
-      else chatAdd("pc-err", "couldn't make that out: " + esc(it.error));
+      else chatAdd("pc-err", "couldn't make that out: " + esc(it.error), it.robot);
     } else if (it.out) {
-      chatHist.push([it.text, it.out.reply]);
-      showReply(v.bot, it.out, it.stt_s);
+      histOf(it.robot).push([it.text, it.out.reply]);
+      showReply(v.bot, it.out, it.stt_s, it.robot);
     }
   }
   voiceFirst = false;
@@ -1138,16 +1165,17 @@ pcEl("pc-form").addEventListener("submit", async e => {
   e.preventDefault();
   const input = pcEl("pc-input"), msg = input.value.trim();
   if (!msg || chatBusy || !chatOn) return;
+  const robot = curRobot;          // a reply belongs to the tab it was typed in, even if you switch meanwhile
   input.value = ""; chatBusy = true; pcEl("pc-send").disabled = true;
-  chatAdd("pc-you", esc(msg));
-  const wait = chatAdd("pc-bot", "…");
+  chatAdd("pc-you", esc(msg), robot);
+  const wait = chatAdd("pc-bot", "…", robot);
   try {
     const r = await fetch("/chat", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ robot: pEl("p-robot").value || "chatbox", message: msg, history: chatHist }) });
+      body: JSON.stringify({ robot, message: msg, history: histOf(robot) }) });
     const j = await r.json();
     if (!j.ok) throw new Error(j.error || r.status);
-    chatHist.push([msg, j.reply]);
-    showReply(wait, j);
+    histOf(robot).push([msg, j.reply]);
+    showReply(wait, j, undefined, robot);
   } catch (err) {
     wait.className = "pc-msg pc-err"; wait.textContent = "No reply: " + err.message;
   } finally {
@@ -1155,8 +1183,8 @@ pcEl("pc-form").addEventListener("submit", async e => {
   }
 });
 pcEl("pc-clear").addEventListener("click", () => {
-  chatHist = []; pcEl("pc-log").innerHTML = ""; delete pcEl("pc-as").dataset.fromReply;
-  chatState = null; chatConfig();
+  chatHists[curRobot] = []; logFor(curRobot).innerHTML = ""; delete pcEl("pc-as").dataset.fromReply;
+  chatStates[curRobot] = null; chatConfig();
 });
 chatConfig();
 setInterval(chatConfig, 5000);
@@ -1176,7 +1204,7 @@ function renderActions(actions) {
       const m = pEl("act-msg"); m.textContent = `sending ${tag}…`;
       try {
         const r = await fetch("/action", {method: "POST", headers: {"Content-Type": "application/json"},
-                                          body: JSON.stringify({tag})});
+                                          body: JSON.stringify({tag, robot: "chatbox"})});
         const j = await r.json();
         m.textContent = j.ok ? `sent ${tag} ✓` : (j.error || r.status);
       } catch (e) { m.textContent = "failed: " + e.message; }
@@ -1184,14 +1212,42 @@ function renderActions(actions) {
     box.appendChild(b);
   }
 }
+let tabsKey = "";
+function renderTabs(workspaces, robots) {
+  const box = pEl("tabs");
+  box.hidden = workspaces.length < 2;               // a single robot needs no tabs
+  const up = r => robots.some(x => x.robot_name.toLowerCase() === r);
+  const key = workspaces.map(r => r + up(r) + (r === curRobot)).join();
+  if (key === tabsKey) return;
+  tabsKey = key;
+  box.innerHTML = workspaces.map(r => `<button data-r="${esc(r)}" class="${r === curRobot ? "on" : ""}">` +
+    `<span class="tdot ${up(r) ? "on" : ""}"></span>${esc(r)}</button>`).join("");
+  box.querySelectorAll("button").forEach(b => b.addEventListener("click", () => switchRobot(b.dataset.r)));
+}
+function switchRobot(r) {
+  if (r === curRobot) return;
+  curRobot = r;
+  try { localStorage.setItem("robot-tab", r); } catch (_) {}
+  document.querySelectorAll("#pc-log .pc-logr").forEach(l => l.hidden = l.dataset.r !== r);
+  logFor(r);                                          // make sure this robot has a log
+  pEl("p-robot").innerHTML = `<option>${esc(r)}</option>`;
+  pDirty = false; delete pEl("pc-as").dataset.fromReply; pEl("pc-as").innerHTML = "";
+  pEl("p-msg").textContent = "";
+  closeConvo(); lastSig = ""; tabsKey = "";
+  pEl("actions").hidden = r !== "chatbox";           // the action buttons are the ChatBox's
+  loadPersona(); chatConfig(); poll(); robotStatus();
+}
 async function robotStatus() {
   let dot = "off", txt = "hub off";
   robotUp = false;
   try {
     const j = await (await fetch("/robots")).json();
-    renderActions(j.actions); robotUp = j.hub && j.robots.length > 0;
-    if (j.hub && j.robots.length) {
-      dot = "on"; txt = j.robots.map(r => esc(r.robot_name)).join(", ");
+    renderActions(j.actions);
+    renderTabs(j.workspaces || [curRobot], j.robots);
+    const mine = j.robots.filter(x => x.robot_name.toLowerCase() === curRobot);
+    robotUp = j.hub && mine.length > 0;
+    if (j.hub && mine.length) {
+      dot = "on"; txt = mine.map(r => esc(r.robot_name)).join(", ");
     } else if (j.hub) { dot = ""; txt = `waiting · :${j.port}`; }
   } catch (e) { dot = ""; txt = "viz offline"; }
   pEl("rb-dot").className = dot; pEl("rb-txt").innerHTML = txt;
@@ -1201,13 +1257,20 @@ async function robotStatus() {
 }
 robotStatus();
 setInterval(robotStatus, 2000);
+(async () => {                                        // reopen on the tab you left
+  try {
+    const saved = localStorage.getItem("robot-tab");
+    if (saved && saved !== "chatbox" && ((await (await fetch("/robots")).json()).workspaces || []).includes(saved))
+      switchRobot(saved);
+  } catch (_) {}
+})();
 
 // ---- polling loop ---------------------------------------------------------
 const pulse = document.getElementById("pulse");
 let lastSig = "";
 async function poll() {
   try {
-    const r = await fetch("/graph.json", { cache: "no-store" });
+    const r = await fetch("/graph.json?" + RQ(), { cache: "no-store" });
     const g = await r.json();
     const sig = JSON.stringify(g);
     if (sig !== lastSig) {          // only re-diff when something actually changed

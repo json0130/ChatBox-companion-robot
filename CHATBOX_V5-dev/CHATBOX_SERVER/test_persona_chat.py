@@ -169,8 +169,12 @@ def test_apply_pushes_the_persona_and_a_late_robot_gets_it(hub_env):
     assert p["persona_name"] and "," not in p["persona_name"] and p["robot_role"]   # spoken: role only
     assert p["voice_config"]["language"] == "en" and p["voice_config"]["pitch"].endswith("st")  # base voice kept
     assert out["voice"]["rate"] == p["voice_config"]["rate"]
-    late = _FakeRobot(hub_env["hub"].port, "Navel", "navel_001"); hub_env["robots"].append(late)
+    late = _FakeRobot(hub_env["hub"].port, "ChatBox", "chatbox_jetson_002"); hub_env["robots"].append(late)
     assert late.wait_for("persona_update")[0] == p                     # replayed on connect
+    other = _FakeRobot(hub_env["hub"].port, "Navel", "navel_001"); hub_env["robots"].append(other)
+    other.wait_for("client_init_response")
+    import time; time.sleep(0.3)
+    assert not [e for e, _ in other.events if e == "persona_update"]  # ChatBox's persona is not Navel's
 
 
 def test_no_robot_connected_is_reported_not_an_error(hub_env):
@@ -393,5 +397,43 @@ def test_mic_audio_is_transcribed_shown_like_typed_and_answered_by_the_robot(hub
         while time.time() < end and len(voice()["items"]) < 2 or not voice()["items"][-1]["done"]:
             time.sleep(0.05)
         assert voice()["items"][-1]["error"] == "bad audio"
+    finally:
+        srv.shutdown()
+
+
+def test_navel_tab_is_independent_of_the_chatbox(hub_env, tmp_path):
+    import time, urllib.error
+    from modules.graph_relationship.viz.server import GraphState, seed_robot_graph
+    navel_kg = str(tmp_path / "kg_navel.json"); seed_robot_graph(navel_kg, "navel")
+    navel = GraphState(navel_kg, "persona_assignment_navel.json")
+    hub = hub_env["hub"]
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
+        hub_env["state"], None, PersonaChat(hub_env["kg"], hub_env["state"]._persona_path(), hub_env["llm"]),
+        hub, None, None, {"navel": (navel, PersonaChat(navel_kg, navel._persona_path(), hub_env["llm"]))}))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_port}"
+    get = lambda p: json.load(urllib.request.urlopen(url + p, timeout=5))
+    try:
+        cb = _FakeRobot(hub.port, "ChatBox", "c1"); nv = _FakeRobot(hub.port, "Navel", "n1")
+        hub_env["robots"] += [cb, nv]
+        cb.wait_for("client_init_response"); nv.wait_for("client_init_response")
+        assert get("/robots")["workspaces"] == ["chatbox", "navel"]
+        navel_graph = get("/graph.json?robot=navel")
+        assert navel_graph["nodes"] and not any(n.get("type") == "person" for n in navel_graph["nodes"])
+        assert get("/persona?robot=navel")["robots"] == ["navel"]                  # its own graph, its own robot
+        out = _post(url, "/persona", {"robot": "navel", "role": "role:tutor", "ocean": SHY_TUTOR})
+        assert out["ok"] and out["robot"] == {"robots": 1, "sent": True}           # only Navel is told
+        assert nv.wait_for("persona_update")
+        said = _post(url, "/chat", {"robot": "navel", "message": "hi"})
+        assert said["robot"]["robots"] == 1 and said["robot"]["steps"] == 1
+        assert nv.wait_for("demo_step")[0]["text"] == "Hello there!"               # plain speech, no ChatBox tag
+        time.sleep(0.5)
+        assert not [e for e, _ in cb.events if e in ("persona_update", "demo_step")]   # the ChatBox heard nothing
+        with pytest.raises(urllib.error.HTTPError) as e:
+            _post(url, "/action", {"robot": "navel", "tag": "WAVE"})
+        assert e.value.code == 400                                                  # actions are the ChatBox's
+        with pytest.raises(urllib.error.HTTPError) as e:
+            get("/graph.json?robot=nobody")
+        assert e.value.code == 400
     finally:
         srv.shutdown()

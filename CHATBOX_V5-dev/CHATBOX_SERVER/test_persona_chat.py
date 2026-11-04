@@ -418,8 +418,11 @@ def test_navel_tab_is_independent_of_the_chatbox(hub_env, tmp_path):
         hub_env["robots"] += [cb, nv]
         cb.wait_for("client_init_response"); nv.wait_for("client_init_response")
         assert get("/robots")["workspaces"] == ["chatbox", "navel"]
-        navel_graph = get("/graph.json?robot=navel")
-        assert navel_graph["nodes"] and not any(n.get("type") == "person" for n in navel_graph["nodes"])
+        graph = get("/graph.json")                                              # ONE graph for both robots
+        ids = {n["id"] for n in graph["nodes"]}
+        assert {"chatbox", "navel"} <= ids and "role:tutor" in ids               # shared profile node
+        nav_edges = {(e["source"], e["target"]) for e in graph["edges"]}
+        assert not any(n.get("type") == "Person" for n in graph["nodes"] if n["id"].startswith("navel"))
         assert get("/persona?robot=navel")["robots"] == ["navel"]                  # its own graph, its own robot
         out = _post(url, "/persona", {"robot": "navel", "role": "role:tutor", "ocean": SHY_TUTOR})
         assert out["ok"] and out["robot"] == {"robots": 1, "sent": True}           # only Navel is told
@@ -433,7 +436,7 @@ def test_navel_tab_is_independent_of_the_chatbox(hub_env, tmp_path):
             _post(url, "/action", {"robot": "navel", "tag": "WAVE"})
         assert e.value.code == 400                                                  # actions are the ChatBox's
         with pytest.raises(urllib.error.HTTPError) as e:
-            get("/graph.json?robot=nobody")
+            get("/persona?robot=nobody")
         assert e.value.code == 400
     finally:
         srv.shutdown()

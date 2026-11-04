@@ -34,11 +34,14 @@
   #hud   { top: 14px; left: 14px; min-width: 190px; }
   #tabs { position: fixed; top: 12px; left: calc((100vw - var(--side)) / 2); transform: translateX(-50%);
           display: flex; gap: 6px; z-index: 6; }
+  .lsw { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px; }
   #tabs[hidden] { display: none; }
   #tabs button { padding: 6px 16px; font-size: 13px; border-radius: 8px; cursor: pointer;
                  background: rgba(28,30,41,0.92); color: var(--muted); border: 1px solid var(--panel-brd); }
-  #tabs button.on { color: var(--text); border-color: var(--slow); font-weight: 600; }
-  #tabs .tdot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 7px;
+  #tabs button.on { color: var(--text); font-weight: 600; }
+  #tabs .tswatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 8px;
+                   vertical-align: -1px; }
+  #tabs .tdot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-left: 9px;
                 background: #e5534b; }
   #tabs .tdot.on { background: #3ddc84; }
   .pc-logr { display: flex; flex-direction: column; gap: 6px; }
@@ -160,7 +163,10 @@
   /* node + link visuals */
   .link { stroke-opacity: 0.55; }
   .link.dim { stroke-opacity: 0.06; }
-  .node-shape { fill: var(--node); stroke: var(--node-brd); stroke-width: 1.5px; }
+  .node-shape { fill: var(--own-fill, var(--node)); stroke: var(--own, var(--node-brd)); stroke-width: 1.5px; }
+  .node.offfocus { opacity: 0.12 !important; }
+  .link.offfocus { stroke-opacity: 0.04 !important; }
+  .node-label { transition: opacity .2s; }
   .node-shape.conversation { fill: var(--fast); stroke: #ffd8b0; stroke-width: 2px; }
   .node.dim .node-shape { opacity: 0.15; }
   /* culture focus: the ACTIVE culture/person stays lit; everything else dims */
@@ -220,6 +226,8 @@
   <div class="stat"><span class="muted">nodes</span><b id="n-count">0</b></div>
   <div class="stat"><span class="muted">edges</span><b id="e-count">0</b></div>
   <div class="stat"><span class="muted">updated</span><b id="ts" class="muted">—</b></div>
+  <div class="stat" style="gap:10px;margin-top:2px;font-size:11.5px"><span><i class="lsw" style="background:#ff8c42"></i>ChatBox</span>
+    <span><i class="lsw" style="background:#4fc3f7"></i>Navel</span><span><i class="lsw" style="background:#fff"></i>Jay</span></div>
   <div class="stat"><span class="muted">robot</span><b id="rb-stat"><span id="rb-dot" class="off"></span><span id="rb-txt">—</span></b></div>
 </div>
 
@@ -322,13 +330,20 @@ const CULTURE_EDGE = "#4fc3f7"; // culture-knowledge edges (knows_culture / cult
 const CULTURE_EDGE_TYPES = new Set(["knows_culture", "culture_prior"]);
 const PERSON_PALETTE = ["#ff8c42","#e6689c","#9ccc65","#b39ddb","#ffd24a",
                         "#26a69a","#f4694c","#c08457"];
-const personColor = d3.scaleOrdinal(PERSON_PALETTE);   // stable per person id
+const _personPalette = d3.scaleOrdinal(PERSON_PALETTE);   // stable per person id
+const personColor = id => id === "jay" ? PERSON_WHITE : _personPalette(id);
+// One colour per robot (its node, what it owns, its edges); people are white. Roles/topics stay neutral.
+const ROBOT_COLOR = { chatbox: "#ff8c42", navel: "#4fc3f7" };   // orange / blue
+const PERSON_WHITE = "#ffffff";
+const ownerColor = id => { const o = nodeOwner(id); return !o ? null : o.kind === "robot" ? (ROBOT_COLOR[o.id] || null) : personColor(o.id); };
 const personIds = new Set();
 const robotIds  = new Set();
 
 function nodeOwner(nodeId) {
   if (personIds.has(nodeId)) return { kind: "person", id: nodeId };
   if (robotIds.has(nodeId))  return { kind: "robot",  id: nodeId };
+  const prefix = nodeId.split(":")[0];                      // chatbox:persona:..., navel:capability, ...
+  if (ROBOT_COLOR[prefix]) return { kind: "robot", id: prefix };
   let m = /^interest:([^:]+):/.exec(nodeId);
   if (m) return { kind: "person", id: m[1] };
   m = /^(?:conversation|interaction):([^:]+):/.exec(nodeId);
@@ -349,7 +364,7 @@ function edgeColor(d) {
   if (CULTURE_EDGE_TYPES.has(d.type)) return shadeByTimescale(CULTURE_EDGE, d.timescale);
   const s = d.source.id || d.source, t = d.target.id || d.target;
   const owner = nodeOwner(s) || nodeOwner(t);   // source decides; target is fallback
-  const base = (owner && owner.kind === "person") ? personColor(owner.id) : ROBOT_EDGE;
+  const base = !owner ? ROBOT_EDGE : owner.kind === "person" ? personColor(owner.id) : (ROBOT_COLOR[owner.id] || ROBOT_EDGE);
   return shadeByTimescale(base, d.timescale);
 }
 function renderLegendPeople(nodes) {
@@ -430,7 +445,6 @@ svg.call(zoomer);
 
 // ---- persistent data + simulation ---------------------------------------
 const nodeById = new Map();   // id -> node datum (keeps x/y across ticks)
-const layoutCache = {};       // robot tab -> {node id: [x, y]}: each graph comes back laid out as you left it
 let links = [];
 
 // Per-node collision radius so nodes never overlap (hubs + labelled nodes get
@@ -530,8 +544,8 @@ function update(graph) {
       nodeById.set(n.id, {
         id: n.id, type: n.type, label: n.label, turns: n.turns, notes: n.notes,
         category: n.category, topicLabel: n.topicLabel, facts: n.facts,
-        x: (layoutCache[curRobot]?.[n.id]?.[0]) ?? width/2 + (Math.random()-0.5)*80,
-        y: (layoutCache[curRobot]?.[n.id]?.[1]) ?? height/2 + (Math.random()-0.5)*80,
+        x: width/2 + (Math.random()-0.5)*80,
+        y: height/2 + (Math.random()-0.5)*80,
       });
     }
   }
@@ -559,12 +573,10 @@ function update(graph) {
 
   sim.nodes(nodes);
   sim.force("link").links(links);
-  const cached = firstLoad && graph.nodes.length > 0 && graph.nodes.every(n => layoutCache[curRobot]?.[n.id]);
-  if (!firstLoad || cached) sim.alpha(cached ? 0.05 : 0.35).restart();
+  if (!firstLoad) sim.alpha(0.35).restart();
 
   render(nodes);
-  if (firstLoad && !cached) settleLayout();     // after render, so there are elements to position
-  else if (cached) { ticked(); fitView(); }
+  if (firstLoad) { settleLayout(); fitFocus(); }     // after render, so there are elements to position
 }
 
 function render(nodes) {
@@ -632,6 +644,11 @@ function render(nodes) {
       el.setAttribute("class", "node-shape" + (d.type === "Conversation" ? " conversation" : ""));
       this.insertBefore(el, this.firstChild);
     }
+    // owner colour: a robot's node is filled in its colour, what it owns gets a ring in it, people are white
+    const shape = g.select(".node-shape"), oc = ownerColor(d.id);
+    shape.style("--own-fill", d.type === "Robot" || d.type === "Person" ? oc : null)
+         .style("--own", oc && d.type !== "Topic" && d.type !== "RoleTopic" ? oc : null);
+    shape.attr("stroke-width", oc && d.type !== "Robot" && d.type !== "Person" ? 2.5 : null);
     // Feature-2d: tint Topic nodes by their category (updates live on category change).
     if (d.type === "Topic") {
       g.select(".node-shape").style("fill", categoryColor(d.category));
@@ -643,6 +660,41 @@ function render(nodes) {
   document.getElementById("n-count").textContent = nodes.length;
   document.getElementById("e-count").textContent = links.length;
   applyCultureFocus();   // dim the non-active culture + other people
+  applyRobotFocus();
+}
+
+// ---- focus on the selected robot (tab) -------------------------------------
+// ONE graph holds every robot. The selected robot's subgraph stays lit (it, what it owns, the roles
+// it plays and what hangs off them, and for the ChatBox the people it talks to); the rest fades.
+// Walking out from the robot never goes through ANOTHER robot, so a role both play is shared, not leaked.
+function robotFocusSet(robotId) {
+  const adj = new Map();
+  links.forEach(l => {
+    (adj.get(l.source.id) || adj.set(l.source.id, []).get(l.source.id)).push(l.target);
+    (adj.get(l.target.id) || adj.set(l.target.id, []).get(l.target.id)).push(l.source);
+  });
+  const seen = new Set([robotId]), stack = [robotId];
+  while (stack.length) for (const n of adj.get(stack.pop()) || [])
+    if (!seen.has(n.id) && !(n.type === "Robot" && n.id !== robotId)) { seen.add(n.id); stack.push(n.id); }
+  return seen;
+}
+function applyRobotFocus() {
+  if (!nodeById.has(curRobot)) {                       // no such robot in the graph yet: show everything
+    gNodes.selectAll("g.node").classed("offfocus", false);
+    gLinks.selectAll("line").classed("offfocus", false);
+    return;
+  }
+  const lit = robotFocusSet(curRobot);
+  gNodes.selectAll("g.node").classed("offfocus", d => !lit.has(d.id));
+  gLinks.selectAll("line").classed("offfocus", d => !(lit.has(d.source.id) && lit.has(d.target.id)));
+}
+function fitFocus(pad = 110) {                         // glide the view onto the selected robot's subgraph
+  if (!nodeById.has(curRobot)) return;
+  const lit = robotFocusSet(curRobot), ns = [...nodeById.values()].filter(n => lit.has(n.id));
+  const x0 = d3.min(ns, d => d.x), x1 = d3.max(ns, d => d.x), y0 = d3.min(ns, d => d.y), y1 = d3.max(ns, d => d.y);
+  const k = Math.min(1.2, width / (x1 - x0 + 2 * pad), height / (y1 - y0 + 2 * pad));
+  svg.transition().duration(700).call(zoomer.transform, d3.zoomIdentity
+    .translate(width / 2 - k * (x0 + x1) / 2, height / 2 - k * (y0 + y1) / 2).scale(k));
 }
 
 function ticked() {
@@ -1223,16 +1275,17 @@ function renderTabs(workspaces, robots) {
   const key = workspaces.map(r => r + up(r) + (r === curRobot)).join();
   if (key === tabsKey) return;
   tabsKey = key;
-  box.innerHTML = workspaces.map(r => `<button data-r="${esc(r)}" class="${r === curRobot ? "on" : ""}">` +
-    `<span class="tdot ${up(r) ? "on" : ""}"></span>${esc(r)}</button>`).join("");
+  box.innerHTML = workspaces.map(r => {
+    const c = ROBOT_COLOR[r] || "#ffffff";
+    return `<button data-r="${esc(r)}" class="${r === curRobot ? "on" : ""}" style="${r === curRobot ?
+      `border-color:${c};box-shadow:0 0 0 1px ${c}` : ""}">` +
+      `<span class="tswatch" style="background:${c}"></span>${esc(r)}` +
+      `<span class="tdot ${up(r) ? "on" : ""}" title="${up(r) ? "connected" : "not connected"}"></span></button>`;
+  }).join("");
   box.querySelectorAll("button").forEach(b => b.addEventListener("click", () => switchRobot(b.dataset.r)));
 }
 function switchRobot(r) {
   if (r === curRobot) return;
-  // The two graphs share node ids (roles, role topics), so keeping the old nodes would drag their
-  // positions into the other graph and tangle it: park this layout, start the next graph clean.
-  layoutCache[curRobot] = Object.fromEntries([...nodeById.values()].map(n => [n.id, [n.x, n.y]]));
-  nodeById.clear(); links = [];
   curRobot = r;
   try { localStorage.setItem("robot-tab", r); } catch (_) {}
   document.querySelectorAll("#pc-log .pc-logr").forEach(l => l.hidden = l.dataset.r !== r);
@@ -1240,9 +1293,10 @@ function switchRobot(r) {
   pEl("p-robot").innerHTML = `<option>${esc(r)}</option>`;
   pDirty = false; delete pEl("pc-as").dataset.fromReply; pEl("pc-as").innerHTML = "";
   pEl("p-msg").textContent = "";
-  closeConvo(); lastSig = ""; tabsKey = "";
+  closeConvo(); tabsKey = "";
+  applyRobotFocus(); fitFocus();
   pEl("actions").hidden = r !== "chatbox";           // the action buttons are the ChatBox's
-  loadPersona(); chatConfig(); poll(); robotStatus();
+  loadPersona(); chatConfig(); robotStatus();
 }
 async function robotStatus() {
   let dot = "off", txt = "hub off";
@@ -1277,7 +1331,7 @@ const pulse = document.getElementById("pulse");
 let lastSig = "";
 async function poll() {
   try {
-    const r = await fetch("/graph.json?" + RQ(), { cache: "no-store" });
+    const r = await fetch("/graph.json", { cache: "no-store" });
     const g = await r.json();
     const sig = JSON.stringify(g);
     if (sig !== lastSig) {          // only re-diff when something actually changed

@@ -525,6 +525,24 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
             raise ValueError(f"unknown robot {robot!r}")
         return spaces[robot]
 
+    def merged_graph():
+        """ONE graph for every robot: each robot's file is read on its own (so Navel never depends on
+        the ChatBox's Jay graph) and the views are joined. Shared nodes (the role library) have the same
+        ids in each file, so they appear once and both robots' edges attach to them."""
+        nodes, edges, seen_n, seen_e, active = [], [], set(), set(), {}
+        for rid, (st, _) in spaces.items():
+            g = st.read()
+            if rid == PRIMARY:
+                active = g.get("active") or {}
+            for n in g["nodes"]:
+                if n["id"] not in seen_n:
+                    seen_n.add(n["id"]); nodes.append(n)
+            for e in g["edges"]:
+                k = (e["source"], e["target"], e["type"])
+                if k not in seen_e:
+                    seen_e.add(k); edges.append(e)
+        return {"nodes": nodes, "edges": edges, "active": active}
+
     def speak(texts, robot=PRIMARY):
         """`robot` says `texts` in order (in a thread: it waits on acks), then returns to DEFAULT."""
         threading.Thread(target=hub.say_steps, args=(texts,), kwargs={"robot": robot}, daemon=True).start()
@@ -637,7 +655,7 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
                 except OSError:
                     self._send(404, b"index.html not found", "text/plain")
             elif path == "/graph.json":
-                body = json.dumps(r_state.read()).encode("utf-8")
+                body = json.dumps(merged_graph()).encode("utf-8")
                 self._send(200, body, "application/json")
             elif path == "/history":
                 topic = (qs.get("topic") or [""])[0]
@@ -747,11 +765,12 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
                     self._send(404, b"not found", "text/plain")
                     return
                 kind = body.get("kind")
+                states = [st for st, _ in spaces.values()]     # the graph is joined: a node may live in either file
                 if kind == "node":
-                    removed = r_state.delete_node(str(body["id"]))
+                    removed = any([st.delete_node(str(body["id"])) for st in states])
                 elif kind == "edge":
-                    removed = r_state.delete_edge(
-                        str(body["source"]), str(body["target"]), str(body["edge_type"]))
+                    removed = any([st.delete_edge(
+                        str(body["source"]), str(body["target"]), str(body["edge_type"])) for st in states])
                 else:
                     self._send(400, b'{"ok":false,"error":"kind must be node|edge"}',
                                "application/json")

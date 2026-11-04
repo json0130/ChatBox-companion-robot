@@ -5,8 +5,10 @@ navel-client/client_config.json (tags, ports, modules), navel-client/client.py (
 lab-demo-server/data/snapshot (navel_001's declared topics). The ChatBox graph shares none of it.
 
     robot --has_capability--> capability  (what Navel can do)  --about--> topics it declares
-    robot --has_capability--> one node per gesture tag  ([GREET] ...)
     robot --has_capability--> one node per connection fact
+
+Like the ChatBox, the gestures are NOT nodes: the list below is what a robot client / the viz
+reads, and the capability node only mentions that Navel gestures.
 """
 from __future__ import annotations
 
@@ -54,7 +56,5 @@ def _capability(store, robot_id: str, cap_id: str, text: str) -> None:
 def seed_navel(store) -> None:
     """Idempotent: ids are fixed, so running it again just refreshes the same nodes."""
     seed_from_spec(store, SPEC)                      # robot, abilities, declared topics
-    for tag, text in ACTIONS.items():
-        _capability(store, "navel", f"navel:action:{tag.lower()}", f"[{tag}] {text}")
     for key, text in CONNECTION.items():
         _capability(store, "navel", f"navel:connection:{key}", f"connect: {text}")

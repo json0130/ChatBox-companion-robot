@@ -1104,7 +1104,7 @@ function showReply(el, j, stt) {
   pcEl("pc-as").innerHTML = `as <b>${esc(j.role)}</b> · ${esc(j.persona)}`;
 }
 // What you say to the robot's microphone: the hub transcribes it and the viz answers it, so it shows
-// here like a typed message (you bubble with 🎤, then the reply). Idempotent: poll the whole log.
+// here like a typed message (a you bubble, then the reply). Idempotent: poll the whole log.
 const voiceSeen = new Map();     // id -> {bot: reply bubble, done}
 let voiceFirst = true;
 async function pollVoice() {
@@ -1114,17 +1114,17 @@ async function pollVoice() {
     let v = voiceSeen.get(it.id);
     if (!v) {
       if (voiceFirst) { voiceSeen.set(it.id, { done: true }); continue; }   // history from before this page load
-      v = { done: false, you: it.text ? chatAdd("pc-you", "🎤 " + esc(it.text)) : null, bot: null };
+      v = { done: false, you: it.text ? chatAdd("pc-you", esc(it.text)) : null, bot: null };
       voiceSeen.set(it.id, v);
     }
     if (v.done) continue;
-    if (it.text && !v.you) v.you = chatAdd("pc-you", "🎤 " + esc(it.text));
+    if (it.text && !v.you) v.you = chatAdd("pc-you", esc(it.text));
     if (it.text && !v.bot && !it.error) v.bot = chatAdd("pc-bot", "…");
     if (!it.done) continue;
     v.done = true;
     if (it.error) {
       if (v.bot) { v.bot.className = "pc-msg pc-err"; v.bot.textContent = "No reply: " + it.error; }
-      else chatAdd("pc-err", "🎤 couldn't make that out: " + esc(it.error));
+      else chatAdd("pc-err", "couldn't make that out: " + esc(it.error));
     } else if (it.out) {
       chatHist.push([it.text, it.out.reply]);
       showReply(v.bot, it.out, it.stt_s);

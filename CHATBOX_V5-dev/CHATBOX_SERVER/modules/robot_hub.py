@@ -8,6 +8,8 @@ Jetson / Navel. We use two server -> client events the clients already handle:
                   (on the ChatBox the Jetson forwards the tag to the ESP32).
 Events the robot sends us (camera frames, speech, ...) are ignored.
 """
+import errno
+import socket
 import threading
 from typing import Dict, Optional
 
@@ -24,6 +26,20 @@ def ocean_to_personality(ocean: Dict[str, float]) -> Dict[str, float]:
     return {k: round((float(v) + 1) / 2, 3) for k, v in ocean.items()}
 
 
+def first_free(port: int, host: str = "0.0.0.0", tries: int = 20) -> int:
+    """`port`, or the next free one (port+1, ...) if it is taken. Probes by binding, because
+    werkzeug's make_server exits the process on EADDRINUSE instead of raising."""
+    for p in range(port, port + tries):
+        with socket.socket() as probe:
+            try:
+                probe.bind((host, p))
+                return p
+            except OSError as e:
+                if e.errno != errno.EADDRINUSE:
+                    raise
+    raise OSError(errno.EADDRINUSE, f"no free port in {port}-{port + tries - 1}")
+
+
 class RobotHub:
     def __init__(self, port: int = 5000, host: str = "0.0.0.0") -> None:
         self.sio = socketio.Server(async_mode="threading", cors_allowed_origins="*")
@@ -32,7 +48,7 @@ class RobotHub:
         self._step = 0
         self._acks: Dict[str, threading.Event] = {}  # step_id -> set when the robot finished speaking it
         self._lock = threading.Lock()
-        self._server = make_server(host, port, socketio.WSGIApp(self.sio), threaded=True)
+        self._server = make_server(host, first_free(port, host), socketio.WSGIApp(self.sio), threaded=True)
         self.port = self._server.server_port
         self._wire()
 

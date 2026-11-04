@@ -1171,3 +1171,8 @@ the person turned or looked away. Four separate causes, not one.
 - **Left out on purpose:** ANGRY, SLEEP, POSE (client can do them; a companion shouldn't pick them). Firmware moves with no client tag (head_nod, head_shake, ears_perk, dance_*) need an `EMOTION_MAP` entry on the Jetson first.
 - **Tests:** a new test file checks every listed tag exists in the Jetson's `EMOTION_MAP` and moves differently, every alias lands on a listed tag, Method B's native tags are all listed. Drift test now skips the tag line. 230 passed.
 - **Live (AI server 10.42.0.118, 6 messages):** the model followed the list every time (HANDS_CLAP for the exam, SAD, WAVE for goodbye, CONFUSED for an unknown fact); the alias map was not needed.
+
+## Automatic port selection (viz + robot hub)
+- Tried: second `viz.server` with the same command -> "Address already in use". Now `--port` (8765) and `--robot-hub` (5000) fall back to the next free port (up to 20) and print "port N is taken -> using M".
+- Worked: both ports occupied -> viz on 18766, hub on 15001. Probe-by-bind (`robot_hub.first_free`) because werkzeug `make_server` calls sys.exit on EADDRINUSE.
+- Caveat: a second server still shares `kg_culture.json` / `persona_assignment.json` unless given its own `--kg-path`; the robot's `server_url` must use the port the hub printed.

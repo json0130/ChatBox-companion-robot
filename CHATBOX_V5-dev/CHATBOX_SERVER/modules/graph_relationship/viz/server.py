@@ -669,17 +669,25 @@ def main():
     history = HistoryProvider(os.path.abspath(args.sessions_db),
                               embed_model=(args.embed_model or None))
     hub = None
+    from modules.robot_hub import first_free
     if args.robot_hub is not None:
         from modules.robot_hub import RobotHub
         hub = RobotHub(args.robot_hub)
         hub.start()
+        if hub.port != args.robot_hub:
+            print(f"[viz] hub port {args.robot_hub} is taken -> using {hub.port}")
     tagger = None
     if args.action_tags:
         if hub is None or chat is None:
             ap.error("--action-tags needs --robot-hub and the chat (not --no-chat)")
         from modules.action_tag_generator import ActionTagGenerator, ChatLLM
         tagger = ActionTagGenerator(ChatLLM(chat.llm))
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(state, history, chat, hub, tagger))
+    handler = make_handler(state, history, chat, hub, tagger)
+    port = first_free(args.port, args.host)
+    if port != args.port:
+        print(f"[viz] port {args.port} is taken -> using {port}")
+    args.port = port
+    server = ThreadingHTTPServer((args.host, port), handler)
 
     print(f"[viz] serving KG visualizer at  http://{args.host}:{args.port}/")
     print(f"[viz] polling KG file:          {state.kg_path}")

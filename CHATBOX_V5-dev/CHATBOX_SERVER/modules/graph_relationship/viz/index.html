@@ -430,6 +430,7 @@ svg.call(zoomer);
 
 // ---- persistent data + simulation ---------------------------------------
 const nodeById = new Map();   // id -> node datum (keeps x/y across ticks)
+const layoutCache = {};       // robot tab -> {node id: [x, y]}: each graph comes back laid out as you left it
 let links = [];
 
 // Per-node collision radius so nodes never overlap (hubs + labelled nodes get
@@ -529,8 +530,8 @@ function update(graph) {
       nodeById.set(n.id, {
         id: n.id, type: n.type, label: n.label, turns: n.turns, notes: n.notes,
         category: n.category, topicLabel: n.topicLabel, facts: n.facts,
-        x: width/2 + (Math.random()-0.5)*80,
-        y: height/2 + (Math.random()-0.5)*80,
+        x: (layoutCache[curRobot]?.[n.id]?.[0]) ?? width/2 + (Math.random()-0.5)*80,
+        y: (layoutCache[curRobot]?.[n.id]?.[1]) ?? height/2 + (Math.random()-0.5)*80,
       });
     }
   }
@@ -558,10 +559,12 @@ function update(graph) {
 
   sim.nodes(nodes);
   sim.force("link").links(links);
-  if (!firstLoad) sim.alpha(0.35).restart();
+  const cached = firstLoad && graph.nodes.length > 0 && graph.nodes.every(n => layoutCache[curRobot]?.[n.id]);
+  if (!firstLoad || cached) sim.alpha(cached ? 0.05 : 0.35).restart();
 
   render(nodes);
-  if (firstLoad) settleLayout();     // after render, so there are elements to position
+  if (firstLoad && !cached) settleLayout();     // after render, so there are elements to position
+  else if (cached) { ticked(); fitView(); }
 }
 
 function render(nodes) {
@@ -1226,6 +1229,10 @@ function renderTabs(workspaces, robots) {
 }
 function switchRobot(r) {
   if (r === curRobot) return;
+  // The two graphs share node ids (roles, role topics), so keeping the old nodes would drag their
+  // positions into the other graph and tangle it: park this layout, start the next graph clean.
+  layoutCache[curRobot] = Object.fromEntries([...nodeById.values()].map(n => [n.id, [n.x, n.y]]));
+  nodeById.clear(); links = [];
   curRobot = r;
   try { localStorage.setItem("robot-tab", r); } catch (_) {}
   document.querySelectorAll("#pc-log .pc-logr").forEach(l => l.hidden = l.dataset.r !== r);

@@ -491,21 +491,28 @@ class HistoryProvider:
         return self.store.turns_for_topic(topic, person, limit=limit)
 
 
-PRIMARY = "chatbox"      # the robot of the main graph (--kg-path); `others` are extra robots, each with its own graph
-
-
 def seed_robot_graph(path: str, robot_id: str) -> None:
-    """A fresh graph file for a robot: just the robot and the role library (no people), so a robot
-    other than the ChatBox starts with its own graph that has nothing to do with the ChatBox's."""
-    if os.path.exists(path):
-        return
+    """A graph file for a robot other than the ChatBox: just the robot and the role library (no
+    people), plus, for Navel, what it can do / its gestures / how to reach it. Safe to run on every
+    start: an existing file is only topped up when the Navel profile is missing."""
     from modules.graph_relationship.schema import Embodiment, RobotNode
     from modules.graph_relationship.store import InMemoryGraphStore
     from modules.role_seed import seed_role_library
     store = InMemoryGraphStore()
-    store.upsert_node(RobotNode(id=robot_id, name=robot_id.capitalize(), embodiment=Embodiment.CAT))
-    seed_role_library(store)
+    if os.path.exists(path):
+        store.load(path, quiet=True)
+        if robot_id != "navel" or store.get_node("navel:capability") is not None:
+            return
+    if store.get_node(robot_id) is None:
+        store.upsert_node(RobotNode(id=robot_id, name=robot_id.capitalize(), embodiment=Embodiment.CAT))
+        seed_role_library(store)
+    if robot_id == "navel":
+        from modules.navel_profile import seed_navel
+        seed_navel(store)
     store.save(path)
+
+
+PRIMARY = "chatbox"      # the robot of the main graph (--kg-path); `others` are extra robots, each with its own graph
 
 
 def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,

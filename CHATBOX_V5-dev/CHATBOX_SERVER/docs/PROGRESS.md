@@ -1201,3 +1201,9 @@ the person turned or looked away. Four separate causes, not one.
 - `POST /action {tag}` -> `[TAG]` as a tag-only demo_step (no ack) to the connected robot(s); 400 for a tag outside `chatbox_actions.ACTIONS`, 409 when no robot is connected. `GET /robots` also returns `actions`, so the UI builds one button per ChatBox action (tooltip = its usage text).
 - UI: "Robot actions" panel under the HUD; buttons are disabled until the robot row is green (re-checked every 2 s) and show "sent WAVE ✓".
 - Worked: browser check with a fake robot (disabled -> enabled on connect, WAVE received as "[WAVE]"); test_action_button_plays_a_gesture_only_when_a_robot_is_connected.
+
+## Robot microphone through the viz hub
+- Found: the Jetson sends mic audio as a Socket.IO `speech` event {audio: base64 wav}; the hub ignored it (only the central server transcribed), so "Voice Detected / Processing speech" led nowhere.
+- Worked: hub `on_speech` callback (own thread, so acks aren't blocked) -> viz `on_speech`: `SpeechProcessor` (faster-whisper base, CPU int8, loads in a background thread; `--whisper-model`, `--no-voice`) -> the same `converse()` as typed /chat (reply, Method B tags, robot speaks, [DEFAULT] at the end). `GET /voice` returns the log; the chat panel polls it and shows a 🎤 bubble then the reply, and adds the turn to the conversation history. Server-side voice history restarts when a new persona is applied.
+- Verified: unit test with a stub STT; live: espeak-ng "Hello robot, how are you today?" -> transcribed exactly, reply from the AI server, robot received tagged steps (model load 1.1 s, 5 s clip 0.5 s on this machine).
+- Not verified on the Jetson's real mic audio (44.1 kHz->16 kHz resample is done client-side). A robot hearing its own voice (echo) is not handled here. `speech_response` is not sent back, so the client's pepeha trigger is not fired by voice.

@@ -360,3 +360,38 @@ def test_action_button_plays_a_gesture_only_when_a_robot_is_connected(hub_env):
     step = robot.wait_for("demo_step")[0]
     assert step["text"] == "[WAVE]" and step["require_ack"] is False
     assert post("EXCITED")[0] == 400                                   # only the ChatBox's own tags
+
+
+class _FakeSTT:
+    def __init__(self, text="hello robot"):
+        self.text = text
+
+    def transcribe_audio_base64(self, b64):
+        return (True, self.text, 0.9) if b64 == "QVVESU8=" else (False, "bad audio", 0.0)
+
+
+def test_mic_audio_is_transcribed_shown_like_typed_and_answered_by_the_robot(hub_env):
+    import time, urllib.request
+    hub = hub_env["hub"]
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
+        hub_env["state"], None, PersonaChat(hub_env["kg"], hub_env["state"]._persona_path(), hub_env["llm"]),
+        hub, None, _FakeSTT()))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_port}"
+    voice = lambda: json.load(urllib.request.urlopen(url + "/voice", timeout=5))
+    try:
+        robot = _FakeRobot(hub.port); hub_env["robots"].append(robot)
+        robot.wait_for("client_init_response")
+        robot.sio.emit("speech", {"type": "speech", "audio": "QVVESU8="})           # what the Jetson's mic sends
+        end = time.time() + 5
+        while time.time() < end and not (voice()["items"] and voice()["items"][-1]["done"]):
+            time.sleep(0.05)
+        it = voice()["items"][-1]
+        assert it["text"] == "hello robot" and it["error"] is None and it["out"]["reply"] == "Hello there!"
+        assert robot.wait_for("demo_step")[0]["text"] == "[HANDS_CLAP] Hello there!"   # the robot answers aloud
+        robot.sio.emit("speech", {"type": "speech", "audio": "bm9wZQ=="})           # undecodable audio is reported
+        while time.time() < end and len(voice()["items"]) < 2 or not voice()["items"][-1]["done"]:
+            time.sleep(0.05)
+        assert voice()["items"][-1]["error"] == "bad audio"
+    finally:
+        srv.shutdown()

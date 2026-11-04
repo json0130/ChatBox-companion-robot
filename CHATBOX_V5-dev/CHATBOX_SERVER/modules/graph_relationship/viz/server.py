@@ -490,12 +490,62 @@ class HistoryProvider:
 
 
 def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
-                 chat=None, hub=None, tagger=None):
+                 chat=None, hub=None, tagger=None, stt=None):
     def speak(texts):
         """Robot says `texts` in order (in a thread: it waits on acks), then returns to DEFAULT."""
         threading.Thread(target=hub.say_steps, args=(texts,), daemon=True).start()
         n = len(hub.robots())
         return {"robots": n, "sent": bool(n), "steps": len(texts)}
+
+    def converse(robot, message, hist):
+        """One turn: persona reply, then the robot (if any) speaks it. Shared by /chat and the mic."""
+        out = chat.reply(robot, message, hist)
+        # hub = RobotHub or None: the connected robot speaks the reply (its tag drives the face)
+        if hub is not None and tagger is not None:
+            # Method B: one gesture tag per sentence, spoken one step at a time
+            try:
+                from modules.action_tag_generator import step_texts
+                out["plan"] = tagger.generate(out["reply"], message)
+                texts = step_texts(out["plan"])
+                out["robot"] = speak(texts)
+            except Exception as exc:    # planner failed: fall back to the single reply
+                out["plan_error"] = str(exc)
+                out["robot"] = speak([out["reply"]])
+        else:
+            out["robot"] = (speak([f"[{out['tag']}] {out['reply']}" if out.get("tag") else out["reply"]])
+                            if hub is not None else None)
+        return out
+
+    voice_log, voice_hist, voice_ts, vlock = [], [], [None], threading.Lock()
+
+    def on_speech(audio_b64, robot_name):
+        """Mic audio from the robot: transcribe, show it like a typed message, reply, speak."""
+        item = {"id": 0, "text": "", "error": None, "out": None, "done": False}
+        with vlock:
+            item["id"] = (voice_log[-1]["id"] + 1) if voice_log else 1
+            voice_log.append(item); del voice_log[:-50]
+        try:
+            ok, text, _ = stt.transcribe_audio_base64(audio_b64)
+            if not ok or not text.strip():
+                item["error"] = text if not ok else "nothing heard"
+                return
+            item["text"] = text.strip()
+            if chat is None:
+                item["error"] = "chat is off (--no-chat)"
+                return
+            robot = robot_name.lower().replace(" ", "")
+            a = (state.persona_choices().get("assigned") or {}).get(robot)
+            if (a or {}).get("ts") != voice_ts[0]:      # a new setup was applied: restart the conversation
+                voice_hist.clear(); voice_ts[0] = (a or {}).get("ts")
+            item["out"] = out = converse(robot, item["text"], list(voice_hist))
+            voice_hist.append((item["text"], out["reply"]))
+        except Exception as exc:
+            item["error"] = str(exc)
+        finally:
+            item["done"] = True
+
+    if hub is not None and stt is not None:
+        hub.on_speech = on_speech
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):  # keep console clean
@@ -536,6 +586,9 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
                 self._send(200, body, "application/json")
             elif path == "/persona":
                 self._send(200, json.dumps(state.persona_choices()).encode(),
+                           "application/json")
+            elif path == "/voice":
+                self._send(200, json.dumps({"enabled": stt is not None, "items": list(voice_log)}).encode(),
                            "application/json")
             elif path == "/robots":
                 from modules.chatbox_actions import ACTIONS
@@ -582,8 +635,7 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
                         return
                     try:
                         hist = [(str(u), str(b)) for u, b in (body.get("history") or [])]
-                        out = chat.reply(str(body.get("robot", "chatbox")),
-                                         str(body.get("message", "")), hist)
+                        out = converse(str(body.get("robot", "chatbox")), str(body.get("message", "")), hist)
                     except ValueError as exc:
                         self._send(400, json.dumps({"ok": False, "error": str(exc)}).encode(),
                                    "application/json")
@@ -592,20 +644,6 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
                         self._send(502, json.dumps({"ok": False, "error": str(exc)}).encode(),
                                    "application/json")
                         return
-                    # hub = RobotHub or None: the connected robot speaks the reply (its tag drives the face)
-                    if hub is not None and tagger is not None:
-                        # Method B: one gesture tag per sentence, spoken one step at a time
-                        try:
-                            from modules.action_tag_generator import step_texts
-                            out["plan"] = tagger.generate(out["reply"], str(body.get("message", "")))
-                            texts = step_texts(out["plan"])
-                            out["robot"] = speak(texts)
-                        except Exception as exc:    # planner failed: fall back to the single reply
-                            out["plan_error"] = str(exc)
-                            out["robot"] = speak([out["reply"]])
-                    else:
-                        out["robot"] = (speak([f"[{out['tag']}] {out['reply']}" if out.get("tag") else out["reply"]])
-                                        if hub is not None else None)
                     self._send(200, json.dumps({"ok": True, **out}).encode(), "application/json")
                     return
                 if path == "/persona":
@@ -675,6 +713,11 @@ def main():
                     help="with --robot-hub: Method B -- split each chat reply into sentences and pick a "
                          "gesture tag per sentence (modules/action_tag_generator.py) instead of the "
                          "reply's single tag")
+    ap.add_argument("--no-voice", action="store_true",
+                    help="with --robot-hub: don't transcribe the robot's microphone (faster-whisper)")
+    ap.add_argument("--whisper-model", default="base", metavar="SIZE",
+                    help="with --robot-hub: faster-whisper model for the robot's microphone (default base; "
+                         "runs on the CPU, so small is about the most that stays quick)")
     args = ap.parse_args()
 
     kg_path = os.path.abspath(args.kg_path)
@@ -703,7 +746,12 @@ def main():
             ap.error("--action-tags needs --robot-hub and the chat (not --no-chat)")
         from modules.action_tag_generator import ActionTagGenerator, ChatLLM
         tagger = ActionTagGenerator(ChatLLM(chat.llm))
-    handler = make_handler(state, history, chat, hub, tagger)
+    stt = None
+    if hub is not None and not args.no_voice:
+        from modules.speech_processor import SpeechProcessor
+        stt = SpeechProcessor({"whisper_model_size": args.whisper_model})
+        threading.Thread(target=stt.initialize, daemon=True).start()   # load in the background
+    handler = make_handler(state, history, chat, hub, tagger, stt)
     port = first_free(args.port, args.host)
     if port != args.port:
         print(f"[viz] port {args.port} is taken -> using {port}")
@@ -714,6 +762,7 @@ def main():
     print(f"[viz] polling KG file:          {state.kg_path}")
     print(f"[viz] persona chat:             {chat.backend if chat else 'off (--no-chat)'}")
     print(f"[viz] action tags (Method B):   {'on' if tagger else 'off (--action-tags)'}")
+    print(f"[viz] robot microphone:         {f'faster-whisper {args.whisper_model} (loading in the background)' if stt else 'off (needs --robot-hub, not --no-voice)'}")
     print(f"[viz] robot hub:                {f'port {hub.port} (robot server_url -> http://THIS_IP:{hub.port})' if hub else 'off (--robot-hub)'}")
     if history.store is not None:
         kind = "RAG" if history.rag is not None else "keyword"

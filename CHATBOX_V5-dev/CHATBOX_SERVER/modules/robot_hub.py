@@ -6,7 +6,7 @@ Jetson / Navel. We use two server -> client events the clients already handle:
   persona_update  role + OCEAN personality; the robot says "Persona updated to <name>."
   demo_step       {text: "[TAG] words"}: the robot speaks the words and the tag drives its face
                   (on the ChatBox the Jetson forwards the tag to the ESP32).
-Events the robot sends us (camera frames, speech, ...) are ignored.
+Events the robot sends us (camera frames, ...) are ignored; `speech` goes to `on_speech` if set.
 """
 import errno
 import socket
@@ -48,6 +48,7 @@ class RobotHub:
         self._step = 0
         self._acks: Dict[str, threading.Event] = {}  # step_id -> set when the robot finished speaking it
         self._lock = threading.Lock()
+        self.on_speech = None                        # callable(audio_b64, robot_name), set by the viz: mic audio -> text -> reply
         self._server = make_server(host, first_free(port, host), socketio.WSGIApp(self.sio), threaded=True)
         self.port = self._server.server_port
         self._wire()
@@ -76,6 +77,14 @@ class RobotHub:
             ev = self._acks.get((data or {}).get("step_id", ""))
             if ev:
                 ev.set()
+
+        @self.sio.on("speech")
+        def speech(sid, data):
+            audio, cb = (data or {}).get("audio", ""), self.on_speech
+            if cb and audio:        # own thread: transcribing + speaking must not block this client's acks
+                with self._lock:
+                    name = self.clients.get(sid, {}).get("robot_name", "chatbox")
+                threading.Thread(target=cb, args=(audio, name), daemon=True).start()
 
         @self.sio.on("disconnect")
         def disconnect(sid):

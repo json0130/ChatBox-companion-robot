@@ -231,6 +231,9 @@ cd /home/jay/Desktop/2026-Jay/ChatBox-companion-robot/CHATBOX-DEMO_V4/CHATBOX_SE
   python3 -m modules.graph_relationship.viz.server --robot-hub --action-tags --ai-server 10.42.0.118
   python3 -m modules.action_tag_generator "Hello! Nice to meet you." --ai-server 10.42.0.118   # plan only
   python3 -m modules.graph_relationship.viz.server --robot-hub 5001
+  # The robot's MICROPHONE works through the hub too: its `speech` audio is transcribed here with
+  # faster-whisper (CPU, model loads in the background) and appears in the chat panel as "🎤 <what you said>",
+  # then the reply is spoken on the robot like a typed one. --whisper-model small for better accuracy, --no-voice to skip.
 
   # Pick a role + set the OCEAN sliders → apply. The loop adopts it on its next
   # tick (terminal 1 prints "role → … ; persona → …"). Saved in

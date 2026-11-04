@@ -147,12 +147,14 @@ def test_chat_reply_is_spoken_by_the_connected_robot(hub_env):
     robot = _FakeRobot(hub_env["hub"].port); hub_env["robots"].append(robot)
     assert robot.wait_for("client_init_response")[0]["success"] is True
     out = _post(hub_env["url"], "/chat", {"message": "hi"})
-    assert out["robot"] == {"robots": 1, "sent": True}
+    assert out["robot"] == {"robots": 1, "sent": True, "steps": 1}
     step = robot.wait_for("demo_step")[0]
-    assert step["text"] == "[HANDS_CLAP] Hello there!" and step["require_ack"] is False
+    assert step["text"] == "[HANDS_CLAP] Hello there!" and step["require_ack"] is True
+    robot.sio.emit("ack", {"type": "ack", "step_id": step["step_id"]})
+    assert robot.wait_for("demo_step", 2)[1]["text"] == "[DEFAULT]"   # back to the default pose after speaking
     hub_env["llm"].reply = "no tag here"                       # untagged reply is still spoken
     _post(hub_env["url"], "/chat", {"message": "again"})
-    assert robot.wait_for("demo_step", 2)[1]["text"] == "no tag here"
+    assert robot.wait_for("demo_step", 3)[2]["text"] == "no tag here"
 
 
 def test_apply_pushes_the_persona_and_a_late_robot_gets_it(hub_env):
@@ -171,7 +173,7 @@ def test_apply_pushes_the_persona_and_a_late_robot_gets_it(hub_env):
 
 def test_no_robot_connected_is_reported_not_an_error(hub_env):
     out = _post(hub_env["url"], "/chat", {"message": "hi"})
-    assert out["ok"] and out["reply"] and out["robot"] == {"robots": 0, "sent": False}
+    assert out["ok"] and out["reply"] and out["robot"] == {"robots": 0, "sent": False, "steps": 1}
 
 
 def test_no_hub_means_robot_null(env):

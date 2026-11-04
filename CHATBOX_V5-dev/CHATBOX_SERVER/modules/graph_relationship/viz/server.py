@@ -491,6 +491,12 @@ class HistoryProvider:
 
 def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
                  chat=None, hub=None, tagger=None):
+    def speak(texts):
+        """Robot says `texts` in order (in a thread: it waits on acks), then returns to DEFAULT."""
+        threading.Thread(target=hub.say_steps, args=(texts,), daemon=True).start()
+        n = len(hub.robots())
+        return {"robots": n, "sent": bool(n), "steps": len(texts)}
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):  # keep console clean
             pass
@@ -579,14 +585,12 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
                             from modules.action_tag_generator import step_texts
                             out["plan"] = tagger.generate(out["reply"], str(body.get("message", "")))
                             texts = step_texts(out["plan"])
-                            threading.Thread(target=hub.say_steps, args=(texts,), daemon=True).start()
-                            out["robot"] = {"robots": len(hub.robots()), "sent": bool(hub.robots()),
-                                            "steps": len(texts)}
+                            out["robot"] = speak(texts)
                         except Exception as exc:    # planner failed: fall back to the single reply
                             out["plan_error"] = str(exc)
-                            out["robot"] = hub.say(out["reply"])
+                            out["robot"] = speak([out["reply"]])
                     else:
-                        out["robot"] = (hub.say(f"[{out['tag']}] {out['reply']}" if out.get("tag") else out["reply"])
+                        out["robot"] = (speak([f"[{out['tag']}] {out['reply']}" if out.get("tag") else out["reply"]])
                                         if hub is not None else None)
                     self._send(200, json.dumps({"ok": True, **out}).encode(), "application/json")
                     return

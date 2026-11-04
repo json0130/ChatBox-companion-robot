@@ -66,7 +66,10 @@ def test_say_steps_waits_for_each_ack(hub_env):
     robot.sio.emit("ack", {"type": "ack", "step_id": first["step_id"]})
     second = robot.wait_for("demo_step", 2)[1]
     assert second["text"] == "[SAD] b"
+    time.sleep(0.3)
+    assert len(robot.wait_for("demo_step", 2)) == 2                  # no default pose while b is still being spoken
     robot.sio.emit("ack", {"type": "ack", "step_id": second["step_id"]})
+    assert robot.wait_for("demo_step", 3)[2]["text"] == "[DEFAULT]"  # speech over -> back to the default pose
     t.join(2); assert not t.is_alive()
 
 

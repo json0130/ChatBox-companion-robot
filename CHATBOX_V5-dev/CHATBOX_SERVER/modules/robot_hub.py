@@ -127,4 +127,10 @@ class RobotHub:
             if targets:
                 ev.wait(timeout)
             self._acks.pop(step, None)
+        if targets and texts:       # speech is over: tag-only step, no words, so the robot returns to its default pose
+            with self._lock:
+                self._step += 1
+                step = f"persona-{self._step}"
+            for sid in targets:
+                self.sio.emit("demo_step", {"step_id": step, "text": "[DEFAULT]", "require_ack": False}, to=sid)
         return {"robots": len(targets), "sent": bool(targets), "steps": len(texts)}

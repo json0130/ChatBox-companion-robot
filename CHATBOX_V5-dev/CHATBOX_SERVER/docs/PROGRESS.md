@@ -1186,3 +1186,8 @@ the person turned or looked away. Four separate causes, not one.
 - Tried/found: viz Apply sent `persona_name = "<role>, <OCEAN words>"` and the Jetson (robot.py `on_persona_update`) speaks "Persona updated to {persona_name}." -> it read out the trait description too.
 - Worked: `persona_name` is now the role label only ("Persona updated to Receptionist."); OCEAN still travels in `personality`, the long description in `robot_role`. Client unchanged. test_persona_chat asserts no comma in persona_name.
 - Not verified on the Jetson. ESP32-stuck: diagnosed from code only (see chat); no hardware access.
+
+## Return to DEFAULT after the reply
+- Tried/found: the Jetson fires one [TAG] per demo_step, TTS strips `[..]` and speaks nothing for a tag-only text, then calls the ack callback at once (edge_tts_output.speak_with_callback) -> a `[DEFAULT]` step is safe on the unchanged client.
+- Worked: `RobotHub.say_steps` ends with a `[DEFAULT]` step (no ack needed) once the last real step is acked. Every chat reply (Method B, planner-fallback, single-tag) now goes through `say_steps` via `speak()` in viz/server.py, so all three end in the default pose. Tests: no [DEFAULT] while the last step is still being spoken; arrives right after its ack.
+- Caveat: a robot that never acks delays the [DEFAULT] by the 30 s step timeout. The firmware already runs "default" after each gesture, so this only matters when speech outlasts the gesture or the face holds a pose.

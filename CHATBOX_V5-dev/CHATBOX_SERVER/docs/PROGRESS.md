@@ -1160,3 +1160,6 @@ the person turned or looked away. Four separate causes, not one.
 ## Viz: profile cards open into a pentagon — 2026-11-04
 - **Done:** removed the emoji icon and the mini bars from each profile card. Clicking a card opens it (full width) with an OCEAN pentagon (centre −1, dashed ring 0, outer +1), the role select + brief + goal/talks/avoids/knows, and the OCEAN sliders; the pentagon follows the sliders live. Click the card again to close. A "Custom" card (open by default) holds the same editor for a hand-set role/traits. The editor is one DOM block that moves into whichever card is open, so the existing form code is unchanged. Checked in a browser: opens, slider moves the pentagon, collapse works, no icons.
 - **Changed behaviour:** editing a slider/role no longer deselects the open card (it used to clear the card highlight).
+
+## Viz: apply button moves into the open profile — 2026-11-04
+- **Done:** the apply button and its status line moved out of the sticky header into the open profile card (bottom of its editor, `position: sticky; bottom: 0`), so it stays in view while that card is on screen and rests at the card's end when scrolled past. The header keeps the title and the "now:" line. Checked in a browser. With every card closed there is no apply button (open Custom or a profile).

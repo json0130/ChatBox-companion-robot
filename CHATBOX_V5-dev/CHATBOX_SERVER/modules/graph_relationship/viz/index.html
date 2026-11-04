@@ -49,8 +49,11 @@
   #persona { flex: 0 0 66%; overflow-y: auto; padding-top: 0; border-bottom: 1px solid var(--panel-brd); }
   #p-top { position: sticky; top: 0; z-index: 2; margin: 0 -14px; padding: 12px 14px 8px;
            background: var(--panel); border-bottom: 1px solid var(--panel-brd); }
-  #p-top #p-apply { margin-top: 6px; }
-  #p-top #p-msg, #p-top #p-now { margin-top: 4px; }
+  #p-top #p-now { margin-top: 4px; }
+  /* apply lives inside the open profile and stays at the bottom of the panel while you scroll it */
+  #p-actions { position: sticky; bottom: 0; z-index: 1; background: var(--bg); margin-top: 8px;
+               padding: 6px 0 2px; border-top: 1px solid var(--panel-brd); }
+  #p-actions button { margin-top: 0; }
   #persona select, #persona button { width: 100%; margin-top: 4px; background: var(--bg);
              color: var(--text); border: 1px solid var(--panel-brd); border-radius: 6px;
              padding: 5px 6px; font: inherit; font-size: 12px; }
@@ -199,8 +202,6 @@
 <section id="persona">
   <div id="p-top">
     <h2>Role &amp; persona</h2>
-    <button id="p-apply">apply</button>
-    <div id="p-msg"></div>
     <div id="p-now"></div>
   </div>
   <div class="legend-title" style="margin-top:10px">Robot</div>
@@ -216,6 +217,7 @@
     <div id="p-role-info"></div>
     <div class="legend-title" style="margin-top:10px">Personality (OCEAN, −1 … +1)</div>
     <div id="p-traits"></div>
+    <div id="p-actions"><button id="p-apply">apply</button><div id="p-msg"></div></div>
   </div></div>
 </section>
 <div id="split-grip" title="drag to resize"></div>

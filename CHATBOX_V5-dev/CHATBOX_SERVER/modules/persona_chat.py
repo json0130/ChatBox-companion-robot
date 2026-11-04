@@ -20,6 +20,7 @@ import re
 import urllib.request
 from typing import List, Optional, Tuple
 
+from modules.chatbox_actions import normalize_tag, tag_rule
 from modules.graph_relationship.roles import (
     apply_assignment, attached_persona, attached_role, role_identity_block,
     role_persona_blocks,
@@ -37,12 +38,13 @@ MAX_MESSAGE_CHARS = 600
 
 # The general reply-style rules from the loop's HOW TO REPLY block (verbatim; a drift
 # test asserts they are still in the loop's prompt) minus the webcam-memory rules.
-# The tag line is the loop's, so the reply can be shown with its expression tag.
+# The tag line differs on purpose: it offers only the actions the ChatBox can perform
+# (modules/chatbox_actions.py) instead of any emotion word.
 REPLY_RULES = (
     "━━━ HOW TO REPLY ━━━\n"
     "• Reply in ENGLISH, in one or two short, warm, spoken sentences. Output ONLY your "
     "single reply — never write the user's next turn.\n"
-    "• Begin every reply with an emotion tag in square brackets, e.g. [HAPPY], [CURIOUS].\n"
+    + tag_rule() +
     "• Do NOT state a specific fact — a name, number, title, place, or a 'did you know…' "
     "claim — unless it appears in the memory below (including the cultural facts and your "
     "role knowledge). You may chat about a topic in general terms, but never make up "
@@ -164,6 +166,7 @@ class PersonaChat:
         if raw.startswith("[LLM not connected"):
             raise ChatError(f"cannot reach {self.backend} — is the AI server up and on this "
                             "network? (use --ollama for a local model)")
-        tag, text = split_tag(raw)
+        raw_tag, text = split_tag(raw)
+        tag = normalize_tag(raw_tag)       # only tags the ChatBox can perform reach the robot
         return {"reply": text or raw, "tag": tag, **who,
-                "assigned_ts": (assigned or {}).get("ts"), "backend": self.backend}
+                "raw_tag": raw_tag, "assigned_ts": (assigned or {}).get("ts"), "backend": self.backend}

@@ -83,7 +83,7 @@ def test_apply_then_chat_uses_it_without_a_loop(env):
     s, out = call(env, "/chat", {"robot": "chatbox", "message": "hi"})
     assert s == 200 and out["ok"] and out["role"] == "tutor"
     assert out["persona"] == "organised, quiet, warm" and out["assigned_ts"] == a["ts"]
-    assert (out["tag"], out["reply"]) == ("HAPPY", "Hello there!")
+    assert (out["tag"], out["raw_tag"], out["reply"]) == ("HANDS_CLAP", "HAPPY", "Hello there!")
     system = env["llm"].calls[-1]["system"]
     assert "a tutor robot" in system and "HOW YOU TALK AS A TUTOR" in system
     assert "short and low-key" in system                         # OCEAN → style
@@ -149,7 +149,7 @@ def test_chat_reply_is_spoken_by_the_connected_robot(hub_env):
     out = _post(hub_env["url"], "/chat", {"message": "hi"})
     assert out["robot"] == {"robots": 1, "sent": True}
     step = robot.wait_for("demo_step")[0]
-    assert step["text"] == "[HAPPY] Hello there!" and step["require_ack"] is False
+    assert step["text"] == "[HANDS_CLAP] Hello there!" and step["require_ack"] is False
     hub_env["llm"].reply = "no tag here"                       # untagged reply is still spoken
     _post(hub_env["url"], "/chat", {"message": "again"})
     assert robot.wait_for("demo_step", 2)[1]["text"] == "no tag here"
@@ -311,5 +311,6 @@ def test_reply_rules_still_match_the_loops_prompt():
     real = L._build_system_prompt(None).splitlines()
     rules = REPLY_RULES.splitlines()
     assert rules[0] == "━━━ HOW TO REPLY ━━━"
-    missing = [r for r in rules[1:] if r not in real]
+    # the tag line differs on purpose (only ChatBox-performable tags, modules/chatbox_actions.py)
+    missing = [r for r in rules[1:] if r not in real and not r.startswith("• Begin every reply")]
     assert not missing, missing

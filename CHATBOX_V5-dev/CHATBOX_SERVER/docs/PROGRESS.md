@@ -1164,3 +1164,10 @@ the person turned or looked away. Four separate causes, not one.
 ## Viz: apply button moves into the open profile — 2026-11-04
 - **Done:** the apply button and its status line moved out of the sticky header into the open profile card (bottom of its editor, `position: sticky; bottom: 0`), so it stays in view while that card is on screen and rests at the card's end when scrolled past. The header keeps the title and the "now:" line. Checked in a browser. With every card closed there is no apply button (open Custom or a profile).
 - **Reordered (same day):** in the open profile the Role select, its brief and goal/talks/avoids/knows now come first, then the pentagon, the OCEAN sliders and apply.
+
+## Only send actions the ChatBox can perform — 2026-11-04
+- **Problem:** the persona chat prompt said "begin with an emotion tag, e.g. [HAPPY], [CURIOUS]", so the model wrote `[EXCITED]`, `[CURIOUS]`, `[WELCOME]`…; the Jetson's `EMOTION_MAP` doesn't know them and falls back to the neutral pose (and a few alias to a motion that isn't the one meant).
+- **Done:** `modules/chatbox_actions.py` — the list of tags the ChatBox can perform (DEFAULT, WAVE, GREETING, POINT, CONFUSED, SHRUG, SAD, HANDS_CLAP, EARS_WIGGLE) with when to use each; the chat prompt now lists exactly these; `normalize_tag` maps any other word onto one (EXCITED/HAPPY→HANDS_CLAP, CURIOUS→CONFUSED, WELCOME→GREETING, WARM→GREETING…, unknown→DEFAULT). The chat response keeps the model's word as `raw_tag`.
+- **Left out on purpose:** ANGRY, SLEEP, POSE (client can do them; a companion shouldn't pick them). Firmware moves with no client tag (head_nod, head_shake, ears_perk, dance_*) need an `EMOTION_MAP` entry on the Jetson first.
+- **Tests:** a new test file checks every listed tag exists in the Jetson's `EMOTION_MAP` and moves differently, every alias lands on a listed tag, Method B's native tags are all listed. Drift test now skips the tag line. 230 passed.
+- **Live (AI server 10.42.0.118, 6 messages):** the model followed the list every time (HANDS_CLAP for the exam, SAD, WAVE for goodbye, CONFUSED for an unknown fact); the alias map was not needed.

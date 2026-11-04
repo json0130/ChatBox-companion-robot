@@ -237,6 +237,13 @@ cd /home/jay/Desktop/2026-Jay/ChatBox-companion-robot/CHATBOX-DEMO_V4/CHATBOX_SE
   # robot_name they connect with ("ChatBox", "Navel"); persona/speech only go to that robot, so Navel never sees
   # the ChatBox's Jay graph. Navel's graph is kg_navel.json (created with the role library on first start):
   #   --navel-kg-path FILE   --no-navel (ChatBox only)
+  # ROBOTS PAGE: http://127.0.0.1:8765/robots.html (link "Robots" on the graph page). Add more robots (e.g. Stuart):
+  #   connects in -> the robot dials this PC's hub and must call itself by that name (robot_name)
+  #   dial out    -> this PC dials ws://IP:port (a Navel-style client)
+  # Each gets its own tab, graph, chat, colour and persona file, and is saved in robots.json (--robots-file).
+  # The page also shows every robot's connection, role and personality, assigns a role, tweaks the voice
+  # (speed / pitch / volume, added on top of what its role + personality give) and says a test line.
+  # Voice on a dialled robot = Navel TTS tags (<vol,N><rpit,N><rspd,N>) in front of every line it speaks.
   # The robot's MICROPHONE works through the hub too: its `speech` audio is transcribed here with
   # faster-whisper (CPU, model loads in the background) and appears in the chat panel as what you said,
   # then the reply is spoken on the robot like a typed one. --whisper-model small for better accuracy, --no-voice to skip.

@@ -96,3 +96,17 @@ def test_link_reconnects_and_reports_why_it_cannot_connect():
     link.start()
     assert wait(lambda: link.last_error) and link.connected is False
     link.stop()
+
+
+def test_voice_spec_goes_to_navel_as_tts_tags_in_front_of_every_step(navel_hub):
+    fake, hub, link = navel_hub
+    hub.push_persona("Receptionist", "x", {k: 0 for k in "OCEAN"}, {"rate": "-3%", "pitch": "-5.0st", "volume": "+1dB"},
+                     robot="navel")
+    hub.say_steps(["[GREET] Hello!"], robot="navel")
+    steps = [m for m in fake.got if m.get("event") == "demo_step"]
+    assert steps[0]["text"] == "<vol,67><rpit,75><rspd,97>[GREET] Hello!"      # pitch -5 st = 75 %, volume +1 dB of 60
+    hub.say("Plain", robot="navel")
+    assert wait(lambda: any(m.get("text", "").endswith("Plain") and m["text"].startswith("<vol,") for m in fake.got))
+    hub.set_voice("navel", None)
+    hub.say("Bare", robot="navel")
+    assert wait(lambda: any(m.get("text") == "Bare" for m in fake.got))

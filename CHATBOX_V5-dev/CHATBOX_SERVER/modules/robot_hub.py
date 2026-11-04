@@ -14,6 +14,8 @@ import threading
 from typing import Dict, Optional
 
 import socketio
+
+from modules.persona_voice import navel_tts_tags
 from werkzeug.serving import make_server
 
 
@@ -53,6 +55,7 @@ class RobotHub:
         self._step = 0
         self._acks: Dict[str, threading.Event] = {}  # step_id -> set when the robot finished speaking it
         self._lock = threading.Lock()
+        self.voices: Dict[str, dict] = {}            # robot id -> voice spec, applied as TTS tags on robots we dial
         self.links: Dict[str, "NavelLink"] = {}      # robot id -> a robot we dial OUT to (Navel runs its own server)
         self.on_speech = None                        # callable(audio_b64, robot_name), set by the viz: mic audio -> text -> reply
         self._server = make_server(host, require_free(port, host, "robot hub port"), socketio.WSGIApp(self.sio), threaded=True)
@@ -69,12 +72,12 @@ class RobotHub:
                 return
             with self._lock:
                 self.clients[sid] = {"robot_name": data["robot_name"], "client_id": data["client_id"]}
-                persona = self.last_persona.get(data["robot_name"].lower())
+                persona = self.last_persona.get(data["robot_name"].lower().replace(" ", ""))
             self.sio.emit("client_init_response", {"success": True, "client_id": data["client_id"],
                           "robot_name": data["robot_name"],
                           "message": f"persona hub: {data['robot_name']} connected"}, to=sid)
             # tag-only step (no words): the robot starts in its default pose
-            if data["robot_name"].lower() in DEFAULT_POSE_ROBOTS:
+            if data["robot_name"].lower().replace(" ", "") in DEFAULT_POSE_ROBOTS:
                 self.sio.emit("demo_step", {"step_id": "connect", "text": "[DEFAULT]", "require_ack": False}, to=sid)
             if persona:
                 self.sio.emit("persona_update", persona, to=sid)
@@ -109,10 +112,29 @@ class RobotHub:
 
     def add_link(self, robot_id: str, link) -> None:
         """Attach a robot we dial out to (see navel_link.py); it then behaves like a connected client."""
+        link.robot_id = robot_id
         link.on_ack = self._ack_step
         link.on_speech = lambda audio, name: self.on_speech and self.on_speech(audio, name)
         self.links[robot_id] = link
         link.start()
+
+    def set_voice(self, robot_id: str, voice: Optional[dict]) -> None:
+        """The voice spec (rate / pitch / tone / volume, see persona_voice) a dialled robot speaks with."""
+        if voice:
+            self.voices[robot_id] = voice
+        else:
+            self.voices.pop(robot_id, None)
+
+    def remove_link(self, robot_id: str) -> None:
+        link = self.links.pop(robot_id, None)
+        if link:
+            link.stop()
+        self.voices.pop(robot_id, None)
+
+    def _spoken(self, link, text: str) -> str:
+        """`text` for a robot we dial: with its voice spec as the robot's own TTS tags, if it takes them."""
+        voice = self.voices.get(getattr(link, "robot_id", ""))
+        return (navel_tts_tags(voice) + text) if (voice and getattr(link, "tts", False)) else text
 
     def _links(self, robot: Optional[str] = None) -> list:
         return [l for r, l in self.links.items() if l.connected and (robot is None or r == robot)]
@@ -122,12 +144,12 @@ class RobotHub:
         case-insensitive) limits it to that robot, None = every robot."""
         with self._lock:
             return [sid for sid, c in self.clients.items()
-                    if robot is None or c["robot_name"].lower() == robot]
+                    if robot is None or c["robot_name"].lower().replace(" ", "") == robot]
 
     def robots(self, robot: Optional[str] = None) -> list:
         with self._lock:
             out = [dict(c) for c in self.clients.values()
-                   if robot is None or c["robot_name"].lower() == robot]
+                   if robot is None or c["robot_name"].lower().replace(" ", "") == robot]
         return out + [{"robot_name": l.name, "client_id": l.client_id, "via": l.url} for l in self._links(robot)]
 
     def push_persona(self, persona_name: str, robot_role: str, ocean: Dict[str, float],
@@ -143,6 +165,8 @@ class RobotHub:
             self.sio.emit("persona_update", payload, to=sid)
         # Navel writes a persona_update into its own client_config.json (robot_role, tags, voice...), and our
         # voice offsets are the ChatBox client's units, so it only gets the name and the OCEAN personality.
+        if robot and voice:
+            self.set_voice(robot, voice)
         nav = {"event": "persona_update", "persona_name": persona_name, "personality": payload["personality"]}
         sent = sum(l.send(nav) for l in self._links(robot))
         return {"robots": len(targets) + sent, "sent": bool(targets) or bool(sent)}
@@ -154,8 +178,8 @@ class RobotHub:
         targets = self._sids(robot)
         for sid in targets:
             self.sio.emit("demo_step", {"step_id": step, "text": text, "require_ack": False}, to=sid)
-        sent = sum(l.send({"event": "demo_step", "step_id": step, "text": text, "require_ack": False})
-                   for l in self._links(robot))
+        sent = sum(l.send({"event": "demo_step", "step_id": step, "text": self._spoken(l, text),
+                           "require_ack": False}) for l in self._links(robot))
         return {"robots": len(targets) + sent, "sent": bool(targets) or bool(sent)}
 
     def say_steps(self, texts, timeout: float = 30.0, robot: Optional[str] = None) -> dict:
@@ -174,8 +198,8 @@ class RobotHub:
             ev = self._acks[step] = threading.Event()
             for sid in targets:
                 self.sio.emit("demo_step", {"step_id": step, "text": text, "require_ack": True}, to=sid)
-            heard = sum(l.send({"event": "demo_step", "step_id": step, "text": text, "require_ack": True})
-                        for l in links)
+            heard = sum(l.send({"event": "demo_step", "step_id": step, "text": self._spoken(l, text),
+                                "require_ack": True}) for l in links)
             if targets or heard:
                 ev.wait(timeout)
             self._acks.pop(step, None)
@@ -184,7 +208,7 @@ class RobotHub:
                 self._step += 1
                 step = f"persona-{self._step}"
                 knows = [sid for sid in targets if sid in self.clients
-                         and self.clients[sid]["robot_name"].lower() in DEFAULT_POSE_ROBOTS]
+                         and self.clients[sid]["robot_name"].lower().replace(" ", "") in DEFAULT_POSE_ROBOTS]
             for sid in knows:
                 self.sio.emit("demo_step", {"step_id": step, "text": "[DEFAULT]", "require_ack": False}, to=sid)
         return {"robots": len(targets) + len(links), "sent": bool(targets or links), "steps": n}

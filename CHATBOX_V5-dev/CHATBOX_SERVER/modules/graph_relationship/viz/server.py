@@ -43,6 +43,7 @@ from typing import Optional
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _INDEX_HTML = os.path.join(_HERE, "index.html")
+_ROBOTS_HTML = os.path.join(_HERE, "robots.html")
 
 # --------------------------------------------------------------------------
 # edge_type -> timescale bucket, extracted from schema.py.
@@ -520,9 +521,15 @@ PRIMARY = "chatbox"      # the robot of the main graph (--kg-path); `others` are
 
 
 def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
-                 chat=None, hub=None, tagger=None, stt=None, others=None):
+                 chat=None, hub=None, tagger=None, stt=None, others=None,
+                 registry=None, attach=None, detach=None):
     # robot id -> (its GraphState, its PersonaChat): one tab each, nothing shared between them
     spaces = {PRIMARY: (state, chat), **(others or {})}
+    from modules.robot_registry import RobotRegistry, default_specs
+    if registry is None:                    # no robots.json: the robots we were handed, in memory only
+        registry = RobotRegistry(None, [d for d in default_specs() if d["id"] == PRIMARY] +
+                                 [{"id": r, "name": r.capitalize(), "kind": "connects-in", "tts": "none"}
+                                  for r in (others or {})])
 
     def space(robot):
         if robot not in spaces:
@@ -546,6 +553,56 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
                 if k not in seen_e:
                     seen_e.add(k); edges.append(e)
         return {"nodes": nodes, "edges": edges, "active": active}
+
+    def effective_voice(rid):
+        """What this robot should sound like: its assigned role + personality, plus its own voice tweak."""
+        from modules.persona_voice import voice_for
+        st = spaces[rid][0]
+        pc = st.persona_choices()
+        a = (pc.get("assigned") or {}).get(rid)
+        if not a:
+            return None, None
+        role = next((r for r in pc["roles"] if r["id"] == a["role"]), {})
+        label = role.get("label", a["role"])
+        return label, voice_for(label, a["ocean"], registry.voice_adjust(rid))
+
+    def apply_voice(rid, push=False):
+        """Recompute a robot's voice. Dialled robots use it at once (as TTS tags); a robot that connects in
+        gets its profile pushed again (it announces it), which is how the ChatBox takes a new voice."""
+        label, voice = effective_voice(rid)
+        if voice and hub is not None:
+            hub.set_voice(rid, voice)
+            if push:
+                st = spaces[rid][0]
+                pc = st.persona_choices()
+                a = pc["assigned"][rid]
+                role = next((r for r in pc["roles"] if r["id"] == a["role"]), {})
+                hub.push_persona(label, role.get("brief") or label, a["ocean"], voice, rid)
+        return voice
+
+    def robot_view(spec):
+        rid = spec["id"]
+        st = spaces.get(rid, (None, None))[0]
+        cur = assigned = {}
+        if st is not None:
+            pc = st.persona_choices()
+            cur, assigned = (pc["current"].get(rid) or {}), ((pc.get("assigned") or {}).get(rid) or {})
+        mine = hub.robots(rid) if hub else []
+        link = hub.links.get(rid) if hub else None
+        if mine:
+            detail = "connected" + (f" via {mine[0]['via']}" if mine[0].get("via") else "")
+        elif link is not None:
+            detail = f"dialling {link.url.replace('ws://', '')}" + (f" · {link.last_error}" if link.last_error else "")
+        elif spec["kind"] == "dial-out":
+            detail = "not dialled (start the viz with --robot-hub)" if hub is None else "no host to dial"
+        else:
+            detail = (f"waiting: the robot must connect as robot_name {spec['name']!r} to this PC, port {hub.port}"
+                      if hub else "start the viz with --robot-hub")
+        label, voice = effective_voice(rid) if st is not None else (None, None)
+        return {**spec, "connected": bool(mine), "detail": detail, "has_graph": st is not None,
+                "role": cur.get("role"), "role_label": cur.get("role_label"), "persona": cur.get("persona"),
+                "ocean": cur.get("ocean") or assigned.get("ocean"), "assigned_ts": assigned.get("ts"),
+                "voice": voice}
 
     def speak(texts, robot=PRIMARY):
         """`robot` says `texts` in order (in a thread: it waits on acks), then returns to DEFAULT."""
@@ -629,6 +686,9 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
 
     if hub is not None and stt is not None:
         hub.on_speech = on_speech
+    if hub is not None:                     # a restart keeps each robot's assignment: give it its voice back
+        for _rid in list(spaces):
+            apply_voice(_rid)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):  # keep console clean
@@ -651,7 +711,19 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
             except ValueError as exc:
                 self._send(400, json.dumps({"ok": False, "error": str(exc)}).encode(), "application/json")
                 return
-            if path == "/" or path == "/index.html":
+            if path == "/robots.html":
+                try:
+                    with open(_ROBOTS_HTML, "rb") as fh:
+                        self._send(200, fh.read(), "text/html; charset=utf-8")
+                except OSError:
+                    self._send(404, b"robots.html not found", "text/plain")
+            elif path == "/registry":
+                pc = state.persona_choices()
+                body = {"robots": [robot_view(s) for s in registry.robots],
+                        "roles": [{"id": r["id"], "label": r["label"]} for r in pc["roles"]],
+                        "hub": hub is not None, "hub_port": hub.port if hub else None}
+                self._send(200, json.dumps(body).encode(), "application/json")
+            elif path == "/" or path == "/index.html":
                 try:
                     with open(_INDEX_HTML, "rb") as fh:
                         body = fh.read()
@@ -682,7 +754,8 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
                 from modules.chatbox_actions import ACTIONS
                 body = {"hub": hub is not None, "port": hub.port if hub else None,
                         "robots": hub.robots() if hub else [], "actions": ACTIONS,
-                        "workspaces": list(spaces),
+                        "workspaces": list(spaces), "colors": registry.colors(),
+                        "names": {r["id"]: r["name"] for r in registry.robots},
                         "links": {r: l.status() for r, l in (hub.links.items() if hub else [])}}
                 self._send(200, json.dumps(body).encode(), "application/json")
             elif path == "/chat":
@@ -745,6 +818,44 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
                         return
                     self._send(200, json.dumps({"ok": True, **out}).encode(), "application/json")
                     return
+                if path.startswith("/registry/"):
+                    rid = str(body.get("id") or "")
+                    try:
+                        if path == "/registry/add":
+                            if attach is None:
+                                raise ValueError("adding robots is not enabled on this server")
+                            if body.get("kind") == "dial-out" and hub is None:
+                                raise ValueError("a dial-out robot needs the viz started with --robot-hub")
+                            spec = registry.add(str(body.get("name", "")), str(body.get("kind", "connects-in")),
+                                                str(body.get("host", "")), body.get("port") or 8765,
+                                                body.get("tts") or None, body.get("color") or None)
+                            try:
+                                spaces[spec["id"]] = attach(spec)
+                            except Exception:
+                                registry.remove(spec["id"]); raise
+                            out = robot_view(spec)
+                        elif path == "/registry/remove":
+                            registry.remove(rid)                        # refuses the built-in ChatBox
+                            spaces.pop(rid, None)
+                            if detach is not None:
+                                detach(rid)
+                            out = {}
+                        elif path == "/registry/voice":
+                            adj = registry.set_voice_adjust(rid, body)
+                            out = {"adjust": adj, "voice": apply_voice(rid, push=bool(body.get("push", True)))}
+                        elif path == "/registry/say":
+                            if hub is None or not hub.robots(rid):
+                                raise ValueError(f"{rid} is not connected")
+                            text = str(body.get("text") or "Hello, this is how I sound.")[:300]
+                            out = speak([text], rid)
+                        else:
+                            self._send(404, b"not found", "text/plain")
+                            return
+                    except ValueError as exc:
+                        self._send(400, json.dumps({"ok": False, "error": str(exc)}).encode(), "application/json")
+                        return
+                    self._send(200, json.dumps({"ok": True, **out}).encode(), "application/json")
+                    return
                 if path == "/persona":
                     try:
                         a = r_state.set_persona(robot,
@@ -758,7 +869,7 @@ def make_handler(state: GraphState, history: Optional["HistoryProvider"] = None,
                     role = next((r for r in r_state.persona_choices()["roles"]
                                  if r["id"] == a["role"]), {})
                     label = role.get("label", a["role"])
-                    voice = voice_for(label, a["ocean"])
+                    voice = voice_for(label, a["ocean"], registry.voice_adjust(robot))
                     sent = None
                     if hub is not None:                     # tell THIS robot about its new setup
                         sent = hub.push_persona(label,      # the robot speaks "Persona updated to <name>."
@@ -798,6 +909,8 @@ def main():
                     help="graph file of the Navel tab (created with the role library if missing; it shares "
                          "nothing with the ChatBox graph)")
     ap.add_argument("--no-navel", action="store_true", help="no Navel tab")
+    ap.add_argument("--robots-file", default="robots.json",
+                    help="the robots the Robots page added (and their colours / voice tweaks); default robots.json")
     ap.add_argument("--navel-host", metavar="IP", default=None,
                     help="with --robot-hub: dial Navel at ws://IP:PORT (Navel runs its own WebSocket server and "
                          "never connects out; e.g. 192.168.0.10 on the lab router)")
@@ -845,12 +958,6 @@ def main():
         llm = (OllamaChat(args.ollama) if args.ollama
                else ai_server_chat(args.ai_server or DEFAULT_AI_SERVER))
         chat = PersonaChat(kg_path, state._persona_path(), llm)
-    others = {}
-    if not args.no_navel:
-        navel_path = os.path.abspath(args.navel_kg_path)
-        seed_robot_graph(navel_path, "navel")
-        navel = GraphState(navel_path, "persona_assignment_navel.json")
-        others["navel"] = (navel, PersonaChat(navel_path, navel._persona_path(), llm) if chat else None)
     history = HistoryProvider(os.path.abspath(args.sessions_db),
                               embed_model=(args.embed_model or None))
     hub = None
@@ -858,9 +965,32 @@ def main():
         from modules.robot_hub import RobotHub
         hub = RobotHub(args.robot_hub)
         hub.start()
-        if args.navel_host:
+    # ---- the robots: robots.json (ChatBox + Navel by default, more added from the Robots page) ----
+    from modules.robot_registry import RobotRegistry
+    registry = RobotRegistry(os.path.abspath(args.robots_file))
+    if args.navel_host:
+        registry.set_host("navel", args.navel_host, args.navel_port)
+    if args.no_navel:
+        registry.robots = [r for r in registry.robots if r["id"] != "navel"]      # hidden this run, not saved
+    other_dir = os.path.dirname(os.path.abspath(args.navel_kg_path))
+
+    def attach(spec):
+        """A robot's own graph file, persona file, chat and (if we dial it) its link. Nothing shared with the others."""
+        rid = spec["id"]
+        path = os.path.abspath(args.navel_kg_path) if rid == "navel" else os.path.join(other_dir, f"kg_{rid}.json")
+        seed_robot_graph(path, rid)
+        st = GraphState(path, f"persona_assignment_{rid}.json")
+        if hub is not None and spec["kind"] == "dial-out" and spec.get("host"):
             from modules.navel_link import NavelLink
-            hub.add_link("navel", NavelLink(args.navel_host, args.navel_port))
+            hub.add_link(rid, NavelLink(spec["host"], int(spec["port"]), name=spec["name"],
+                                        client_id=f"{rid}_001", tts=spec.get("tts") == "navel"))
+        return st, (PersonaChat(path, st._persona_path(), llm) if chat else None)
+
+    def detach(rid):
+        if hub is not None:
+            hub.remove_link(rid)
+
+    others = {s_["id"]: attach(s_) for s_ in registry.robots if s_["id"] != "chatbox"}
     tagger = None
     if args.action_tags:
         if hub is None or chat is None:
@@ -874,16 +1004,20 @@ def main():
                                "whisper_compute_type": "float16",
                                "whisper_language": None if args.whisper_language == "auto" else args.whisper_language})
         threading.Thread(target=stt.initialize, daemon=True).start()   # load in the background
-    handler = make_handler(state, history, chat, hub, tagger, stt, others)
+    handler = make_handler(state, history, chat, hub, tagger, stt, others, registry, attach, detach)
     server = ThreadingHTTPServer((args.host, args.port), handler)
 
     print(f"[viz] serving KG visualizer at  http://{args.host}:{args.port}/")
     print(f"[viz] polling KG file:          {state.kg_path}")
-    print(f"[viz] navel tab:                {others['navel'][0].kg_path if others else 'off (--no-navel)'}")
+    print(f"[viz] robots ({args.robots_file}):  " + ", ".join(f"{r['name']} ({r['kind']})" for r in registry.robots)
+          + "   -> Robots page: /robots.html")
     print(f"[viz] persona chat:             {chat.backend if chat else 'off (--no-chat)'}")
     print(f"[viz] action tags (Method B):   {'on' if tagger else 'off (--action-tags)'}")
     print(f"[viz] robot microphone:         {f'faster-whisper {args.whisper_model} on {args.whisper_device} (loading in the background)' if stt else 'off (needs --robot-hub, not --no-voice)'}")
-    print(f"[viz] navel link:               {f'dialling ws://{args.navel_host}:{args.navel_port}' if args.navel_host and hub else 'off (--navel-host IP)'}")
+    for _r in registry.robots:
+        if _r["kind"] == "dial-out":
+            print(f"[viz] dialling {_r['name']}:".ljust(32) + (f"ws://{_r['host']}:{_r['port']}" if _r["host"] and hub
+                                                              else "off (--robot-hub and a host: --navel-host IP, or the Robots page)"))
     print(f"[viz] robot hub:                {f'port {hub.port} (robot server_url -> http://THIS_IP:{hub.port})' if hub else 'off (--robot-hub)'}")
     if history.store is not None:
         kind = "RAG" if history.rag is not None else "keyword"

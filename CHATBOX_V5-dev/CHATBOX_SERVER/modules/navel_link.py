@@ -20,8 +20,10 @@ import websocket
 
 class NavelLink:
     def __init__(self, host: str, port: int = 8765, name: str = "Navel", client_id: str = "navel_001",
-                 retry_s: float = 3.0) -> None:
+                 retry_s: float = 3.0, tts: bool = True) -> None:
         self.host, self.port, self.name, self.client_id, self.retry_s = host, port, name, client_id, retry_s
+        self.tts = tts                  # takes Navel TTS tags (<vol,..><rpit,..><rspd,..>) in front of its text
+        self.robot_id = name.lower()
         self.url = f"ws://{host}:{port}"
         self.connected = False
         self.last_error = ""

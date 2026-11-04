@@ -36,6 +36,10 @@
           display: flex; gap: 6px; z-index: 6; }
   .lsw { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px; }
   #tabs[hidden] { display: none; }
+  #robots-link { position: fixed; top: 12px; right: calc(var(--side) + 14px); z-index: 6; padding: 6px 14px;
+                 font-size: 13px; border-radius: 8px; color: var(--text); text-decoration: none;
+                 background: rgba(28,30,41,0.92); border: 1px solid var(--panel-brd); }
+  #robots-link:hover { border-color: var(--slow); }
   #tabs button { padding: 6px 16px; font-size: 13px; border-radius: 8px; cursor: pointer;
                  background: rgba(28,30,41,0.92); color: var(--muted); border: 1px solid var(--panel-brd); }
   #tabs button.on { color: var(--text); font-weight: 600; }
@@ -219,6 +223,7 @@
 <canvas style="display:none"></canvas>
 <svg id="graph"></svg>
 
+<a id="robots-link" href="/robots.html" title="add robots, monitor and assign roles for all of them">Robots &#9881;</a>
 <div id="tabs" hidden></div>
 
 <div id="hud" class="panel">
@@ -226,8 +231,7 @@
   <div class="stat"><span class="muted">nodes</span><b id="n-count">0</b></div>
   <div class="stat"><span class="muted">edges</span><b id="e-count">0</b></div>
   <div class="stat"><span class="muted">updated</span><b id="ts" class="muted">—</b></div>
-  <div class="stat" style="gap:10px;margin-top:2px;font-size:11.5px"><span><i class="lsw" style="background:#ff8c42"></i>ChatBox</span>
-    <span><i class="lsw" style="background:#4fc3f7"></i>Navel</span><span><i class="lsw" style="background:#fff"></i>Jay</span></div>
+  <div class="stat" id="hud-legend" style="gap:10px;margin-top:2px;font-size:11.5px;flex-wrap:wrap"></div>
   <div class="stat"><span class="muted">robot</span><b id="rb-stat"><span id="rb-dot" class="off"></span><span id="rb-txt">—</span></b></div>
 </div>
 
@@ -1300,7 +1304,19 @@ function renderActions(actions) {
     box.appendChild(b);
   }
 }
-let tabsKey = "";
+let tabsKey = "", robotsKey = "";
+const robotName = {};                               // id -> display name
+function syncRobots(j) {                            // colours / names come from the registry (robots.json)
+  const key = JSON.stringify([j.colors, j.names]);
+  if (key === robotsKey || !j.colors) return;
+  robotsKey = key;
+  for (const k of Object.keys(ROBOT_COLOR)) delete ROBOT_COLOR[k];
+  Object.assign(ROBOT_COLOR, j.colors); Object.assign(robotName, j.names || {});
+  pEl("hud-legend").innerHTML = Object.keys(j.colors).map(r =>
+    `<span><i class="lsw" style="background:${j.colors[r]}"></i>${esc(robotName[r] || r)}</span>`).join("") +
+    `<span><i class="lsw" style="background:#fff"></i>Jay</span>`;
+  lastSig = ""; tabsKey = "";                       // repaint the graph and tabs in the new colours
+}
 function renderTabs(workspaces, robots) {
   const box = pEl("tabs");
   box.hidden = workspaces.length < 2;               // a single robot needs no tabs
@@ -1312,7 +1328,7 @@ function renderTabs(workspaces, robots) {
     const c = ROBOT_COLOR[r] || "#ffffff";
     return `<button data-r="${esc(r)}" class="${r === curRobot ? "on" : ""}" style="${r === curRobot ?
       `border-color:${c};box-shadow:0 0 0 1px ${c}` : ""}">` +
-      `<span class="tswatch" style="background:${c}"></span>${esc(r)}` +
+      `<span class="tswatch" style="background:${c}"></span>${esc(robotName[r] || r)}` +
       `<span class="tdot ${up(r) ? "on" : ""}" title="${up(r) ? "connected" : "not connected"}"></span></button>`;
   }).join("");
   box.querySelectorAll("button").forEach(b => b.addEventListener("click", () => switchRobot(b.dataset.r)));
@@ -1337,6 +1353,7 @@ async function robotStatus() {
   try {
     const j = await (await fetch("/robots")).json();
     renderActions(j.actions);
+    syncRobots(j);
     renderTabs(j.workspaces || [curRobot], j.robots);
     const mine = j.robots.filter(x => x.robot_name.toLowerCase() === curRobot);
     robotUp = j.hub && mine.length > 0;
@@ -1355,7 +1372,7 @@ robotStatus();
 setInterval(robotStatus, 2000);
 (async () => {                                        // reopen on the tab you left
   try {
-    const saved = localStorage.getItem("robot-tab");
+    const saved = new URLSearchParams(location.search).get("robot") || localStorage.getItem("robot-tab");
     if (saved && saved !== "chatbox" && ((await (await fetch("/robots")).json()).workspaces || []).includes(saved))
       switchRobot(saved);
   } catch (_) {}

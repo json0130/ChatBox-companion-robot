@@ -8,7 +8,6 @@ import socket
 # Map LLM action tags → ESP32 validExpressions[]
 TAG_TO_ESP32: dict = {
     "GREETING": "greeting",
-    "WAVE":     "wave",
     "NOD":      "head_nod",
     "CONFUSED": "confused",
     "SAD":      "sad",

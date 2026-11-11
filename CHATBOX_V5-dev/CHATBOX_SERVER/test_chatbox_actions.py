@@ -26,7 +26,7 @@ def test_excited_and_other_feeling_words_become_real_actions():
     assert normalize_tag("welcome") == "GREETING"
     assert normalize_tag("something new") == "DEFAULT"      # the client would do this anyway
     assert normalize_tag("") == ""                          # no tag = plain speech
-    assert normalize_tag("wave") == "WAVE" and normalize_tag("EARS-WIGGLE") == "EARS_WIGGLE"
+    assert normalize_tag("wave") == "GREETING" and "WAVE" not in ACTIONS and normalize_tag("EARS-WIGGLE") == "EARS_WIGGLE"
 
 
 def test_every_alias_lands_on_a_listed_action():
@@ -53,6 +53,6 @@ def test_actions_exist_on_the_jetson_and_move_differently():
 
 def test_the_method_b_generator_only_uses_listed_actions():
     assert set(CHATBOX_NATIVE_TAG.values()) <= set(ACTIONS)
-    items = [{"text": "Hi.", "tag": "WAVE"}, {"text": "ok", "tag": None}]
-    assert step_texts(items) == ["[WAVE] Hi.", "ok"]
+    items = [{"text": "Hi.", "tag": "GREETING"}, {"text": "ok", "tag": None}]
+    assert step_texts(items) == ["[GREETING] Hi.", "ok"]
     assert split_tag("[EXCITED] Great!") == ("EXCITED", "Great!")

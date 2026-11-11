@@ -243,6 +243,9 @@ cd /home/jay/Desktop/2026-Jay/ChatBox-companion-robot/CHATBOX-DEMO_V4/CHATBOX_SE
   # Each gets its own tab, graph, chat, colour and persona file, and is saved in robots.json (--robots-file).
   # The page also shows every robot's connection, role and personality, assigns a role, tweaks the voice
   # (speed / pitch / volume, added on top of what its role + personality give) and says a test line.
+  # The Navel registers itself: set "server_url": "http://<this PC>:5000" in its client_config.json and start
+  # robot.py; it POSTs /robots/register and the viz dials it back (no --navel-host needed; --navel-host still works).
+  # --action-tags = Method B for BOTH robots (Navel: its own 11 tags, --navel-overrun SEC to allow longer gestures).
   # Voice on a dialled robot = Navel TTS tags (<vol,N><rpit,N><rspd,N>) in front of every line it speaks.
   # The robot's MICROPHONE works through the hub too: its `speech` audio is transcribed here with
   # faster-whisper (CPU, model loads in the background) and appears in the chat panel as what you said,

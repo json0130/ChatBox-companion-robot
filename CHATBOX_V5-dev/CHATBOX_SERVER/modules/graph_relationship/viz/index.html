@@ -1286,9 +1286,12 @@ setInterval(loadPersona, 1000);
 
 // ---- robot connection status ------------------------------------------------
 let robotUp = false;
-function renderActions(actions) {
-  const box = pEl("act-btns");
-  if (box.children.length || !actions) return;
+let actionsOf = "";                                 // whose buttons are drawn
+function renderActions(all) {                       // all: robot id -> {tag: when to use it}
+  const box = pEl("act-btns"), actions = (all || {})[curRobot];
+  pEl("actions").hidden = !actions;                 // a robot with no action list has no panel
+  if (!actions || actionsOf === curRobot) return;
+  actionsOf = curRobot; box.innerHTML = "";
   for (const [tag, tip] of Object.entries(actions)) {
     const b = document.createElement("button");
     b.textContent = tag.replace("_", " ").toLowerCase(); b.title = tip; b.dataset.tag = tag;
@@ -1296,7 +1299,7 @@ function renderActions(actions) {
       const m = pEl("act-msg"); m.textContent = `sending ${tag}…`;
       try {
         const r = await fetch("/action", {method: "POST", headers: {"Content-Type": "application/json"},
-                                          body: JSON.stringify({tag, robot: "chatbox"})});
+                                          body: JSON.stringify({tag, robot: curRobot})});
         const j = await r.json();
         m.textContent = j.ok ? `sent ${tag} ✓` : (j.error || r.status);
       } catch (e) { m.textContent = "failed: " + e.message; }
@@ -1344,7 +1347,7 @@ function switchRobot(r) {
   pEl("p-msg").textContent = "";
   closeConvo(); tabsKey = "";
   applyRobotFocus(); fitFocus();
-  pEl("actions").hidden = r !== "chatbox";           // the action buttons are the ChatBox's
+  pEl("act-msg").textContent = "";
   loadPersona(); chatConfig(); robotStatus();
 }
 async function robotStatus() {
@@ -1366,7 +1369,7 @@ async function robotStatus() {
   pEl("rb-dot").className = dot; pEl("rb-txt").innerHTML = txt;
   document.querySelectorAll("#act-btns button").forEach(b => b.disabled = !robotUp);
   if (!robotUp) pEl("act-msg").textContent = "connect a robot to use these";
-  else if (pEl("act-msg").textContent.startsWith("connect")) pEl("act-msg").textContent = "click to play on the robot";
+  else if (!pEl("act-msg").textContent || pEl("act-msg").textContent.startsWith("connect")) pEl("act-msg").textContent = "click to play on the robot";
 }
 robotStatus();
 setInterval(robotStatus, 2000);

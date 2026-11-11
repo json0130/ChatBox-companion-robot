@@ -41,11 +41,11 @@ def test_each_sentence_gets_its_native_tag():
     items = ActionTagGenerator(ChatLLM(ScriptedLLM())).generate(REPLY, "hi")
     assert [i["text"] for i in items][:2] == ["Hello!", "Welcome to the lab."]
     got = {i["text"]: (i["action"], i["tag"]) for i in items}
-    assert got["Welcome to the lab."] == ("GREET", "WAVE")            # planner action -> Jetson tag
+    assert got["Welcome to the lab."] == ("GREET", "GREETING")            # planner action -> Jetson tag
     assert got["I am sorry that was hard."] == ("SAD", "SAD")
     assert got["Well done, great job!"] == ("HAPPY", "HANDS_CLAP")
     assert got["Over there is the arm."] == ("POINT", "POINT")
-    assert step_texts(items)[1] == "[WAVE] Welcome to the lab."
+    assert step_texts(items)[1] == "[GREETING] Welcome to the lab."
 
 
 def test_a_broken_llm_degrades_to_the_neutral_pose_not_an_error():
@@ -57,10 +57,10 @@ def test_a_broken_llm_degrades_to_the_neutral_pose_not_an_error():
 def test_say_steps_waits_for_each_ack(hub_env):
     robot = _FakeRobot(hub_env["hub"].port); hub_env["robots"].append(robot)
     robot.wait_for("client_init_response")
-    t = threading.Thread(target=hub_env["hub"].say_steps, args=(["[WAVE] a", "[SAD] b"],), daemon=True)
+    t = threading.Thread(target=hub_env["hub"].say_steps, args=(["[GREETING] a", "[SAD] b"],), daemon=True)
     t.start()
     first = robot.wait_for("demo_step")[0]
-    assert first["text"] == "[WAVE] a" and first["require_ack"] is True
+    assert first["text"] == "[GREETING] a" and first["require_ack"] is True
     time.sleep(0.3)
     assert len(robot.wait_for("demo_step")) == 1                     # b is held back until a is acked
     robot.sio.emit("ack", {"type": "ack", "step_id": first["step_id"]})
@@ -93,7 +93,7 @@ def test_chat_reply_reaches_the_robot_as_tagged_steps(hub_env):
     robot = _FakeRobot(hub_env["hub"].port); hub_env["robots"].append(robot)
     robot.wait_for("client_init_response")
     out = _post(hub_env["url"], "/chat", {"message": "hi"})
-    assert [p["tag"] for p in out["plan"]][1:3] == ["WAVE", "SAD"]
+    assert [p["tag"] for p in out["plan"]][1:3] == ["GREETING", "SAD"]
     assert out["robot"]["sent"] and out["robot"]["steps"] == len(out["plan"])
     heard = []
     for n in range(1, len(out["plan"]) + 1):                          # act like the Jetson: speak, then ack
@@ -101,4 +101,4 @@ def test_chat_reply_reaches_the_robot_as_tagged_steps(hub_env):
         heard.append(step["text"])
         robot.sio.emit("ack", {"type": "ack", "step_id": step["step_id"]})
     assert heard == step_texts(out["plan"])
-    assert "[WAVE] Welcome to the lab." in heard and "[HANDS_CLAP] Well done, great job!" in heard
+    assert "[GREETING] Welcome to the lab." in heard and "[HANDS_CLAP] Well done, great job!" in heard

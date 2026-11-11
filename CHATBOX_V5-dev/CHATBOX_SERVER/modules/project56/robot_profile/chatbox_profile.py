@@ -36,7 +36,7 @@ _SPEECH = RobotSpeechProfile(
 # planner action -> native tag sent as "[TAG] text" (Jetson EMOTION_MAP key)
 CHATBOX_NATIVE_TAG: dict[str, str] = {
     "DEFAULT": "DEFAULT",
-    "GREET": "WAVE",
+    "GREET": "GREETING",
     "POINT": "POINT",
     "UNCERTAIN": "CONFUSED",
     "SAD": "SAD",
@@ -48,7 +48,7 @@ _DESCRIPTIONS = {
                 "Return to the neutral speaking pose for ordinary statements and "
                 "explanations when no more specific action fits."),
     "GREET": ("expressive_action",
-              "Wave the right hand in a friendly greeting for a welcome, hello, "
+              "Open, welcoming pose for a welcome, hello, "
               "introduction or goodbye."),
     "POINT": ("expressive_action",
               "Point an arm towards a person, object, display or direction being discussed."),

@@ -13,8 +13,7 @@ from __future__ import annotations
 
 ACTIONS = {          # tag -> when to use it (this text goes into the prompt)
     "DEFAULT": "calm neutral pose: ordinary statements, listening",
-    "WAVE": "wave: hello or goodbye",
-    "GREETING": "open, welcoming pose: someone just arrived or you are introducing yourself",
+    "GREETING": "open, welcoming pose: hello or goodbye, someone just arrived or you are introducing yourself",
     "POINT": "point: showing or suggesting something, a direction, 'over there'",
     "CONFUSED": "head tilt: puzzled, unsure, curious about something",
     "SHRUG": "shrug: 'I don't know', 'maybe', not sure",
@@ -29,7 +28,8 @@ ALIASES = {
     "CHEERFUL": "HANDS_CLAP", "DELIGHTED": "HANDS_CLAP", "PROUD": "HANDS_CLAP",
     "THRILLED": "HANDS_CLAP", "CELEBRATE": "HANDS_CLAP", "CELEBRATING": "HANDS_CLAP",
     "ENTHUSIASTIC": "HANDS_CLAP", "PRAISE": "HANDS_CLAP", "ENCOURAGING": "HANDS_CLAP",
-    "HELLO": "WAVE", "HI": "WAVE", "GOODBYE": "WAVE", "BYE": "WAVE", "FAREWELL": "WAVE",
+    "HELLO": "GREETING", "HI": "GREETING", "GOODBYE": "GREETING", "BYE": "GREETING", "FAREWELL": "GREETING",
+    "WAVE": "GREETING",             # no wave any more
     "WELCOME": "GREETING", "WELCOMING": "GREETING", "FRIENDLY": "GREETING", "WARM": "GREETING",
     "CURIOUS": "CONFUSED", "INTERESTED": "CONFUSED", "THINKING": "CONFUSED", "THOUGHTFUL": "CONFUSED",
     "PUZZLED": "CONFUSED", "UNSURE": "CONFUSED", "SURPRISE": "CONFUSED", "SURPRISED": "CONFUSED",

@@ -357,12 +357,12 @@ def test_action_button_plays_a_gesture_only_when_a_robot_is_connected(hub_env):
             return _post(hub_env["url"], "/action", {"tag": tag})
         except urllib.error.HTTPError as e:
             return e.code, json.load(e)
-    assert post("WAVE")[0] == 409                                      # nobody connected
+    assert post("GREETING")[0] == 409                                      # nobody connected
     robot = _FakeRobot(hub_env["hub"].port); hub_env["robots"].append(robot)
     robot.wait_for("client_init_response")
-    assert post("wave")["ok"]
+    assert post("greeting")["ok"]
     step = robot.wait_for("demo_step")[0]
-    assert step["text"] == "[WAVE]" and step["require_ack"] is False
+    assert step["text"] == "[GREETING]" and step["require_ack"] is False
     assert post("EXCITED")[0] == 400                                   # only the ChatBox's own tags
 
 
@@ -433,7 +433,7 @@ def test_navel_tab_is_independent_of_the_chatbox(hub_env, tmp_path):
         time.sleep(0.5)
         assert not [e for e, _ in cb.events if e in ("persona_update", "demo_step")]   # the ChatBox heard nothing
         with pytest.raises(urllib.error.HTTPError) as e:
-            _post(url, "/action", {"robot": "navel", "tag": "WAVE"})
+            _post(url, "/action", {"robot": "navel", "tag": "GREETING"})
         assert e.value.code == 400                                                  # actions are the ChatBox's
         with pytest.raises(urllib.error.HTTPError) as e:
             get("/persona?robot=nobody")

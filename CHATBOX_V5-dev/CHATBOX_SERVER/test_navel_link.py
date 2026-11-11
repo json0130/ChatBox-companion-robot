@@ -110,3 +110,27 @@ def test_voice_spec_goes_to_navel_as_tts_tags_in_front_of_every_step(navel_hub):
     hub.set_voice("navel", None)
     hub.say("Bare", robot="navel")
     assert wait(lambda: any(m.get("text") == "Bare" for m in fake.got))
+
+
+def test_a_robot_registers_with_the_hub_port_like_navels_client_does(navel_hub):
+    import urllib.error
+    import urllib.request
+    fake, hub, link = navel_hub
+
+    def register(body):
+        req = urllib.request.Request(f"http://127.0.0.1:{hub.port}/robots/register", data=json.dumps(body).encode())
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return r.status, json.load(r)
+        except urllib.error.HTTPError as e:
+            return e.code, json.load(e)
+    seen = []
+    hub.on_register = lambda d: seen.append(d) or "ok"
+    body = {"robot_name": "Navel", "client_id": "navel_001", "ip_address": "10.0.0.5", "ws_port": 8765}
+    assert register(body) == (200, {"message": "ok"}) and seen == [body]
+    assert register({"robot_name": "Navel"})[0] == 400                    # no ip to dial
+    hub.on_register = lambda d: (_ for _ in ()).throw(ValueError("unknown robot"))
+    assert register(body) == (400, {"error": "unknown robot"})
+    with pytest.raises(urllib.error.HTTPError):
+        urllib.request.urlopen(f"http://127.0.0.1:{hub.port}/nothing", timeout=5)
+    assert link.connected                                                 # Socket.IO side unaffected

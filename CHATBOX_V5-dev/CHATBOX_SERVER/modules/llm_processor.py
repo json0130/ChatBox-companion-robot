@@ -70,9 +70,9 @@ class OllamaClient:
             f"[hands_clap] That's amazing, well done!\n\n"
             
             f"*** EXAMPLES OF INCORRECT RESPONSES (NEVER DO THIS) ***\n"
-            f"Hello! [WAVE] How are you? (Error: Text before the tag)\n"
+            f"Hello! [GREETING] How are you? (Error: Text before the tag)\n"
             f"[HAPPY] I feel great! (Error: Tag not in the allowed list)\n"
-            f"[POSE] Great idea! Let's play! [WAVE] (Error: second tag at the end — ONE tag only, never put a tag anywhere except the very start)\n\n"
+            f"[POSE] Great idea! Let's play! [SAD] (Error: second tag at the end — ONE tag only, never put a tag anywhere except the very start)\n\n"
             
             f"Respond to the user's next message following these exact rules."
         )

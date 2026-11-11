@@ -55,9 +55,6 @@ class AffordanceProvider:
             return 0.0
 
         # Examples of action-specific rules.
-        if tag == "WAVE" and state.get("arms_busy", False):
-            return 0.0
-
         if tag == "MOVE_FORWARD":
             if state.get("obstacle_detected", False):
                 return 0.0

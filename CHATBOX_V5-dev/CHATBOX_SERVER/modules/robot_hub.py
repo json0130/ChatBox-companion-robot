@@ -7,8 +7,15 @@ Jetson / Navel. We use two server -> client events the clients already handle:
   demo_step       {text: "[TAG] words"}: the robot speaks the words and the tag drives its face
                   (on the ChatBox the Jetson forwards the tag to the ESP32).
 Events the robot sends us (camera frames, ...) are ignored; `speech` goes to `on_speech` if set.
+
+A robot that runs its own WebSocket server (Navel) cannot dial in, but its client POSTs
+`{server_url}/robots/register` {robot_name, client_id, ip_address, ws_port, ...} on start. The hub answers
+that on the same port and hands it to `on_register`, which dials the robot back; so the Navel's
+server_url can point here too, like the ChatBox's.
 """
+import asyncio
 import errno
+import json
 import socket
 import threading
 from typing import Dict, Optional
@@ -57,10 +64,28 @@ class RobotHub:
         self._lock = threading.Lock()
         self.voices: Dict[str, dict] = {}            # robot id -> voice spec, applied as TTS tags on robots we dial
         self.links: Dict[str, "NavelLink"] = {}      # robot id -> a robot we dial OUT to (Navel runs its own server)
+        self.inbound: Dict[str, dict] = {}           # client_id -> {robot_id, name, tts}: robots that registered as "I will dial in" (connect_mode inbound)
+        self.on_register = None                      # callable(dict) -> message (raise ValueError to refuse): a robot announced its ip / ws_port
         self.on_speech = None                        # callable(audio_b64, robot_name), set by the viz: mic audio -> text -> reply
-        self._server = make_server(host, require_free(port, host, "robot hub port"), socketio.WSGIApp(self.sio), threaded=True)
+        self._server = make_server(host, require_free(port, host, "robot hub port"), socketio.WSGIApp(self.sio, self._http), threaded=True)
         self.port = self._server.server_port
         self._wire()
+
+    def _http(self, environ, start_response):
+        """Everything that is not Socket.IO: POST /robots/register (a robot we dial says where it is)."""
+        def reply(code, **body):
+            raw = json.dumps(body).encode()
+            start_response(code, [("Content-Type", "application/json"), ("Content-Length", str(len(raw)))])
+            return [raw]
+        if environ.get("PATH_INFO") != "/robots/register" or environ.get("REQUEST_METHOD") != "POST":
+            return reply("404 Not Found", error="not found")
+        try:
+            data = json.loads(environ["wsgi.input"].read(int(environ.get("CONTENT_LENGTH") or 0)) or b"{}")
+            if not (self.on_register and data.get("robot_name") and data.get("ip_address")):
+                raise ValueError("robot_name and ip_address are required")
+            return reply("200 OK", message=self.on_register(data))
+        except ValueError as exc:       # includes bad JSON
+            return reply("400 Bad Request", error=str(exc))
 
     def _wire(self) -> None:
         @self.sio.on("client_init")
@@ -115,8 +140,63 @@ class RobotHub:
         link.robot_id = robot_id
         link.on_ack = self._ack_step
         link.on_speech = lambda audio, name: self.on_speech and self.on_speech(audio, name)
+        link.on_open = lambda: self._greet(link)
         self.links[robot_id] = link
         link.start()
+
+    def _greet(self, link) -> None:
+        """What a Socket.IO robot gets in client_init, for a robot on a link: the default pose, then the last persona."""
+        rid = getattr(link, "robot_id", "")
+        if rid in DEFAULT_POSE_ROBOTS:
+            link.send({"event": "demo_step", "step_id": "connect", "text": "[DEFAULT]", "require_ack": False})
+        persona = self.last_persona.get(rid)
+        if persona:
+            link.send(self._persona_msg(link, persona))
+
+    @staticmethod
+    def _persona_msg(link, payload: dict) -> dict:
+        """persona_update for a robot on a link. Navel writes it into its own client_config.json and our voice
+        offsets are the ChatBox client's units, so a TTS-tag robot (Navel) only gets name + OCEAN personality;
+        any other (the ChatBox client over the shared protocol) gets everything, like over Socket.IO."""
+        if getattr(link, "tts", False):
+            return {"event": "persona_update", "persona_name": payload["persona_name"], "personality": payload["personality"]}
+        return {"event": "persona_update", **payload}
+
+    def start_inbound(self, port: int, host: str = "0.0.0.0") -> int:
+        """Listen for robots that dial IN over a plain WebSocket (client_config `connect_to_server`, the shared
+        client's mode for a robot behind NAT / on Tailscale). First message {"type": "hello", "client_id", "token"};
+        the robot must have registered first (POST /robots/register with connect_mode "inbound" -> self.inbound)."""
+        import websockets
+        from modules.navel_link import InboundLink
+        require_free(port, host, "robot inbound port")
+
+        async def handler(sock):
+            try:
+                hello = json.loads(await asyncio.wait_for(sock.recv(), timeout=10))
+            except Exception:
+                await sock.close(1008, "hello required")
+                return
+            who = self.inbound.get(hello.get("client_id")) if hello.get("type") == "hello" else None
+            if not who:
+                await sock.close(1008, "not registered")
+                return
+            self.remove_link(who["robot_id"])           # a redial replaces the stale link
+            link = InboundLink(asyncio.get_running_loop(), sock, who["name"], hello["client_id"], who["tts"])
+            self.add_link(who["robot_id"], link)
+            link.on_open()
+            try:
+                async for raw in sock:
+                    link._message(None, raw)
+            finally:
+                link.connected = False
+                if self.links.get(who["robot_id"]) is link:
+                    self.links.pop(who["robot_id"])
+
+        async def serve():
+            async with websockets.serve(handler, host, port, ping_interval=20, ping_timeout=10):
+                await asyncio.Future()
+        threading.Thread(target=lambda: asyncio.run(serve()), daemon=True, name="robot-inbound").start()
+        return port
 
     def set_voice(self, robot_id: str, voice: Optional[dict]) -> None:
         """The voice spec (rate / pitch / tone / volume, see persona_voice) a dialled robot speaks with."""
@@ -167,8 +247,7 @@ class RobotHub:
         # voice offsets are the ChatBox client's units, so it only gets the name and the OCEAN personality.
         if robot and voice:
             self.set_voice(robot, voice)
-        nav = {"event": "persona_update", "persona_name": persona_name, "personality": payload["personality"]}
-        sent = sum(l.send(nav) for l in self._links(robot))
+        sent = sum(l.send(self._persona_msg(l, payload)) for l in self._links(robot))
         return {"robots": len(targets) + sent, "sent": bool(targets) or bool(sent)}
 
     def say(self, text: str, robot: Optional[str] = None) -> dict:
@@ -211,4 +290,7 @@ class RobotHub:
                          and self.clients[sid]["robot_name"].lower().replace(" ", "") in DEFAULT_POSE_ROBOTS]
             for sid in knows:
                 self.sio.emit("demo_step", {"step_id": step, "text": "[DEFAULT]", "require_ack": False}, to=sid)
+            for l in links:
+                if getattr(l, "robot_id", "") in DEFAULT_POSE_ROBOTS:
+                    l.send({"event": "demo_step", "step_id": step, "text": "[DEFAULT]", "require_ack": False})
         return {"robots": len(targets) + len(links), "sent": bool(targets or links), "steps": n}

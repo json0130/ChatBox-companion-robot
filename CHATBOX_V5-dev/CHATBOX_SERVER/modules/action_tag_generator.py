@@ -47,23 +47,37 @@ class ChatLLM:
 
 
 class ActionTagGenerator:
-    def __init__(self, llm, overrun_seconds: float = OVERRUN_SECONDS):
-        selector = ActionSelectorModule(llm, CHATBOX_PROFILE, language_scoring_mode="choice",
+    """Defaults to the ChatBox; `profile`/`native` retarget it (see navel_tagger)."""
+
+    def __init__(self, llm, overrun_seconds: float = OVERRUN_SECONDS, profile=CHATBOX_PROFILE,
+                 native: Dict[str, str] = CHATBOX_NATIVE_TAG):
+        self.profile, self.native = profile, native
+        selector = ActionSelectorModule(llm, profile, language_scoring_mode="choice",
                                         duration_overrun_allowance_seconds=overrun_seconds)
         selector.initialize()
-        self.segmenter = SpeechSegmenter(CHATBOX_PROFILE.speech.segmentation_timing)
+        self.segmenter = SpeechSegmenter(profile.speech.segmentation_timing)
         self.orchestrator = CoSpeechPlanOrchestrator(selector)
 
     def generate(self, reply: str, user_message: str = "", on_step=None) -> List[Dict[str, Optional[str]]]:
         """`on_step(item)` gets each {"text","action","tag"} as soon as its gesture is chosen."""
-        item = lambda text, a: {"text": text, "action": a, "tag": CHATBOX_NATIVE_TAG[a] if a else None}
+        item = lambda text, a: {"text": text, "action": a, "tag": self.native[a] if a else None}
         segments = self.segmenter.segment(reply)
         plan = self.orchestrator.build_selected_plan(
-            segments, allowed_tags=list(CHATBOX_PROFILE.actions),
+            segments, allowed_tags=list(self.profile.actions),
             context=ActionContext(user_message=user_message, dialogue=reply,
-                                  robot_id=CHATBOX_PROFILE.robot_id),
+                                  robot_id=self.profile.robot_id),
             on_segment=(lambda text, a: on_step(item(text, a))) if on_step else None)
         return [item(p.speech_segment.text, p.selected_tag) for p in plan.segments]
+
+
+def navel_tagger(llm, overrun_seconds: float = 0.0) -> ActionTagGenerator:
+    """Method B for the Navel: its measured gesture durations (placeholder_provider, 2026-10-08) and its
+    own 11 tags, which are the planner's action names, so the native tag = the action. The overrun default
+    0.0 is Navel's own pipeline (navel-server core/config.py): a gesture longer than its sentence is dropped,
+    so one-word sentences stay plain speech. Raise it to get more gestures."""
+    from modules.project56.robot_profile.placeholder_provider import PlaceholderRobotProfileProvider
+    profile = PlaceholderRobotProfileProvider().get_profile("Navel_001")
+    return ActionTagGenerator(llm, overrun_seconds, profile, {a: a for a in profile.actions})
 
 
 def step_texts(items: List[Dict[str, Optional[str]]]) -> List[str]:

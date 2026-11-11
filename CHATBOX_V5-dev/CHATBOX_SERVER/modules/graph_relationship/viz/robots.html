@@ -41,11 +41,12 @@
   .row select { flex:1 1 140px; }
   .now { font-size:13px; margin:6px 0; }
   .now b { font-weight:600; }
-  .bars { display:grid; grid-template-columns: repeat(5, 1fr); gap:6px; margin:6px 0 2px; }
-  .bar { font-size:10.5px; color:var(--muted); text-align:center; }
-  .bar i { display:block; height:34px; background:var(--bg); border:1px solid var(--brd); border-radius:4px; position:relative; overflow:hidden; }
-  .bar i::before { content:""; position:absolute; left:0; right:0; bottom:50%; background:var(--c); opacity:.75; height:calc(var(--v) * 50%); }
-  .bar i.neg::before { bottom:auto; top:50%; }
+  .bars { display:flex; justify-content:center; margin:2px 0; }
+  .pent { width:190px; height:170px; overflow:visible; }
+  .pent .ring { fill:none; stroke:var(--brd); stroke-width:1; }
+  .pent .axis { stroke:var(--brd); stroke-width:1; }
+  .pent .lab { font-size:10.5px; fill:var(--muted); text-anchor:middle; dominant-baseline:middle; }
+  .pent .area { stroke-width:2; fill-opacity:.25; stroke-linejoin:round; }
   .voice { border-top:1px solid var(--brd); margin-top:12px; padding-top:10px; }
   .slider { display:grid; grid-template-columns: 62px 1fr 56px; gap:8px; align-items:center; font-size:12.5px; margin:5px 0; }
   .slider output { text-align:right; color:var(--muted); font-variant-numeric:tabular-nums; }
@@ -175,17 +176,34 @@ function showSlider(inp) {
   const v = +inp.value, u = { rate: "%", pitch: " st", volume: " dB" }[inp.dataset.k];
   inp.nextElementSibling.textContent = (v > 0 ? "+" : "") + v + u;
 }
+// OCEAN (-1..1) as a pentagon: centre = -1, middle ring = 0, outer ring = +1. No persona = the empty frame only.
+function pentagon(ocean, color) {
+  const C = 85, R = 55, pt = (i, f, d = 0) => {            // vertex i (O at the top, clockwise), f = fraction of R
+    const a = (-90 + 72 * i) * Math.PI / 180; return [C + (R * f + d) * Math.cos(a), C + (R * f + d) * Math.sin(a)];
+  };
+  const poly = f => TRAITS.map((_, i) => pt(i, f).map(n => n.toFixed(1)).join(",")).join(" ");
+  let svg = `<svg class="pent" viewBox="0 0 170 170">` +
+    [1, 0.5].map(f => `<polygon class="ring" points="${poly(f)}"/>`).join("") +
+    TRAITS.map((_, i) => `<line class="axis" x1="${C}" y1="${C}" x2="${pt(i, 1)[0].toFixed(1)}" y2="${pt(i, 1)[1].toFixed(1)}"/>`).join("");
+  if (ocean) {
+    const v = TRAITS.map(k => Math.max(-1, Math.min(1, +ocean[k] || 0)));
+    svg += `<polygon class="area" points="${v.map((x, i) => pt(i, (x + 1) / 2).map(n => n.toFixed(1)).join(",")).join(" ")}" ` +
+      `style="fill:${color};stroke:${color}"/>`;
+    svg += v.map((x, i) => `<circle cx="${pt(i, (x + 1) / 2)[0].toFixed(1)}" cy="${pt(i, (x + 1) / 2)[1].toFixed(1)}" r="2.5" style="fill:${color}"/>`).join("");
+  }
+  svg += TRAITS.map((k, i) => {
+    const [x, y] = pt(i, 1, 14), x0 = ocean ? +ocean[k] || 0 : null;
+    return `<text class="lab" x="${x.toFixed(1)}" y="${y.toFixed(1)}">${k}${x0 === null ? "" : ` ${x0 > 0 ? "+" : ""}${x0.toFixed(1)}`}</text>`;
+  }).join("");
+  return svg + "</svg>";
+}
 function fill(el, r) {
   el.querySelector(".dot").className = "dot" + (r.connected ? " on" : "");
   el.querySelector(".detail").textContent = r.detail;
   const words = r.persona ? ` · ${r.persona}` : "";
   el.querySelector(".now").innerHTML = r.role_label
     ? `Playing <b>${esc(r.role_label)}</b>${esc(words)}` : '<span class="muted">no role assigned yet</span>';
-  const oc = r.ocean || {};
-  el.querySelector(".bars").innerHTML = r.ocean ? TRAITS.map(k => {
-    const v = +oc[k] || 0;
-    return `<div class="bar"><i class="${v < 0 ? "neg" : ""}" style="--v:${Math.abs(v)};--c:${r.color}"></i>${k} ${v > 0 ? "+" : ""}${v.toFixed(1)}</div>`;
-  }).join("") : "";
+  el.querySelector(".bars").innerHTML = pentagon(r.role_label ? r.ocean : null, r.color);
   const role = el.querySelector(".role");
   if (r.role && !role.dataset.dirty && document.activeElement !== role) role.value = r.role;
   const adj = r.voice_adjust || {};

@@ -10,6 +10,7 @@ ws://<navel-ip>:8765 itself and keeps it open, reconnecting when the link drops:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 import time
@@ -29,6 +30,7 @@ class NavelLink:
         self.last_error = ""
         self.on_ack: Optional[Callable[[str], None]] = None          # (step_id)
         self.on_speech: Optional[Callable[[str, str], None]] = None  # (audio_b64, robot name)
+        self.on_open: Optional[Callable[[], None]] = None            # () the link just came up (hub: starting pose, last persona)
         self._ws: Optional[websocket.WebSocketApp] = None
         self._stop = False
 
@@ -67,6 +69,8 @@ class NavelLink:
 
     def _open(self, ws) -> None:
         self.connected, self.last_error = True, ""
+        if self.on_open:
+            self.on_open()
 
     def _close(self, ws, code, msg) -> None:
         self.connected = False
@@ -83,3 +87,27 @@ class NavelLink:
             self.on_ack(str(data.get("step_id", "")))
         elif kind == "speech" and self.on_speech and data.get("audio"):
             threading.Thread(target=self.on_speech, args=(data["audio"], self.name), daemon=True).start()
+
+
+class InboundLink(NavelLink):
+    """A robot that dialled US (client_config `connect_to_server`, for a robot behind NAT / on Tailscale).
+    Same messages as NavelLink, the socket is just opened from the other side: the hub's inbound server
+    (RobotHub.start_inbound) owns the socket and feeds what it receives to `_message`."""
+
+    def __init__(self, loop, sock, name: str, client_id: str, tts: bool = False) -> None:
+        super().__init__("inbound", 0, name=name, client_id=client_id, tts=tts)
+        self._loop, self._sock = loop, sock
+        self.url, self.connected = f"inbound:{client_id}", True
+
+    def start(self) -> None:        # the socket is already open
+        pass
+
+    def stop(self) -> None:
+        self._stop = self.connected = False
+        asyncio.run_coroutine_threadsafe(self._sock.close(), self._loop)
+
+    def send(self, data: dict) -> bool:
+        if not self.connected:
+            return False
+        asyncio.run_coroutine_threadsafe(self._sock.send(json.dumps(data)), self._loop)
+        return True

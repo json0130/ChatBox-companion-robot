@@ -391,13 +391,13 @@
     },
     {
       "id": "navel:persona:assigned",
-      "descriptor": "curious, organised, outgoing, frank",
+      "descriptor": "curious, easygoing, outgoing, warm, calm",
       "ocean": {
-        "O": 0.4,
-        "C": 0.7,
-        "E": 0.6,
-        "A": -0.3,
-        "N": 0.0
+        "O": 0.8,
+        "C": -0.6,
+        "E": 0.9,
+        "A": 0.9,
+        "N": -0.5
       },
       "node_type": "persona"
     }
@@ -881,24 +881,24 @@
       "timescale": "SLOW"
     },
     {
-      "id": "4d2825ad-c471-441e-911c-d9ec3c136d42",
+      "id": "96a7739a-eac7-47ba-980a-b21069b00f2b",
       "source_id": "navel",
-      "target_id": "role:tutor",
+      "target_id": "role:storyteller",
       "provenance": {
         "source": "viz",
-        "timestamp": "2026-11-04T04:41:45.643154Z",
+        "timestamp": "2026-11-05T02:50:12.406030Z",
         "confidence": 1.0
       },
       "edge_type": "has_role",
       "timescale": "SLOW"
     },
     {
-      "id": "fb9c46ba-af5f-435c-9078-aa831ff6e4de",
+      "id": "38879176-fab4-4051-a6b0-06a0bbe408b9",
       "source_id": "navel",
       "target_id": "navel:persona:assigned",
       "provenance": {
         "source": "viz",
-        "timestamp": "2026-11-04T04:41:45.643208Z",
+        "timestamp": "2026-11-05T02:50:12.406283Z",
         "confidence": 1.0
       },
       "edge_type": "has_persona",

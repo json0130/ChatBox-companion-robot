@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # Maps emotion tags emitted by the LLM ([GREETING], [SAD], etc.)
 # to the command names the Arduino firmware understands.
 EMOTION_MAP = {
-    "GREETING": "greeting", "WAVE":   "wave",      "POINT":    "point",
+    "GREETING": "greeting", "GREET":  "greeting",   "POINT":    "point",
     "CONFUSED": "confused", "SHRUG":  "shrug",     "ANGRY":    "angry",
     "SAD":      "sad",      "SLEEP":  "sleep",     "DEFAULT":  "default",
     "POSE":     "pose",     "HAPPY":  "greeting",  "FEAR":     "sad",

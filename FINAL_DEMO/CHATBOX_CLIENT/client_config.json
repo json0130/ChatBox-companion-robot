@@ -19,7 +19,6 @@
     "robot_role": "You are a friendly and helpful robot assistant. You speak warmly, answer questions clearly, and always try to make the person feel comfortable. Keep responses concise and natural.",
     "allowed_tags": [
         "[DEFAULT]",
-        "[WAVE]",
         "[HAPPY]",
         "[SAD]",
         "[CONFUSED]",

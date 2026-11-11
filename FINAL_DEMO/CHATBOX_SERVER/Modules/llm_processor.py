@@ -34,11 +34,10 @@ class OllamaClient:
     # not listed here still works, it just gets a generic hint in the prompt.
     TAG_MEANINGS = {
         "DEFAULT":  "ONLY when no other tag below fits at all — this is the last resort, not the safe choice",
-        "WAVE":     "waving hello or goodbye, saying 'hi'/'bye', getting the child's attention",
         "HAPPY":    "cheerful, excited, proud of them, celebrating, good news, praise, jokes",
         "SAD":      "comforting them, sympathy, they are upset or something bad happened",
         "CONFUSED": "you did not understand, the message was unclear, you are asking them to repeat or explain",
-        "GREETING": "meeting them, first hello of a conversation, introducing yourself, asking how they are",
+        "GREETING": "meeting them, saying hi or bye, first hello of a conversation, introducing yourself, asking how they are",
         "ANGRY":    "playful frustration, or naming that something feels unfair",
         "SURPRISED":"something unexpected, amazement, 'wow!'",
         "THINK":    "you are considering something, working out an answer",
@@ -81,7 +80,6 @@ class OllamaClient:
         """
         samples = [
             ("GREETING", "Hi there! I'm so happy to see you today."),
-            ("WAVE",     "Hello! I'm waving right at you."),
             ("HAPPY",    "That's wonderful! I'm so proud of you."),
             ("SAD",      "I'm so sorry you're having a hard day."),
             ("CONFUSED", "Hmm, I didn't quite catch that. Can you say it again?"),
@@ -135,21 +133,20 @@ class OllamaClient:
 
     # Hello/goodbye tags. A robot that waves on EVERY turn looks broken, so these
     # are only eligible when a greeting is actually happening — see _sanitize_tag.
-    GREETING_TAGS = ("[WAVE]", "[GREETING]")
+    GREETING_TAGS = ("[GREETING]",)
 
     # Cheap keyword cues, checked in order, for when the model returns no usable
     # tag. [DEFAULT] is the final fallback if nothing matches.
     #
     # The greeting cues are anchored to the START of the reply (^\W*). Matching
-    # them anywhere is what pinned everything to [WAVE]: almost every ChatBox
+    # them anywhere is what pinned everything to a greeting: almost every ChatBox
     # reply contains the word "hi" or "hello" somewhere in it.
     _TAG_CUES = (
         ("CONFUSED", r"\b((did ?n'?o?t|did not) (quite )?(catch|understand|get)|not (quite )?sure|confus|"
                      r"say (that )?again|tell me again|what do you mean|repeat)\b"),
         ("SAD",      r"(\b(sorry|sad|hard (day|time)|upset|hurt|miss|cry|tough|difficult|frustrat|"
                      r"worri|scared|lonely|unfair|not fair|no luck|okay\?)\b|oh no)"),
-        ("GREETING", r"^\W*(i'?m chatbox|nice to meet|hello there|good (morning|afternoon|evening))"),
-        ("WAVE",     r"^\W*(hi|hey|hello|bye|goodbye|see you)\b"),
+        ("GREETING", r"^\W*(i'?m chatbox|nice to meet|hello there|good (morning|afternoon|evening)|(hi|hey|hello|bye|goodbye|see you)\b)"),
     )
 
     # Does the CHILD's message open or close a conversation? Only then may the
@@ -178,12 +175,12 @@ class OllamaClient:
         The prompt asks the model to only use allowed tags, but that's not a
         guarantee — so we enforce it here:
           • normalise allowed tags to bracketed upper-case form, drop excluded ones
-          • when `allow_greeting` is False, drop [WAVE]/[GREETING] as well, so the
+          • when `allow_greeting` is False, drop [GREETING] as well, so the
             robot cannot wave hello on every single turn of a conversation
           • pick the tag: the first [TAG] in the reply if it's usable,
             otherwise infer one from the text itself
           • strip EVERY bracketed token from the spoken text, so no stray/extra
-            tag (e.g. the model adding [WAVE] [DANCE]) can leak through
+            tag (e.g. the model adding [GREETING] [DANCE]) can leak through
 
         Returns (sanitized_response, raw_tag_the_model_emitted) — the raw tag is
         for logging, so it's visible whether the model chose the tag or we did.

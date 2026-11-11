@@ -31,7 +31,7 @@
 #define Ears_Port 23
 #define RBrow_Port 27
 #define LBrow_Port 26
-#define RELid_Port 12
+#define RELid_Port 25   // not 12: GPIO12 is a boot-strapping pin (flash voltage); a servo on it caused boot loops
 #define LELid_Port 13
 
 // Face-tracking pan servo pin

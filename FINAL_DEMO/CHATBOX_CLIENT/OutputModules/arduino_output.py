@@ -2,11 +2,12 @@
 arduino_output.py — wired USB serial link to the ESP32.
 
 The ESP32 is plugged straight into the Jetson by USB cable; there is no WiFi
-between them. Gesture commands ("wave", "default", ...) go out one per line,
+between them. Gesture commands ("point", "default", ...) go out one per line,
 and the ESP32 answers with OK:/ERR:/DONE: lines.
 """
 
 import glob
+import queue
 import time
 import threading
 import logging
@@ -36,6 +37,19 @@ class ArduinoOutputModule(OutputModule):
         self.connected = False
         self._running = False
         self.last_esp32_message = ""
+
+        # The ESP32 runs one gesture at a time and keeps only ONE queued command, so a command sent while it
+        # is mid-gesture is dropped or answered late. Commands go through a queue and a sender thread (the
+        # caller, e.g. a demo step that is about to speak, never waits): each is held until the previous one
+        # reports DONE:/ERR:, the board reboots, or `busy_timeout` passes. A board that does not even answer
+        # OK: within `ack_timeout` is not receiving, so the queue does not wait on it.
+        self._cmds: "queue.Queue[str]" = queue.Queue()
+        self._idle = threading.Event()      # last command finished (DONE/ERR) or none in flight
+        self._idle.set()
+        self._silent = 0                    # commands in a row the ESP32 never answered
+        self._acked = threading.Event()     # OK:/ERR: seen for the command in flight
+        self._busy_timeout = self.config.get('busy_timeout', 30.0)
+        self._ack_timeout = self.config.get('ack_timeout', 5.0)
 
         # Callbacks assigned by robot.py
         self.on_connected = None
@@ -88,6 +102,7 @@ class ArduinoOutputModule(OutputModule):
             return
         logger.error(f"[Arduino] Lost connection: {reason}")
         self.connected = False
+        self._idle.set()
         try:
             self._ser.close()
         except Exception:
@@ -99,6 +114,7 @@ class ArduinoOutputModule(OutputModule):
     def start(self) -> bool:
         self._running = True
         threading.Thread(target=self._maintain_connection, daemon=True).start()
+        threading.Thread(target=self._send_worker, daemon=True, name="arduino-send").start()
         return True
 
     def stop(self):
@@ -136,14 +152,41 @@ class ArduinoOutputModule(OutputModule):
             return False
 
     def send_command(self, command: str) -> bool:
+        """Queue one command for the ESP32; returns at once. Sent in order by _send_worker."""
         if not self.connected or not self._ser:
             logger.warning(f"[Arduino] Cannot send '{command}' — not connected")
             return False
-        if self.write_line(command):
+        self._cmds.put(command)
+        return True
+
+    def _send_worker(self):
+        while self._running:
+            try:
+                command = self._cmds.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            if not self.connected:
+                continue
+            if not self._idle.wait(self._busy_timeout):
+                logger.warning(f"[Arduino] No DONE from the ESP32 after {self._busy_timeout:.0f}s — sending '{command}' anyway")
+            self._idle.clear()
+            self._acked.clear()
+            if not self.write_line(command):
+                self._idle.set()
+                logger.error(f"[Arduino] Send failed: {command.strip()}")
+                continue
             logger.info(f"[Arduino] Sent: {command.strip()}")
-            return True
-        logger.error(f"[Arduino] Send failed: {command.strip()}")
-        return False
+            if self._acked.wait(self._ack_timeout):
+                self._silent = 0
+                continue
+            self._silent += 1
+            logger.warning(f"[Arduino] ESP32 did not answer '{command}' within {self._ack_timeout:.0f}s "
+                           f"(last line from it: {self.last_esp32_message!r}) — it is not receiving "
+                           "(check port / power / reset loop)")
+            self._idle.set()
+            if self._silent >= 2:   # stale fd after the CP2102 re-enumerated, or wrong port: reopen and rescan
+                self._silent = 0
+                self._drop_connection("no reply to 2 commands in a row")
 
     def _maintain_connection(self):
         delay = self._reconnect_delay
@@ -167,8 +210,15 @@ class ArduinoOutputModule(OutputModule):
                 if line:
                     self.last_esp32_message = line
                     # OK:/ERR:/DONE: are command replies; everything else is debug
+                    if line.startswith(("OK:", "ERR:")):
+                        self._acked.set()
+                    if line.startswith(("DONE:", "ERR:")) or "ChatBox System Starting" in line:
+                        self._acked.set()
+                        self._idle.set()          # finished, rejected, or rebooted: free for the next command
                     if line.startswith(("OK:", "ERR:", "DONE:")):
                         logger.info(f"[Arduino] ESP32: {line}")
+                    elif "ChatBox System Starting" in line:
+                        logger.warning("[Arduino] ESP32 (re)booted — if this happens during a gesture it is a power problem")
                     else:
                         logger.debug(f"[Arduino] ESP32: {line}")
             except Exception as e:

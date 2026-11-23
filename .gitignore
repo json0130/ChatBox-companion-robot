@@ -31,3 +31,7 @@ graphify-out/
 # Model weights / wheels — kept on disk, not in git (see utils/README.md)
 *.pt
 *.whl
+
+# Editor leftovers / per-machine robot registry (LAN addresses)
+*.save
+robots.json

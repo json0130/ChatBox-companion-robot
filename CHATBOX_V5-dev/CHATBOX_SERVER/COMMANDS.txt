@@ -1,9 +1,9 @@
 ================================================================================
   CHATBOX DEMO — COMMAND REFERENCE
-  Working directory for ALL commands: CHATBOX-DEMO_V4/CHATBOX_SERVER/
+  Working directory for ALL commands: CHATBOX_V5-dev/CHATBOX_SERVER/
 ================================================================================
 
-cd /home/jay/Desktop/2026-Jay/ChatBox-companion-robot/CHATBOX-DEMO_V4/CHATBOX_SERVER
+cd /home/jay/Desktop/2026-Jay/ChatBox-companion-robot/CHATBOX_V5-dev/CHATBOX_SERVER
 
 
 ────────────────────────────────────────────────────────────────────────────────

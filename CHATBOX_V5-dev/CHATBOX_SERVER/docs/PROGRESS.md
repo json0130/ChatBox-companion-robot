@@ -1307,3 +1307,7 @@ the person turned or looked away. Four separate causes, not one.
 - Request (Jay): add both side experiments to V5, and bring the V4 leftovers into this repo.
 - `git mv SERVO_STYLE AFFECT_LAB CHATBOX_V5-dev/`. They reach each other by sibling path (`../AFFECT_LAB`), so keeping them side by side leaves the imports unchanged. Checked in the new place: `test_servo_style.py` and `test_affect.py` print "All checks passed" (script tests, not pytest), `preview.py greeting` runs.
 - `V4_LEFTOVERS/` (repo root): the V4 patch + `final.ino` + README are tracked; `rag_indexes/` and `faces.npz` are copied in too but ignored by `.gitignore` (participant text stays out of git). The copy in `~/Desktop/2026-Jay/chatbox-v4-leftovers/` was verified identical, then removed.
+
+## 2026-11-24 — drop V4_LEFTOVERS
+- Tried: keep V4's uncommitted patch, final.ino variant, RAG indexes and faces.npz in V4_LEFTOVERS/.
+- Didn't work / not needed: nothing uses them; everything is recoverable from commit ac22307 (V4 folder), and V5 has its own faces.npz. Removed V4_LEFTOVERS/ and the empty CHATBOX-DEMO_V4/ (incl. its .env).

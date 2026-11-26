@@ -209,6 +209,12 @@ cd /home/jay/Desktop/2026-Jay/ChatBox-companion-robot/CHATBOX_V5-dev/CHATBOX_SER
   #   cd CHATBOX_V5-dev/robot_client && ./setup.sh && .venv/bin/python run.py chatbox
   # Edit robot_client/configs/chatbox.json: server_url, connect_to_server, serial port.
 
+  # The KG viz is back, standalone (graph, topic history, culture selector, role + OCEAN persona panel, delete):
+  #   Terminal 1 — the robot's face -> KG loop (below).   Terminal 2 — the viz, same folder:
+  python3 -m modules.graph_relationship.viz.server                    # http://127.0.0.1:8765, reads kg_culture.json
+  python3 -m modules.graph_relationship.viz.server --kg-path kg_state.json --port 8766
+  # It only reads the KG file the loop writes (no CARES server needed). Chat and the robots page are gone.
+
   # This folder still runs the face -> KG conversation loop on its own:
   python3 -m modules.face_webcam.webcam_loop --ai-server 172.24.47.255
   python3 -m modules.face_webcam.webcam_loop --llm

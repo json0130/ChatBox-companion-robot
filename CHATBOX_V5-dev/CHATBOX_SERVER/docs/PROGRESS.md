@@ -1326,3 +1326,8 @@ the person turned or looked away. Four separate causes, not one.
 - test_persona_roles and test_multi_culture drove the loop through the viz's GraphState; they now write persona_assignment.json / culture_override.json directly (same files, same loop code). Dropped: viz-only assertions (role validation, culture labels).
 - Tests: 252 before the cluster removal (many of them project56 and viz tests), 73 after. COMMANDS.txt section 8 rewritten.
 - Did not work / open: webcam_loop still reads persona_assignment.json, culture_override.json and writes active_state.json for a viz that no longer exists here; harmless, remove when the loop's persona path moves to CARES. requirements.txt not trimmed (flask/socketio/supabase may now be unused).
+
+## 2026-11-26 — KG viz restored, standalone (KG-only)
+- Why: removing viz/ also removed the only page that shows the person KG changing over time; the CARES dashboard shows a different graph (robot->topic competence for routing), not this one.
+- Restored modules/graph_relationship/viz/index.html, lib/ and a trimmed server.py (616 lines vs 1112): GraphState + HistoryProvider + graph/history/culture/persona/delete routes. Removed from it: chat, robot hub, Navel, registry, voice, Robots page. /chat, /robots, /voice answer "off" so the page's panels stay quiet.
+- Verified: server against the real kg_culture.json (82 nodes, 79 edges), test_viz.py (74 tests pass). Not checked: the page rendered in a browser.

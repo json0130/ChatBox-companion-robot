@@ -35,3 +35,4 @@ graphify-out/
 # Editor leftovers / per-machine robot registry (LAN addresses)
 *.save
 robots.json
+.venv/

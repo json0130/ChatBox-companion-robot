@@ -1311,3 +1311,11 @@ the person turned or looked away. Four separate causes, not one.
 ## 2026-11-24 — drop V4_LEFTOVERS
 - Tried: keep V4's uncommitted patch, final.ino variant, RAG indexes and faces.npz in V4_LEFTOVERS/.
 - Didn't work / not needed: nothing uses them; everything is recoverable from commit ac22307 (V4 folder), and V5 has its own faces.npz. Removed V4_LEFTOVERS/ and the empty CHATBOX-DEMO_V4/ (incl. its .env).
+
+## 2026-11-26 — remove the old V4-style server chain (CARES now owns the conversation server)
+- Tried: audit of CHATBOX_SERVER against the CARES server (multi-client-communication-system/v6.0.0/server).
+- Removed: chatbox_server.py, communication_manager.py, voice_input.py, modules/{llm_processor,rag_module,database,supabase_client,web_interface,debug_speech}.py, graph_relationship/demo_harness.py, tracked graph_snapshot.html, local *.bak snapshots. No live entry point (webcam_loop, viz.server) imports them; the tests were 252 passed before and after.
+- Not removed (still needed): action_tag_generator, ai_server_llm, navel_profile, persona_chat, role_seed, chatbox_actions, persona_voice, project56 are byte-identical (or 1–3 lines off) to the CARES copies, but viz/server.py (its main() runs the hub, registry and Navel dial) and 4 test files import them, and webcam_loop imports ai_server_llm, role_seed and esp32_link. graph_relationship/schema.py and kg_bridge.py are AHEAD of CARES (field validators, count_person_turns). Removing the cluster means removing V5's own viz/persona UI: a decision, not a cleanup.
+
+## 2026-11-26 — robot_client kit + ChatBox adapter
+- Added CHATBOX_V5-dev/robot_client/ (CARES client kit, KIT_VERSION 0436841) with robots/chatbox/ (piper say(), ESP32 gestures via the 11-11 arduino_output queue version) and configs/chatbox.json. test_chatbox.py: tag->command map, piper+aplay with barge-in. Kit tests 22 passed. Not yet run on the Jetson or against the live CARES server.

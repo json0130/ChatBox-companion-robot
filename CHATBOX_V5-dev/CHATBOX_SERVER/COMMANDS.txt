@@ -200,62 +200,18 @@ cd /home/jay/Desktop/2026-Jay/ChatBox-companion-robot/CHATBOX_V5-dev/CHATBOX_SER
 
 
 ────────────────────────────────────────────────────────────────────────────────
- 8. ROLE & PERSONA  (feature/persona-roles — two terminals, same folder)
+ 8. ROLE, PERSONA AND THE CARES SERVER  (roles/personas/conversation now live in CARES)
 ────────────────────────────────────────────────────────────────────────────────
 
-  cd /home/jay/Desktop/2026-Jay/ChatBox-companion-robot/CHATBOX_V5-dev/CHATBOX_SERVER
+  # The persona viz, robot hub and Navel link were removed from this folder (2026-11-26): the CARES
+  # server (multi-client-communication-system/v6.0.0) does roles, personas and the robot hub.
+  # The ChatBox connects to it with the client kit in CHATBOX_V5-dev/robot_client (see its README):
+  #   cd CHATBOX_V5-dev/robot_client && ./setup.sh && .venv/bin/python run.py chatbox
+  # Edit robot_client/configs/chatbox.json: server_url, connect_to_server, serial port.
 
-  # Terminal 1 — the robot (webcam window; type to chat). AI server or Ollama:
+  # This folder still runs the face -> KG conversation loop on its own:
   python3 -m modules.face_webcam.webcam_loop --ai-server 172.24.47.255
   python3 -m modules.face_webcam.webcam_loop --llm
-
-  # Terminal 2 — the graph + the "Role & persona" panel + "Chat with the robot" panel
-  # → http://127.0.0.1:8765. The chat talks to the lab AI server by default ($AI_HOST or
-  # 172.24.47.255); it needs no webcam loop and knows nothing about who you are.
-  python3 -m modules.graph_relationship.viz.server
-  python3 -m modules.graph_relationship.viz.server --ai-server 10.0.0.5   # another AI server
-  python3 -m modules.graph_relationship.viz.server --ollama               # local qwen2.5:7b
-  python3 -m modules.graph_relationship.viz.server --ollama qwen2.5:14b
-  python3 -m modules.graph_relationship.viz.server --no-chat              # graph only
-  # Put the setup on a REAL robot (ChatBox Jetson or Navel): the viz hosts a hub they connect OUT to,
-  # same Socket.IO contract as the central servers. Point the robot's client_config.json "server_url"
-  # at http://<this machine's IP>:5000 and restart its client. Then:
-  #   Apply            -> also attaches the role + persona in the graph file (no webcam loop needed), then persona_update (role + OCEAN): the robot says "Persona updated to <name>."
-  #   chat panel reply -> demo_step: the robot SPEAKS the reply; its [TAG] drives the face (on the
-  #                       ChatBox the Jetson forwards the tag to the ESP32). Meta line: "spoken on 1 robot ✓".
-  # A robot that connects after Apply gets the last persona replayed. Don't run this at the same time as
-  # the central server on port 5000 (use --robot-hub 5001 and the matching server_url instead). Ports are FIXED: viz 8765 (--port), robot hub 5000;
-  if one is taken the viz stops with a message instead of moving to another port.
-  python3 -m modules.graph_relationship.viz.server --robot-hub
-  # Method B (branch action_tag_generator): split each chat reply into sentences, pick a gesture per
-  # sentence with the LLM, send them to the robot one at a time ([WAVE] / [SAD] / [HANDS_CLAP] ...).
-  python3 -m modules.graph_relationship.viz.server --robot-hub --action-tags --ai-server 10.42.0.118
-  python3 -m modules.action_tag_generator "Hello! Nice to meet you." --ai-server 10.42.0.118   # plan only
-  python3 -m modules.graph_relationship.viz.server --robot-hub 5001
-  # ONE server, ONE port, a TAB per robot (ChatBox | Navel; tabs show once there is more than one): each tab
-  # has its own graph, role/persona, chat, mic transcripts and connection light. Robots are told apart by the
-  # robot_name they connect with ("ChatBox", "Navel"); persona/speech only go to that robot, so Navel never sees
-  # the ChatBox's Jay graph. Navel's graph is kg_navel.json (created with the role library on first start):
-  #   --navel-kg-path FILE   --no-navel (ChatBox only)
-  # ROBOTS PAGE: http://127.0.0.1:8765/robots.html (link "Robots" on the graph page). Add more robots (e.g. Stuart):
-  #   connects in -> the robot dials this PC's hub and must call itself by that name (robot_name)
-  #   dial out    -> this PC dials ws://IP:port (a Navel-style client)
-  # Each gets its own tab, graph, chat, colour and persona file, and is saved in robots.json (--robots-file).
-  # The page also shows every robot's connection, role and personality, assigns a role, tweaks the voice
-  # (speed / pitch / volume, added on top of what its role + personality give) and says a test line.
-  # The Navel registers itself: set "server_url": "http://<this PC>:5000" in its client_config.json and start
-  # robot.py; it POSTs /robots/register and the viz dials it back (no --navel-host needed; --navel-host still works).
-  # --action-tags = Method B for BOTH robots (Navel: its own 11 tags, --navel-overrun SEC to allow longer gestures).
-  # Voice on a dialled robot = Navel TTS tags (<vol,N><rpit,N><rspd,N>) in front of every line it speaks.
-  # The robot's MICROPHONE works through the hub too: its `speech` audio is transcribed here with
-  # faster-whisper (CPU, model loads in the background) and appears in the chat panel as what you said,
-  # then the reply is spoken on the robot like a typed one. --whisper-model small for better accuracy, --no-voice to skip.
-
-  # Pick a role + set the OCEAN sliders → apply. The loop adopts it on its next
-  # tick (terminal 1 prints "role → … ; persona → …"). Saved in
-  # persona_assignment.json next to the KG, so it survives a restart.
-  # Roles and their knowledge: modules/role_seed.py (ROLE_LIBRARY).
-  # Chat: it uses the LAST APPLIED setup, and restarts the conversation whenever you apply a
-  # new one (old replies would otherwise set the old tone). The viz must be restarted to
-  # pick up code changes.
+  # It still adopts persona_assignment.json / culture_override.json if either sits next to the KG file
+  # (roles: modules/role_seed.py).
 ================================================================================

@@ -2516,8 +2516,8 @@ class WebcamKGLoop:
                                     last_rapport = r
                                     last_trust   = t
 
-                        # Persist after the tick so the live viz server
-                        # (modules.graph_relationship.viz.server) can poll it within ~1s.
+                        # Persist after the tick so a reader of the KG file
+                        # can poll it within ~1s.
                         # PAD mode mutates every tick; the KG-only path otherwise saves
                         # on session creation + each chat turn, so we only add a per-tick
                         # save when the FAST mood actually changed (mood_dirty).

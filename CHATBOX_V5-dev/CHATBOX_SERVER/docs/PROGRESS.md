@@ -1319,3 +1319,10 @@ the person turned or looked away. Four separate causes, not one.
 
 ## 2026-11-26 — robot_client kit + ChatBox adapter
 - Added CHATBOX_V5-dev/robot_client/ (CARES client kit, KIT_VERSION 0436841) with robots/chatbox/ (piper say(), ESP32 gestures via the 11-11 arduino_output queue version) and configs/chatbox.json. test_chatbox.py: tag->command map, piper+aplay with barge-in. Kit tests 22 passed. Not yet run on the Jetson or against the live CARES server.
+
+## 2026-11-26 — remove the persona viz, robot hub and Navel link (CARES owns them)
+- Removed: modules/graph_relationship/viz/ (server + pages), robot_hub, robot_registry, navel_link, navel_profile, action_tag_generator, persona_chat, persona_voice, chatbox_actions, project56, lib/ (vis/tom-select, only the viz used it), tracked kg_navel/kg_stuart/persona_assignment_navel/stuart json, and their 7 test files. Identical copies live in the CARES server.
+- Kept on purpose: ai_server_llm, role_seed, esp32_link (webcam_loop imports them); graph_relationship (schema/kg_bridge are ahead of CARES); face_webcam, pad_persona, culture/affinity/preference/session modules.
+- test_persona_roles and test_multi_culture drove the loop through the viz's GraphState; they now write persona_assignment.json / culture_override.json directly (same files, same loop code). Dropped: viz-only assertions (role validation, culture labels).
+- Tests: 252 before the cluster removal (many of them project56 and viz tests), 73 after. COMMANDS.txt section 8 rewritten.
+- Did not work / open: webcam_loop still reads persona_assignment.json, culture_override.json and writes active_state.json for a viz that no longer exists here; harmless, remove when the loop's persona path moves to CARES. requirements.txt not trimmed (flask/socketio/supabase may now be unused).

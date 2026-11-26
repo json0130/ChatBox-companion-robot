@@ -1,7 +1,7 @@
 """ChatBox ESP32 link: LLM action tag -> expression name -> one TCP line (firmware: validExpressions[]).
 
 Used by the webcam loop when it runs next to the ESP32. The viz does NOT use this: it reaches the
-robot through the Jetson client (modules/robot_hub.py).
+robot through the CARES server and robot_client.
 """
 import socket
 

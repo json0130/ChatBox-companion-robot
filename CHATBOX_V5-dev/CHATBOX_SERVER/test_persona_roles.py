@@ -11,16 +11,27 @@ with the robot's pre-assignment replies dropped from the recent conversation.
 
 from __future__ import annotations
 
+import json
 import os
 import time
 
 from modules.graph_relationship.schema import Embodiment, RobotNode
 from modules.graph_relationship.store import InMemoryGraphStore
-from modules.graph_relationship.viz.server import GraphState
 from modules.face_webcam.webcam_loop import WebcamKGLoop
 from modules.role_seed import seed_role_library
 
 SHY_TUTOR = {"O": 0.0, "C": 0.8, "E": -0.9, "A": 0.6, "N": 0.1}
+
+
+def _assign(kg, robot, role, ocean):
+    """Write persona_assignment.json beside the KG file, as the role/persona UI did."""
+    path = os.path.join(os.path.dirname(kg), "persona_assignment.json")
+    try:
+        data = json.load(open(path))
+    except (OSError, ValueError):
+        data = {}
+    data[robot] = {"role": role, "ocean": ocean, "ts": "2026-01-01T00:00:00+00:00"}
+    json.dump(data, open(path, "w"))
 
 
 class _Turns:
@@ -45,12 +56,12 @@ def _setup(tmp_path):
     L._kg_dirty = False
     L._session_store = _Turns([
         {"ts": "2000-01-01T00:00:00+00:00", "child": "hi", "reply": "OLD STYLE REPLY"}])
-    return L, GraphState(kg)
+    return L, kg
 
 
-def test_viz_assignment_reaches_prompt(tmp_path):
-    L, viz = _setup(tmp_path)
-    viz.set_persona("chatbox", "role:tutor", SHY_TUTOR)
+def test_assignment_reaches_prompt(tmp_path):
+    L, kg = _setup(tmp_path)
+    _assign(kg, "chatbox", "role:tutor", SHY_TUTOR)
     L._sync_persona_assignment()
 
     assert L._chat_history == {}
@@ -68,7 +79,7 @@ def test_viz_assignment_reaches_prompt(tmp_path):
 
     # switch role: the tutor subgraph detaches from the prompt
     time.sleep(0.01)
-    viz.set_persona("chatbox", "role:storyteller", SHY_TUTOR)
+    _assign(kg, "chatbox", "role:storyteller", SHY_TUTOR)
     os.utime(L._persona_assignment_path(), None)
     L._persona_mtime = None                                    # coarse-mtime filesystems
     L._sync_persona_assignment()
@@ -78,24 +89,12 @@ def test_viz_assignment_reaches_prompt(tmp_path):
 
 
 def test_old_replies_hidden_after_assignment(tmp_path):
-    L, viz = _setup(tmp_path)
+    L, kg = _setup(tmp_path)
     assert "OLD STYLE REPLY" in L._build_system_prompt("jay")  # before: shown
-    viz.set_persona("chatbox", "role:tutor", SHY_TUTOR)
+    _assign(kg, "chatbox", "role:tutor", SHY_TUTOR)
     L._sync_persona_assignment()
     p = L._build_system_prompt("jay")
     assert "OLD STYLE REPLY" not in p and "them: hi" in p      # their words kept
-
-
-def test_viz_rejects_unknown_role(tmp_path):
-    _L, viz = _setup(tmp_path)
-    for robot, role in (("chatbox", "role:pilot"), ("nobot", "role:tutor")):
-        try:
-            viz.set_persona(robot, role, SHY_TUTOR)
-        except ValueError:
-            continue
-        raise AssertionError(f"accepted {robot}/{role}")
-    assert {r["id"] for r in viz.persona_choices()["roles"]} >= {"role:tutor",
-                                                                "role:companion"}
 
 
 def test_loop_applies_saved_assignment_at_startup(tmp_path):
@@ -107,8 +106,7 @@ def test_loop_applies_saved_assignment_at_startup(tmp_path):
     store.upsert_node(RobotNode(id="chatbox", name="ChatBox", embodiment=Embodiment.CAT))
     seed_role_library(store)
     store.save(kg)
-    viz = GraphState(kg)
-    viz.set_persona("chatbox", "role:tutor", SHY_TUTOR)          # as if made in the UI earlier
+    _assign(kg, "chatbox", "role:tutor", SHY_TUTOR)          # as if made in the UI earlier
 
     loop = WebcamKGLoop(robot_id="chatbox", faces_path=str(tmp_path / "faces.npz"),
                         kg_path=kg, show_window=False, seed=False,

@@ -10,6 +10,7 @@ Run:  python3 test_multi_culture.py   (no camera / no real LLM / no network)
 
 from __future__ import annotations
 
+import json
 import os
 import queue
 import tempfile
@@ -25,7 +26,12 @@ from modules.graph_relationship.cultures import (
     person_culture, person_culture_self_declared,
 )
 from modules.face_webcam.webcam_loop import WebcamKGLoop
-from modules.graph_relationship.viz.server import GraphState
+
+
+def _set_override(kg, value):
+    """The sidecar the loop reads each turn ('korean' | 'maori' | 'generic' | 'auto')."""
+    with open(os.path.join(os.path.dirname(kg), "culture_override.json"), "w") as fh:
+        json.dump({"active_culture": value}, fh)
 
 _ROBOT = "chatbox"
 
@@ -91,17 +97,15 @@ def test_override_resolver():
     s.upsert_node(PersonNode(id="kj", display_name="kj")); assign_person_culture(s, "kj", "Korean")
     s.save(kg)
     L = _loop(s, kg_path=kg)
-    gs = GraphState(kg)
 
     assert L._active_culture_id("kj") == "culture:korean"      # auto (no file)
-    gs.set_culture_override("maori")
+    _set_override(kg, "maori")
     assert L._active_culture_id("kj") == "culture:maori"       # override wins
-    gs.set_culture_override("generic")
+    _set_override(kg, "generic")
     assert L._active_culture_id("kj") is None                  # culture OFF (A/B)
-    gs.set_culture_override("auto")
+    _set_override(kg, "auto")
     assert L._active_culture_id("kj") == "culture:korean"      # back to person
-    assert gs.culture_labels() == ["Korean", "Maori"]
-    print("3. resolver: auto→person, 'maori'→forced, 'generic'→off; viz labels correct ✓")
+    print("3. resolver: auto→person, 'maori'→forced, 'generic'→off ✓")
 
 
 # ── 4. Mid-session auto-attach (self-declaration only, while untagged) ────────
@@ -137,12 +141,11 @@ def test_viz_roundtrip():
     s = _base_store()
     s.upsert_node(PersonNode(id="kj", display_name="kj")); assign_person_culture(s, "kj", "Korean")
     s.save(kg)
-    gs = GraphState(kg)
     L = _loop(s, kg_path=kg)
-    gs.set_culture_override("maori")
+    _set_override(kg, "maori")
     p = L._build_system_prompt("kj")           # Korean person, but robot forced Māori
     assert "Cultural knowledge lens: Maori" in p and _MAORI_STYLE_HINT in p
-    gs.set_culture_override("generic")
+    _set_override(kg, "generic")
     p = L._build_system_prompt("kj")
     assert "CULTURAL BACKGROUND" not in p and "Cultural manner" not in p   # off
     print("5. viz round-trip: button sets override → loop's prompt switches lens / turns off ✓")
@@ -159,11 +162,11 @@ def test_active_state_for_viz():
     L = _loop(s, kg_path=kg)
     L._last_active_written = None; L._last_active_write_t = 0.0
     L._active_person = None; L._active_person_t = 0.0
-    gs = GraphState(kg)
 
     def _act():
-        a = gs.read()["active"]
-        return (a.get("person"), a.get("culture"), a.get("present"), a.get("live"))
+        with open(os.path.join(d, "active_state.json")) as fh:
+            a = json.load(fh)
+        return (a.get("person"), a.get("culture"), a.get("present"), time.time() - a["ts"] < 5)   # live = fresh heartbeat
 
     L._write_active_state("jay", present=True)
     assert _act() == ("jay", "culture:korean", True, True), _act()

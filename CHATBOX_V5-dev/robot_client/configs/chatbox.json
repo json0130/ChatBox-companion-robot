@@ -1,0 +1,53 @@
+{
+    "client_id": "chatbox_jetson_001",
+    "robot_name": "ChatBox",
+    "server_url": "http://100.119.121.68:5000",
+    "connect_to_server": true,
+    "server_ws_port": 8790,
+    "ws_port": 8765,
+    "modules": [
+        "gpt",
+        "speech"
+    ],
+    "robot_role": "You are ChatBox, a research robot specialising in conversational AI and retrieval-augmented generation (RAG). You help visitors understand how robots can use long-term memory and personalised knowledge bases to have meaningful conversations. Keep responses concise, friendly, and accessible to a general audience. Use 2-3 sentences unless asked for more detail.",
+    "allowed_tags": [
+        "[GREETING]",
+        "[CONFUSED]",
+        "[HAPPY]",
+        "[DEFAULT]",
+        "[HANDS_CLAP]",
+        "[EARS_WIGGLE]",
+        "[POINT]",
+        "[SAD]",
+        "[SHRUG]"
+    ],
+    "voice_config": {
+        "sample_rate": 48000,
+        "channels": 1,
+        "max_record_time": 30
+    },
+    "edge_tts_config": {
+        "piper_model": "/home/chatbox/piper-voices/en_US-ryan-low.onnx",
+        "piper_length_scale": 1.0,
+        "piper_noise_scale": 0.667,
+        "audio_cmd": [
+            "aplay",
+            "-D",
+            "auto"
+        ]
+    },
+    "arduino_output": {
+        "serial_port": null,
+        "baud": 115200,
+        "reconnect_delay": 1.0,
+        "max_reconnect_delay": 30.0
+    },
+    "features": {
+        "arduino_integration": true
+    },
+    "console_config": {
+        "show_timestamps": false,
+        "show_response_type": false,
+        "prefix": "[ChatBox]"
+    }
+}
